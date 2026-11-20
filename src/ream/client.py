@@ -364,8 +364,8 @@ def maybe_rotate(args, key: str) -> str:
         return key
     if age < _ROTATE_CHECK_AFTER_SECONDS:
         return key
-    base = _api_base()
     try:
+        base = _api_base()
         me = _request("GET", f"{base}/me", key, None)
         if not me.get("rotating"):
             return key

@@ -214,8 +214,10 @@ every machine: it finds the agent key where every other `ream` verb does (`--key
 600), so a machine that can run `ream publish` can connect. Like the other verbs, it swaps a due
 rotating key: a key file more than a week old asks the service whether it is time, and if so the
 file is replaced and the new key is the one sent (a note goes to stderr, never the key; a failed
-swap is only a note, and the old key is sent). A younger key file, or a key from `--key-fd`,
-makes no request. Rotating keys are refused 14 days after they were made unless swapped, so
+swap is only a note, and the old key is sent). The helper makes no request except, when the key
+file is over 7 days old, the weekly key swap (`GET /me`, `POST /keys/rotate`); a younger key
+file, or a key from `--key-fd`, makes none. It never updates the tool itself, even when the
+service says it is out of date; other `ream` commands do that. Rotating keys are refused 14 days after they were made unless swapped, so
 this is what keeps an office that uses Ream only through MCP connected:
 
 ```bash

@@ -1,8 +1,9 @@
 """`ream mcp-headers`: the one line of headers a Claude Code `headersHelper` reads.
 
 The command prints `{"Authorization": "Bearer <key>", "X-Ream-Session": "<label>"}` and nothing
-else on stdout, finds the key the way every other verb does, makes no request, and says what is
-wrong on stderr without ever saying the key.
+else on stdout, finds the key the way every other verb does, makes no request except the weekly
+key swap of a key file over 7 days old, never updates the tool, and says what is wrong on stderr
+without ever saying the key.
 
 Every key here is a shape-valid DUMMY. A real key never appears in a test.
 """
@@ -15,11 +16,14 @@ import time
 
 import pytest
 
-from ream import cli, client, mcp_headers, plugin_cli
+from ream import cli, client, mcp_headers, plugin_cli, selfupdate
 
 DUMMY = "art_" + "M" * 40
 OTHER = "art_" + "N" * 40
 FRESH = "art_" + "P" * 40
+
+# The real exchange, taken before the autouse guard below replaces it.
+_REAL_EXCHANGE = client._exchange
 
 
 def _key_file(tmp_path, content: str = DUMMY, mode: int = 0o600, name: str = "key"):
@@ -46,6 +50,12 @@ def _no_inherited_key(monkeypatch):
         "ARTIFACTS_KEY_FD",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _self_update_state(monkeypatch):
+    """`main` takes the process's one self-update decision; give it back after each test."""
+    monkeypatch.setattr(selfupdate, "_done", False)
 
 
 @pytest.fixture(autouse=True)
@@ -412,3 +422,99 @@ def test_the_real_command_prints_one_line_and_nothing_else(tmp_path):
         + "\n"
     )
     assert DUMMY not in done.stderr
+
+
+def test_a_failure_to_find_the_api_address_returns_the_old_key(
+    tmp_path, service, monkeypatch, capsys
+):
+    calls, _state = service
+
+    def broken():
+        raise client.UsageError("no api address")
+
+    monkeypatch.setattr(client, "_api_base", broken)
+    path = _key_file(tmp_path)
+    _age(path, 8)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert calls == []
+    assert out == json.dumps({"Authorization": f"Bearer {DUMMY}"}) + "\n"
+    assert "weekly key swap did not happen" in err
+    assert DUMMY not in err and path.read_text() == DUMMY
+
+
+class _OutdatedResponse:
+    """What the service sends to an out-of-date tool, whatever the path."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+        self.headers = {"X-Ream-Client-Outdated": "true"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _outdated_service(monkeypatch, calls):
+    """The real `client._exchange` over a fake connection whose every answer says the tool is
+    out of date, with an install source set so `selfupdate.on_response` would act on it, and
+    the updater's entry points rigged to fail the test if reached. Returns what they saw."""
+
+    def opener(request, timeout=None):
+        calls.append((request.get_method(), request.full_url.rsplit("/", 1)[-1]))
+        if request.get_method() == "GET":
+            return _OutdatedResponse(b'{"rotating": true}')
+        return _OutdatedResponse(json.dumps({"key": FRESH}).encode())
+
+    updater_calls: list[str] = []
+
+    def updater(name):
+        def called(*_a, **_k):
+            updater_calls.append(name)
+            raise AssertionError(f"the helper ran the updater ({name})")
+
+        return called
+
+    monkeypatch.setattr(client, "_exchange", _REAL_EXCHANGE)
+    monkeypatch.setattr(client._opener, "open", opener)
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", "git+https://example.invalid/ream")
+    for name in (
+        "REAM_NO_SELF_UPDATE",
+        "ARTIFACTS_NO_SELF_UPDATE",
+        "REAM_SELF_UPDATED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(selfupdate.shutil, "which", lambda *_a, **_k: "/bin/uv")
+    monkeypatch.setattr(selfupdate, "_attempt_allowed", lambda: True)
+    monkeypatch.setattr(selfupdate, "_run", updater("_run"))
+    monkeypatch.setattr(selfupdate.os, "execv", updater("os.execv"))
+    return updater_calls
+
+
+def test_an_outdated_answer_during_the_key_swap_never_runs_the_updater(
+    tmp_path, monkeypatch, capsys
+):
+    calls: list[tuple[str, str]] = []
+    updater_calls = _outdated_service(monkeypatch, calls)
+    path = _key_file(tmp_path)
+    _age(path, 8)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert calls == [("GET", "me"), ("POST", "rotate")], "the swap itself still happens"
+    assert updater_calls == []
+    assert out == json.dumps({"Authorization": f"Bearer {FRESH}"}) + "\n"
+    assert "out of date" not in err
+
+
+def test_the_rig_does_reach_the_updater_for_a_command_that_may_update(monkeypatch):
+    """The control for the test above: without the helper's switch the same answers do run
+    the updater, so that test's silence is the switch and not a rig that cannot fire."""
+    updater_calls = _outdated_service(monkeypatch, [])
+    with pytest.raises(AssertionError, match="ran the updater"):
+        client._request("GET", "https://ream.invalid/api/v1/me", DUMMY, None)
+    assert updater_calls == ["_run"]
