@@ -897,11 +897,14 @@ SCAN_CPU_SECONDS = 10.0
 # every turn at the lock is a share of the other slots' work finishes in about that many
 # times its own CPU time, so the backstop is never reached by a legitimate page.
 # THIS IS A SLOT-HOLD LIMIT, NOT A PER-SCAN WALL BOUND: a scan may now take far longer than
-# ten seconds of wall time. That is acceptable only because every path that starts a scan
-# needs a revocable credential (a Ream key, a signed-in app's token, or the owner's own
-# gallery session behind the authenticating proxy), all the owner's to end. If a path that starts a scan without such a credential ever appears, this must drop
-# back to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall clock, as before 20 Nov 2026)
-# before it ships.
+# ten seconds of wall time. That is acceptable only because a scan that can take a slot (a
+# value over `scanslots.SMALL_PAGE`) is reachable only with a revocable credential. Today
+# that is a page body alone, sent with a Ream key on /api/v1, or with a key or an owner-only
+# app token on /mcp, or by the owner's own gallery session; every other scanned field is
+# capped far below `SMALL_PAGE` (64 KiB or less) before its scan. `tests/test_scan_call_sites.py`
+# holds that: a new place that starts a scan fails it until it is classified. If a
+# slot-taking scan ever becomes reachable without such a credential, this must drop back
+# to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall clock, as before 20 Nov 2026).
 SCAN_WALL_SECONDS_PER_SLOT = 10.0
 # Measured in the pod on 20 Nov 2026 (image 1bdcba608c6a; no CPU limit, 50m request, 1Gi memory
 # limit), for an 8 MiB page of the seven assignment shapes with placeholder values: one scan took
