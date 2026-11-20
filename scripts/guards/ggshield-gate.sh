@@ -470,8 +470,11 @@ LIST_TIMEOUT=120
 GATE_PID=
 # The id of the process that runs this: field 1 of /proc/self/stat, read by the builtin `read` in that very
 # process. Not BASHPID: on bash 5.2 a subshell TERMed just after its fork runs its EXIT trap with a stale
-# BASHPID (the parent's), so a guard on it passed in the watchdog. Where there is no /proc, BASHPID or $$.
+# BASHPID (the parent's), so a guard on it passed in the watchdog. Where there is no /proc, BASHPID or $$,
+# and there bash 5.2 can still lose the scratch under a live gate: a spurious refusal, never a wrong pass.
 gate_pid() { if [ -r /proc/self/stat ]; then read -r "$1" _ </proc/self/stat; else printf -v "$1" %s "${BASHPID:-$$}"; fi; }
+# shellcheck disable=SC2034  # set by gate_pid in the trap string
+GATE_TRAP_ME=
 GATE_EXIT_TRAP='gate_pid GATE_TRAP_ME; if [ "$GATE_TRAP_ME" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
 GLIST_DOG=
 GLIST_ACTIVE=
