@@ -800,9 +800,11 @@ open(sys.argv[2], "w").write("".join(out))
     *)
       # Name the cause, not only that there was one: the parser's last output line (a traceback's last line
       # names the error, e.g. FileNotFoundError), without control characters, at most 200 characters.
+      local said=empty
+      [ -n "$bad" ] && said=non-empty
       bad=${bad##*$'\n'}
       bad=${bad//[^[:print:]]/}
-      could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output ${bad:+non-}empty${bad:+: ${bad:0:200}})"
+      could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output $said${bad:+: ${bad:0:200}})"
       return 1
       ;;
   esac
