@@ -466,8 +466,16 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # another process. (3) The same happens, on bash 5.2, when a TERM ends the gate just after the watchdog's
 # fork and before bash records it as a job (see glist_stop): the trap cannot reach that watchdog.
 LIST_TIMEOUT=120
+# shellcheck disable=SC2034  # set by gate_pid, read by the trap string
 GATE_PID=
-GATE_EXIT_TRAP='if [ "${BASHPID:-$GATE_PID}" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
+# The id of the process that runs this: field 1 of /proc/self/stat, read by the builtin `read` in that very
+# process. Not BASHPID: on bash 5.2 a subshell TERMed just after its fork runs its EXIT trap with a stale
+# BASHPID (the parent's), so a guard on it passed in the watchdog. Where there is no /proc, BASHPID or $$,
+# and there bash 5.2 can still lose the scratch under a live gate: a spurious refusal, never a wrong pass.
+gate_pid() { if [ -r /proc/self/stat ]; then read -r "$1" _ </proc/self/stat; else printf -v "$1" %s "${BASHPID:-$$}"; fi; }
+# shellcheck disable=SC2034  # set by gate_pid in the trap string
+GATE_TRAP_ME=
+GATE_EXIT_TRAP='gate_pid GATE_TRAP_ME; if [ "$GATE_TRAP_ME" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
 GLIST_DOG=
 GLIST_ACTIVE=
 glist() {
@@ -797,7 +805,16 @@ open(sys.argv[2], "w").write("".join(out))
     *:nopath) could_not_scan "git listed an object of HEAD's side without its path"; return 1 ;;
     *:length) could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1 ;;
     *:form) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read (parser exited $prc: form)"; return 1 ;;
-    *) could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output ${bad:+non-}empty)"; return 1 ;;
+    *)
+      # Name the cause, not only that there was one: the parser's last output line (a traceback's last line
+      # names the error, e.g. FileNotFoundError), without control characters, at most 200 characters.
+      local said=empty
+      [ -n "$bad" ] && said=non-empty
+      bad=${bad##*$'\n'}
+      bad=${bad//[^[:print:]]/}
+      could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output $said${bad:+: ${bad:0:200}})"
+      return 1
+      ;;
   esac
   [ -s "$SCRATCH/base-ids" ] || return 0
   if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
@@ -1097,8 +1114,10 @@ run_gate() {
   # until bash resets it, and a TERM that reaches it in that window (glist_stop sends one as soon as git ends)
   # runs this trap in the subshell, which removed the scratch directory under the running gate (measured: the
   # listing file gone before the parser read it, "git listed HEAD's side ... in a form the gate cannot read").
-  # BASHPID names the process running the trap (bash 4 and later; where it is unset the guard always passes).
-  GATE_PID=${BASHPID:-$$}
+  # BASHPID was no guard: on bash 5.2 that subshell runs the trap with a stale BASHPID equal to the gate's
+  # (measured in bash 5.2.15: scratch lost in 21 of 2500 runs, 0 of 2500 with /proc/self/stat). gate_pid reads
+  # the true id from /proc/self/stat; where there is no /proc it falls back to BASHPID, or $$ (always passes).
+  gate_pid GATE_PID
   # shellcheck disable=SC2064  # the trap is a constant string; its variables are read when it runs
   trap "$GATE_EXIT_TRAP" EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
@@ -1546,6 +1565,12 @@ EOF
 
   # A subshell TERMed just after its fork must not run the gate's EXIT trap (it removed the gate's scratch
   # directory: measured with the unguarded trap, hundreds of 400 forks did). Same trap string as the gate's.
+  # gate_pid names the process it runs in: a subshell's answer differs from its parent's (a stale or inherited
+  # id, as bash 5.2's BASHPID gives a just-forked subshell in its trap, would make them equal).
+  local gp_me gp_sub
+  gate_pid gp_me
+  gp_sub=$(gate_pid GATE_SUB_PID; echo "$GATE_SUB_PID")
+  check "gate_pid in a subshell is not the parent's id" 0 0 "$([ -n "$gp_me" ] && [ -n "$gp_sub" ] && [ "$gp_me" != "$gp_sub" ] && echo differ)" "differ"
   local lost rd="$tmp/trapdir"
   lost=$(
     n=0
@@ -1553,7 +1578,7 @@ EOF
       mkdir -p "$rd"
       if ! (
         # shellcheck disable=SC2034  # read by the trap string
-        GATE_PID=${BASHPID:-$$}; SCRATCH=$rd; GLIST_ACTIVE=
+        gate_pid GATE_PID; SCRATCH=$rd; GLIST_ACTIVE=
         # shellcheck disable=SC2064
         trap "$GATE_EXIT_TRAP" EXIT
         ( trap ':' TERM; sleep 5 & s=$!; wait "$s" ) </dev/null >/dev/null 2>&1 &
@@ -2616,6 +2641,22 @@ exec %q "$@"
   check "a listing of HEAD's side that git cannot make is refused" "$rc" 1 "$out" "git could not list the objects HEAD's side of the change is read from"
   check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
   check "…at once, not at the time limit ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A parser that fails with an error of its own is refused as not scanned, and the refusal names that error:
+  # the listing file is removed once git has written it (Linux only: the wrapper finds the file through /proc).
+  if [ -d /proc/self/fd ]; then
+    local gonegit="$tmp/gitgone"
+    mkdir -p "$gonegit"
+    printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) %q "$@"; f=$(readlink /proc/$$/fd/1) && rm -f -- "$f"; exit 0 ;; esac
+exec %q "$@"
+' "$(command -v git)" "$(command -v git)" >"$gonegit/git"
+    chmod +x "$gonegit/git"
+    out=$(cd "$repo" && PATH="$gonegit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+    check "a listing the parser cannot open is refused" "$rc" 1 "$out" "could not be parsed (parser exited 1, its output non-empty"
+    check "…and the refusal names the parser's error" "$rc" 1 "$out" "non-empty: FileNotFoundError"
+    check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  fi
   # A gate stopped while git lists (TERM to the gate) leaves no git behind: a background child of a
   # non-interactive bash ignores SIGINT and SIGQUIT, so only the gate's EXIT trap stops it. The git records
   # its process id and never returns; the gate is stopped once it has, and that process must be gone. (TERM,

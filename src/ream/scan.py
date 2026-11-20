@@ -890,6 +890,11 @@ def _shape_lines(
 # one regex search already running is not cut short (each is linear in the page, which the
 # size cap bounds); a scan past it raises `ScanTimeout`.
 SCAN_WALL_SECONDS = 10.0
+# Measured in the pod on 20 Nov 2026 (image 1bdcba608c6a; no CPU limit, 50m request, 1Gi memory
+# limit), for an 8 MiB page of the seven assignment shapes with placeholder values: one scan took
+# 2.08 s with plain keys and 2.87 s with keys split by a tag. Four scans at once, in threads, all
+# hit `ScanTimeout` at 10.0 s because they share the interpreter lock (a follow-up, runcove-5t3oj.161.1,
+# addresses that). Security measured 18.4 s client-side for an 8 MiB publish, upload included.
 
 
 class ScanTimeout(scanslots.ScanBusy):
