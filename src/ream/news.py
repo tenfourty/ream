@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-20a",
+        "`ream mcp-headers` (the command behind a Claude Code `headersHelper`) now swaps a weekly key that is due, so a session that reaches Ream only through MCP keeps its access instead of being refused once its key is 14 days old. It never updates the tool itself, even when the service says it is out of date. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 8; `ream --version` shows your level.",
+    ),
+    (
         "2026-11-17c",
         'A page that sizes itself from the window (a full-window canvas or WebGL scene, a 100vh stage, position: fixed controls) can now say so with <meta name="ream-frame" content="viewport"> in its head. Before, its frame grew with the page until it was about 100000px tall. Declared, the frame is the window\'s height, the page scrolls inside it, decision slots stay above it, and ream screenshot of the whole page is one window high (truncated says when more is below). Pages that do not declare it are sized as before.',
     ),
