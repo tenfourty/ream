@@ -6,13 +6,15 @@ this argues from was inventoried on 4 Nov 2026 (about 25 hard-coded owner ids, f
 integrations, house text in everything an agent is served); lines cited below were re-checked
 against `main` at `8da2c2c`.
 
-**Status, 20 Nov 2026: built, with one deletion left.** Steps 1 to 9 are built and deployed
-(the ledger in section 8 says what each slice did and where it differed from this design). What is
-not done: core's own partner inbound code (`partner.py`, `partner_in.py` and the built-in `partner`
-sink and `slack` source) is still in core, standing down behind the switches of step 9e. The
-plug-in half is in production (ream-homelab #71, merged 18 Nov 2026; the plug-in holds inbound
-there), so what the deletion (9e-4, C2) waits on is the end-to-end proof of a Slack press. Sections 3 to 7 keep the text as designed, with "as built" notes where the code
-differs; where they disagree, the ledger and `docs/plugins.md` are right. Chasing dropped answers
+**Status, 20 Nov 2026: built, with one deletion left.** Steps 1 to 8 and 9a to 9d are built and
+deployed, and so is 9e's plug-in half (the ledger in section 8 says what each slice did and where
+it differed from this design). What is not done: core's own partner inbound code (`partner.py`,
+`partner_in.py` and the built-in `partner` sink and `slack` source) is still in core, standing
+down behind the switches of step 9e. The plug-in half is in production (ream-homelab #71, merged
+18 Nov 2026; the plug-in holds inbound there), so what the deletion (9e-4, C2) waits on is the
+end-to-end proof of a Slack press. Sections 3 to 7 keep the design text, with "as built" notes or
+rewrites where the code differs (section 4 reads as built); where they disagree, the ledger and
+`docs/plugins.md` are right. Chasing dropped answers
 (section 2, 4.1) is separate work and is not built.
 
 ## 1. Problem
