@@ -898,8 +898,8 @@ SCAN_CPU_SECONDS = 10.0
 # times its own CPU time, so the backstop is never reached by a legitimate page.
 # THIS IS A SLOT-HOLD LIMIT, NOT A PER-SCAN WALL BOUND: a scan may now take far longer than
 # ten seconds of wall time. That is acceptable only because every path that starts a scan
-# needs a revocable credential (a Ream key, or a signed-in app's token), both the owner's to
-# end. If a path that starts a scan without such a credential ever appears, this must drop
+# needs a revocable credential (a Ream key, a signed-in app's token, or the owner's own
+# gallery session behind the authenticating proxy), all the owner's to end. If a path that starts a scan without such a credential ever appears, this must drop
 # back to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall clock, as before 20 Nov 2026)
 # before it ships.
 SCAN_WALL_SECONDS_PER_SLOT = 10.0

@@ -453,13 +453,25 @@ _UNIT = "".join(
 WORST_CASE = "<html><body>" + _UNIT * (1024 * 1024 // len(_UNIT)) + "</body></html>"
 
 
-def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass():
+def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass(monkeypatch):
     count = 4
     assert len(WORST_CASE) > scanslots.SMALL_PAGE
     start = threading.Barrier(count, timeout=20)
+    inside = threading.Barrier(count, timeout=20)
     peak: list[int] = []
     results: list[object] = []
     cpu: list[float] = []
+    arrived = threading.local()
+    real_check = scan._check_deadline
+
+    def check(deadline):
+        if not getattr(arrived, "yes", False):
+            arrived.yes = True
+            inside.wait()  # all four hold a slot here, or this raises
+            peak.append(scanslots.in_use())
+        real_check(deadline)
+
+    monkeypatch.setattr(scan, "_check_deadline", check)
 
     def run() -> None:
         try:
@@ -467,7 +479,6 @@ def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass():
             began = time.thread_time()
             found = scan.scan(WORST_CASE)
             cpu.append(time.thread_time() - began)
-            peak.append(scanslots.in_use())
             results.append(found)
         except BaseException as exc:  # noqa: BLE001 -- recorded and asserted below
             results.append(exc)
@@ -479,11 +490,13 @@ def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass():
         for thread in threads:
             thread.join(120)
     assert results == [[]] * count, results
-    assert len(cpu) == count and max(cpu) < scan.SCAN_CPU_SECONDS / 2, cpu
-    assert max(peak) >= 2, "the scans overlapped, each holding a slot"
+    assert peak == [count] * count, "all four held a slot at the same moment"
+    # Scaled from this page to the largest body the service stores: still inside the bound.
+    scaled = max(cpu) * (store.MAX_BODY_BYTES / len(WORST_CASE))
+    assert len(cpu) == count and scaled < scan.SCAN_CPU_SECONDS, (cpu, scaled)
 
 
-def test_four_worst_case_pages_scanned_at_once_all_pass(monkeypatch):
+def test_four_scans_at_once_pass_a_wall_jump_past_the_cpu_bound(monkeypatch):
     """The slots run scans as threads that share the interpreter lock, so each one's wall
     time is several times its CPU time. Four threads are held inside their slots until all
     four are there, then the wall clock jumps past `SCAN_CPU_SECONDS` (as it would in
