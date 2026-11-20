@@ -211,7 +211,12 @@ Claude Code runs a server entry's `headersHelper`, a command that prints one JSO
 headers on stdout, before it connects. `ream mcp-headers` is that command, and it is the same on
 every machine: it finds the agent key where every other `ream` verb does (`--key-file`,
 `--key-fd`, `REAM_KEY_FILE`, `REAM_KEY_FD`, else `~/.config/artifacts/key`, which must be mode
-600), so a machine that can run `ream publish` can connect:
+600), so a machine that can run `ream publish` can connect. Like the other verbs, it swaps a due
+rotating key: a key file more than a week old asks the service whether it is time, and if so the
+file is replaced and the new key is the one sent (a note goes to stderr, never the key; a failed
+swap is only a note, and the old key is sent). A younger key file, or a key from `--key-fd`,
+makes no request. Rotating keys are refused 14 days after they were made unless swapped, so
+this is what keeps an office that uses Ream only through MCP connected:
 
 ```bash
 claude mcp add-json --scope local ream \
@@ -227,9 +232,11 @@ Restart the session once to load the tools; they appear as `mcp__ream__*`.
   nothing else on stdout. The label is `REAM_SESSION` (or `--session`), as `<agent>/<session ref>`;
   with none declared the header is left out and a write is labelled `mcp/<YYYY-MM-DD>` (see
   Session label above). A label that is not printable ASCII or is over 120 characters is refused.
-- **No network, no side effects.** It makes no request, checks for no update, prints no news
-  and writes the key nowhere: not to a file, a log or an argument list. A key-reading wrapper
-  that opens it on a descriptor works as for any verb (`REAM_KEY_FD`).
+- **No network but the swap, no other side effects.** Beyond the key swap above it makes no
+  request, checks for no update, prints no news and writes the key nowhere else: not to a log or
+  an argument list (the swap rewrites the key file only, as every verb does). A key-reading
+  wrapper that opens it on a descriptor works as for any verb (`REAM_KEY_FD`), and that key is
+  never swapped.
 - **Failure.** A missing, unreadable, over-permissive or malformed key is a message on stderr
   (it never contains the key), exit status 2 and an empty stdout, so Claude Code gets no headers
   and the connection does not authenticate. `--key-fd` and `--key-file` together are

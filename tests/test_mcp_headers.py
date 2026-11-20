@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -18,6 +19,7 @@ from ream import cli, client, mcp_headers, plugin_cli
 
 DUMMY = "art_" + "M" * 40
 OTHER = "art_" + "N" * 40
+FRESH = "art_" + "P" * 40
 
 
 def _key_file(tmp_path, content: str = DUMMY, mode: int = 0o600, name: str = "key"):
@@ -235,6 +237,113 @@ def test_it_writes_nothing_and_leaves_the_key_file_as_it_was(
     assert state() == before
     assert path.read_text() == DUMMY
     assert not (tmp_path / "xdg-state").exists()
+
+
+def _age(path, days: float) -> None:
+    then = time.time() - days * 24 * 3600
+    os.utime(path, (then, then))
+
+
+@pytest.fixture()
+def service(monkeypatch):
+    """A stand-in for the service's `/me` and `/keys/rotate`, recording every call. The
+    helper's own request guard (`_no_request`) stays in force below `client._request`."""
+    calls: list[tuple[str, str, str]] = []
+    state = {"rotating": True, "fail": False}
+
+    def fake(method, url, key, body, *_a, **_k):
+        calls.append((method, url.rsplit("/", 1)[-1], key))
+        if state["fail"]:
+            raise client.HTTPFailure(503, "down")
+        if method == "GET":
+            return {"rotating": state["rotating"]}
+        return {"key": FRESH}
+
+    monkeypatch.setattr(client, "_request", fake)
+    return calls, state
+
+
+def test_a_due_rotating_key_file_is_swapped_and_the_new_key_is_sent(
+    tmp_path, service, capsys
+):
+    calls, _state = service
+    path = _key_file(tmp_path)
+    _age(path, 8)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert path.read_text().strip() == FRESH
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert [c[:2] for c in calls] == [("GET", "me"), ("POST", "rotate")]
+    assert out == json.dumps({"Authorization": f"Bearer {FRESH}"}) + "\n"
+    assert json.loads(out.splitlines()[0]) == {"Authorization": f"Bearer {FRESH}"}
+    assert "key was replaced" in err
+    assert DUMMY not in out + err and FRESH not in err
+
+
+def test_an_old_key_file_that_is_not_rotating_is_left_alone(tmp_path, service, capsys):
+    calls, state = service
+    state["rotating"] = False
+    path = _key_file(tmp_path)
+    _age(path, 8)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert [c[:2] for c in calls] == [("GET", "me")]
+    assert path.read_text() == DUMMY
+    assert json.loads(out) == {"Authorization": f"Bearer {DUMMY}"} and err == ""
+
+
+def test_a_fresh_key_file_makes_no_network_call(tmp_path, service, capsys):
+    calls, _state = service
+    path = _key_file(tmp_path)
+    _age(path, 6)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    assert calls == []
+    assert json.loads(capsys.readouterr().out) == {"Authorization": f"Bearer {DUMMY}"}
+    assert path.read_text() == DUMMY
+
+
+def test_a_key_from_a_descriptor_is_never_rotated(
+    tmp_path, service, monkeypatch, capsys
+):
+    calls, _state = service
+    # An old file is lying about: a descriptor key must not make it the one examined.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".config" / "artifacts").mkdir(parents=True)
+    old = _key_file(tmp_path / ".config" / "artifacts", content=OTHER, name="key")
+    _age(old, 30)
+    fd = _fd_with(DUMMY)
+    try:
+        assert mcp_headers.main(["--key-fd", str(fd)]) == 0
+    finally:
+        os.close(fd)
+    assert calls == []
+    assert json.loads(capsys.readouterr().out) == {"Authorization": f"Bearer {DUMMY}"}
+    assert old.read_text() == OTHER
+
+    fd = _fd_with(DUMMY)
+    monkeypatch.setenv("REAM_KEY_FD", str(fd))
+    try:
+        assert mcp_headers.main([]) == 0
+    finally:
+        os.close(fd)
+    assert calls == []
+    assert json.loads(capsys.readouterr().out) == {"Authorization": f"Bearer {DUMMY}"}
+    assert old.read_text() == OTHER
+
+
+def test_a_failed_swap_still_prints_the_old_key_and_exits_zero(
+    tmp_path, service, capsys
+):
+    calls, state = service
+    state["fail"] = True
+    path = _key_file(tmp_path)
+    _age(path, 8)
+    assert mcp_headers.main(["--key-file", str(path)]) == 0
+    out, err = capsys.readouterr()
+    assert calls, "the swap was tried"
+    assert out == json.dumps({"Authorization": f"Bearer {DUMMY}"}) + "\n"
+    assert "weekly key swap did not happen" in err
+    assert DUMMY not in err and path.read_text() == DUMMY
 
 
 def test_the_dispatcher_runs_it_as_a_verb(tmp_path, monkeypatch, capsys):

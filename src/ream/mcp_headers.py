@@ -13,8 +13,17 @@ finds it (`--key-file`, `--key-fd`, `REAM_KEY_FILE`, `REAM_KEY_FD`, else
 `~/.config/artifacts/key`), by the same functions, so the same refusals apply: a file other users
 can read, or anything that is not shaped like a key.
 
-What it never does: make a request (so it is fast, and there is nothing to retry or update from),
-check for a newer tool, print the news, write the key anywhere, or put it on an argument list.
+Like `ream publish` and the other verbs, it swaps a due rotating key: a key FILE older than seven
+days asks the service (`GET /me`, and `POST /keys/rotate` when the key is rotating) and, if a swap
+is due, the file is replaced and the headers carry the new key. A key file younger than that, and
+any key from a descriptor, make no request at all. Rotating keys are refused after 14 days unless
+swapped, so an office that uses Ream only through MCP would otherwise lose access. A swap's notes
+go to stderr only; a swap that fails never fails the command (the old key still works, and the
+next run tries again).
+
+What it never does, beyond that swap: make a request (so it is fast, and there is nothing to
+retry), check for a newer tool, print the news, write the key anywhere else, or put it on an
+argument list.
 Every problem goes to stderr, in words that cannot contain the key, with a non-zero exit and an
 empty stdout: Claude Code treats that as "no headers" and the server answers 401, which is the
 honest outcome of a missing key.
@@ -41,8 +50,9 @@ def build_parser() -> client._Parser:
         description=(
             "Print the HTTP headers for Ream's MCP server (the Authorization header from "
             "this agent's key, and X-Ream-Session when a session is declared) as one JSON "
-            "object on one line. It is a Claude Code `headersHelper`: it makes no request "
-            "and prints nothing else to stdout. "
+            "object on one line. It is a Claude Code `headersHelper`: it prints nothing else "
+            "to stdout, and makes a request only to swap a key file more than a week old "
+            "that is due to rotate. "
             'Set it up with: claude mcp add-json --scope local ream \'{"type":"http",'
             '"url":"<gallery>/mcp","headersHelper":"ream mcp-headers"}\''
         ),
@@ -72,6 +82,8 @@ def headers(args) -> dict[str, str]:
     its text never carries the key."""
     # The key first: with none, nothing else matters and nothing is printed.
     key = client._resolve_key(args)
+    # A due rotating key is swapped as in every other verb: stderr notes only, never a failure.
+    key = client.maybe_rotate(args, key)
     out = {"Authorization": f"Bearer {key}"}
     session = client.declared_session(args.session)
     if session:
