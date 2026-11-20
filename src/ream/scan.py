@@ -886,7 +886,7 @@ def _shape_lines(
 
 # The most wall-clock time one secret scan may take, however large the page: the same ten
 # seconds as the other readers' backstop (`htmlbound.WALL_FACTOR` times
-# `renderfind.SCAN_SECONDS`). It is checked between the views, the shapes and the matches, so
+# `renderfind.SCAN_SECONDS`). It is checked before each shape and at each match, so
 # one regex search already running is not cut short (each is linear in the page, which the
 # size cap bounds); a scan past it raises `ScanTimeout`.
 SCAN_WALL_SECONDS = 10.0
@@ -894,7 +894,11 @@ SCAN_WALL_SECONDS = 10.0
 
 class ScanTimeout(scanslots.ScanBusy):
     """The scan ran past `SCAN_WALL_SECONDS`: the body was not fully scanned. A `ScanBusy`, so
-    every caller refuses as for a busy server (503 with `Retry-After`, nothing stored)."""
+    every caller refuses as for a busy server (503 with `Retry-After`, nothing stored), with
+    its own words: the page took too long, not that the server is busy."""
+
+    def __init__(self) -> None:
+        super().__init__(scanslots.TIMED_OUT)
 
 
 def _check_deadline(deadline: float | None) -> None:

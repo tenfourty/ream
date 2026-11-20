@@ -53,6 +53,7 @@ SMALL_PAGE = 256 * 1024
 WAIT_SECONDS = 5.0
 RETRY_AFTER_SECONDS = 5
 BUSY = "the server is busy reading other pages: try again in a few seconds"
+TIMED_OUT = "the page took too long to scan: try again shortly"
 
 
 class ScanBusy(Exception):
@@ -60,8 +61,8 @@ class ScanBusy(Exception):
 
     retry_after = RETRY_AFTER_SECONDS
 
-    def __init__(self) -> None:
-        super().__init__(BUSY)
+    def __init__(self, message: str = BUSY) -> None:
+        super().__init__(message)
 
 
 class _Mine(threading.local):

@@ -1227,15 +1227,24 @@ without the scan answers 503 with `Retry-After`. Shipped as an embargoed fix, bu
 copy and hand-pinned, then made public and handed back to the normal image path
 (`docs/agent/runbooks/embargoed-fix.md`).
 
-The secret scan also stops at a time bound (`scan.SCAN_WALL_SECONDS`, 10 s of wall clock, the same
-figure as the other readers' backstop), checked between the shapes and the matches. A scan past it
-raises `ScanTimeout`, a `ScanBusy`, so it is refused as a busy server is: 503 with `Retry-After`,
-nothing stored. A single regex search already running is not interrupted; each is linear in a page
-the size cap bounds.
-
 **Not chosen:**
 - An unbounded scan per request: one large page sent many times could hold every worker.
 - Skipping the scan silently when busy: a check that did not run would read as a clean page.
 
 **Evidence:** this office's call (reversible); security reviewed the fix before release; production
 runs the public image since 20 Nov 2026 (pod image line read by artifacts-maintainer).
+
+## The secret scan stops at a time bound (20 Nov 2026; not yet released)
+
+Added after the release above, and neither released nor reviewed by security yet. The secret scan
+stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the other readers'
+backstop), checked before each shape and at each match. A scan past it raises `ScanTimeout`, a
+`ScanBusy` with its own words (the page took too long to scan), so it is refused as a busy server is:
+503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when it cannot finish
+the scan. A single regex search already running is not interrupted; each is linear in a page the size
+cap bounds.
+
+**Not chosen:** no bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
+
+**Evidence:** this office's call (reversible); the in-shape check is held by
+`tests/test_scanslots.py`.

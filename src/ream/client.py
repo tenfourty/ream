@@ -1585,9 +1585,18 @@ def _check_page(file_path: str) -> int:
     # outside agent's page passed --check and was then refused on publish with
     # a 422: this ran only the CSP half, never the scan that actually refuses.
     # Same module, same shapes file, so it cannot disagree with the service.
-    from ream import scan  # stdlib-only; imported here to keep startup light
+    from ream import scan, scanslots  # stdlib-only; imported here to keep startup light
 
-    secrets_found = scan.scan(body)
+    try:
+        secrets_found = scan.scan(body)
+    except (
+        scanslots.ScanBusy
+    ) as exc:  # also `scan.ScanTimeout`: not scanned, so not clean
+        print(
+            f"{file_path}: not checked -- the secret scan did not finish: {exc}",
+            file=sys.stderr,
+        )
+        return 1
     for found in secrets_found:
         print(
             f"{file_path}:{found.line}: {found.shape} -- the service REFUSES a page "
