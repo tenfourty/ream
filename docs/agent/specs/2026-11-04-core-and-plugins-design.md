@@ -1,10 +1,19 @@
 # A core that runs for anyone, and our specifics as plug-ins (design, 4 Nov 2026)
 
-Tracker item runcove-5t3oj.68. Shaped by the owner's rulings of 4 Nov 2026 (section 2). Nothing
-here is built. Section 10 lists what must go to Jeremy first; where this design picks a default,
-it says so. The coupling this argues from was inventoried on 4 Nov 2026 (about 25 hard-coded
-owner ids, five outbound integrations, house text in everything an agent is served); lines cited
-below were re-checked against `main` at `8da2c2c`.
+Tracker item runcove-5t3oj.68. Shaped by the owner's rulings of 4 Nov 2026 (section 2). Section 10
+lists what had to go to Jeremy first; where this design picks a default, it says so. The coupling
+this argues from was inventoried on 4 Nov 2026 (about 25 hard-coded owner ids, five outbound
+integrations, house text in everything an agent is served); lines cited below were re-checked
+against `main` at `8da2c2c`.
+
+**Status, 20 Nov 2026: built, with one deletion left.** Steps 1 to 9 are built and deployed
+(the ledger in section 8 says what each slice did and where it differed from this design). What is
+not done: core's own partner inbound code (`partner.py`, `partner_in.py` and the built-in `partner`
+sink and `slack` source) is still in core, standing down behind the switches of step 9e. It goes
+once production has run with the plug-in holding the bridge and the end-to-end Slack proof is in
+(9e-4, C2). Sections 3 to 7 keep the text as designed, with "as built" notes where the code
+differs; where they disagree, the ledger and `docs/plugins.md` are right. Chasing dropped answers
+(section 2, 4.1) is separate work and is not built.
 
 ## 1. Problem
 
@@ -163,79 +172,111 @@ comments ("every homelab page shares these", "homelab teal") are reworded.
 
 ### 4.1 Discovery and the one emit point
 
-**Discovery:** Python entry points, one group, `artifacts.plugins`. Each entry point names a
-function `register(api: PluginAPI) -> None`. Core calls them once at start-up (server and CLI),
-in name order. `ARTIFACTS_PLUGINS=none` loads none (tests), `ARTIFACTS_PLUGINS=a,b` loads only
-those; unset loads every installed one. `api` offers six registrations (below); nothing else of the
-core is a promise.
+**Discovery (built, 7a and 7b part 4):** Python entry points, one group, `ream.plugins` (the old
+`artifacts.plugins` is read as well, for good; where a name is in both, `ream.plugins` wins). Each
+entry point names a function `register(api: PluginAPI) -> None`. Core calls them once per process,
+in name order, in the server (`plugin_api.load()`, after the migration and the owner check) and in
+every command-line tool (`plugin_cli.py`, which a client machine without the server stack can run).
+`REAM_PLUGINS=none` loads none (tests, the `core-bare` CI job), `REAM_PLUGINS=a,b` loads only
+those; unset loads every installed one (`ARTIFACTS_PLUGINS` is read as well). What a plug-in that
+fails to load does depends on the process (4.5). `api` offers the six registrations below, plus
+text, route and, from API 1.2, `stage`, `schema`, `on_start`/`on_stop` and `read_side`; nothing
+else of the core is a promise. The author guide, with an example for each, is `docs/plugins.md`.
 
-**One emit point.** Today an action fans out by hand: `events.append` (journal, in the
-transaction), then after commit `nudge.emit`, and `partner.enqueue` (outbox, in the transaction)
-from `decisions.py` (6 sites), `store.py` (3), `comments.py`, `formanswer.py`, `partner_in.py`.
-Replace with `events.emit(conn, Event(...))`, called where `append` is called now:
+**One emit point (built, step 4).** Before it, an action fanned out by hand: `events.append`
+(journal, in the transaction), then after commit `nudge.emit`, and `partner.enqueue` (outbox, in
+the transaction) from `decisions.py` (6 sites), `store.py` (3), `comments.py`, `formanswer.py`,
+`partner_in.py`. Now every one of those, except `partner_in.answer_here` (below), calls
+`events.emit(conn, Event(...))` where `append` was called. It returns an `Emission`; the caller runs
+`.fire()` once its transaction has committed, which delivers to the after-commit sinks and never
+raises. The three steps are:
 
 1. **Journal** (core, always, in the transaction): the existing `events.append`, for kinds that
    are journal kinds. The journal and `/events` stay exactly as they are.
 2. **Outbox** (core, in the transaction): one row per registered sink whose `kinds` match.
-   Generalises `partner.enqueue`: `outbox(id, sink, event_json, created_at, attempts, next_at,
-   delivered_at)`. The sender thread (today `partner.start`) belongs to the core and calls each
-   sink's `deliver(event)`; at-least-once, backoff as today, and `event.id` is the idempotency key
-   the sink passes on.
+   As built it is a new `outbox` table (the spec's columns plus `claimed_until`, `parked_at`,
+   `last_error`, `last_error_at`), not a rename of `partner_outbox`: the partner sink is a sink with
+   a `stage` hook that calls `partner.enqueue` in the transaction, because its per-question version
+   counter and ordering live in that table. The sender thread (`sinks.py`, always started by
+   `serve`) belongs to the core and calls each sink's `deliver(event)`; at-least-once, backoff from
+   5 seconds to 15 minutes, a row parked (kept, counted) after 20 failures, `deliver` bounded to
+   30 seconds, and `event.id` is the idempotency key the sink passes on. `partner_in.answer_here`
+   stays on `partner.enqueue_foreign`: it has no page or agent to put on an `Event`.
 3. **After-commit fan-out** (core, best effort): sinks that declared `delivery="after_commit"`
-   get `deliver(event)` called once, never raising into the caller (today's `nudge.emit`:
-   fire-and-forget, `event_id` only after commit).
+   get `deliver(event)` called once, never raising into the caller (what `nudge.emit` did:
+   fire-and-forget, `event_id` only after commit). Core has no after-commit sink of its own now: the
+   doorbell left in 9d.
 
 `Event` is a frozen dataclass: `kind`, `artifact_id`, `agent` (who it is for), `actor`, `ref_id`,
 `summary`, `note`, `session`, `data` (a small JSON-able dict the producer may add), `id`.
-Event kinds have two namespaces: **journal kinds** (today's `events.KINDS`, which agents poll)
-and **bridge kinds** (today's partner kinds: asked, answered, withdrawn, replaced,
+Event kinds have two namespaces: **journal kinds** (`events.KINDS`, which agents poll)
+and **bridge kinds** (`events.BRIDGE_KINDS`: asked, answered, withdrawn, replaced,
 message_added, edited, set_aside, reopened). Bridge kinds are not in the journal and agents never
-see them. The chasing work adds, as bridge kinds, `answer_unpicked`, `receipt_lapsed` (the two
+see them; `api.sink` refuses a kind in neither list. The chasing work (**not built**; separate from
+this split) is to add, as bridge kinds, `answer_unpicked`, `receipt_lapsed` (the two
 single nudges, delivered to the agent's own sink) and **`answer_dropped`** (after a day, to the
-deployment's target); they are listed in `events.BRIDGE_KINDS` and sink `kinds` may name any. A
+deployment's target); they would be listed in `events.BRIDGE_KINDS`, and sink `kinds` may name any
+listed kind. A
 sink routes by kind and, optionally, target: the core's generic webhook sink reads
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; a TOML file of `[[sink]] name, kinds, url,
 signing_key_file, key_id`, and optionally `label`, `allow_http`, `allow_private`; built, `src/ream/webhook.py`), so
 "`answer_dropped` goes to this URL" is configuration, not code. Chase bookkeeping (a
 once-only marker per subject and stage) is the chasing design's table, not this one's.
 
-### 4.2 The six interfaces
+### 4.2 The six interfaces (all built)
 
 1. **Event sink.** `api.sink(name, kinds, deliver, delivery="outbox"|"after_commit",
-   validate=None)` (built as `api.sink(name, kinds, deliver, delivery="outbox", *, label=None)`: no
-   `validate`, and a kind outside `events.KINDS`/`events.BRIDGE_KINDS` is refused). `deliver(event)` returns normally on success, raises to retry (outbox) or is
-   logged (after commit). Replaces `nudge.py`, the quarterdeck envelope in `partner.py`, and
-   Telegram or any future target.
+   validate=None)` (built as `api.sink(name, kinds, deliver=None, delivery="outbox", *, label=None,
+   stage=None)`: no `validate`, a kind outside `events.KINDS`/`events.BRIDGE_KINDS` is refused, and
+   from API 1.2 exactly one of `deliver` and `stage`). `deliver(event)` returns normally on
+   success, raises to retry (outbox) or is logged (after commit). `stage(conn, event)` (outbox
+   only) runs in a savepoint inside the action's own transaction, where core's own staging sink
+   runs, for a plug-in that keeps its own queue and sender. Replaces `nudge.py` (gone, 9d), and
+   the quarterdeck envelope in `partner.py` (the plug-in's `quarterdeck` sink takes it over by the
+   switch of step 9e; core's copy goes with 9e-4 C2), and Telegram or any future target.
 2. **Answer source.** `api.answer_source(name, label, *, relay=False, verified_label=None,
    route_label=None)`. Declares a stored `answer_source` value, how the gallery words it ("You
    answered this in {label}", "verified by {verified_label}"), and the listening/route wording
-   (`listening.py` `SENT_TO_SLACK`, `SLACK_DELAYED`: states keep a neutral id, the label is the
-   plug-in's). `relay=True` means an agent may record it (today's `ANSWER_SOURCES`:
-   terminal, telegram, in-person, other are core built-ins; `slack` is not claimable by a relay
-   and comes only from the plug-in's inbound route).
+   (`listening.py` `SENT_TO_SLACK`, `SLACK_DELAYED`: states keep a neutral id, now
+   `sent_to_partner` and `partner_delayed`, the label is the plug-in's). `relay=True` means an
+   agent may record it (`decisions.ANSWER_SOURCES`: terminal, telegram, in-person, other are core
+   built-ins beside `page` and `mcp`; `slack` is not claimable by a relay and comes only from the
+   plug-in's inbound route). As built: `decisions.register_source` takes the same arguments;
+   core still registers `slack` itself (so a row reads and is labelled with no plug-in loaded),
+   and from API 1.5 one plug-in may register it, never with `relay=True`.
 3. **Answer hook** (replaces `decisions.answer(in_transaction=...)` for plug-ins). `api.on_answer(
    name, fn)`: `fn(conn, decision, answer)` runs **inside** the answer's transaction, after the row
    is written and before the commit; raising aborts the whole answer. Only an answer-source
    plug-in that vouches for its own inbound answers may use it (today: `partner_in`, which marks
    the question answered as the owner via the partner and must not half-apply). Everything else is
    a sink. The hook is for answers the person gave through the plug-in's own inbound path
-   (`decisions.answer`); an agent's relay (`record_elsewhere`) never runs it. `slack` and `page` are
-   reserved names: no plug-in may register them as a source.
-4. **Scanner.** `api.scanner(name, scan, on_error="skip"|"block")`: `scan(text) -> list[Finding]`,
-   called alongside the core's pattern scan on publish and on comment save
-   (`store.py:449`, `comments.py:1639`). `on_error` preserves today's `ggscan` behaviour exactly
-   (to be read from `ggscan.py` in the slice, not assumed here). Core ships the pattern scan
-   only.
+   (`decisions.answer`); an agent's relay (`record_elsewhere`) never runs it. As built, `page`,
+   `mcp` and the other core names are refused as a source name; `slack` may be registered by one
+   plug-in only (API 1.5), never as a relay source. A raise aborts the answer as
+   `decisions.AnswerHookFailed`, answered 503 as JSON naming the plug-in (an "Answer not saved"
+   page on the gallery's answer form).
+4. **Scanner.** `api.scanner(name, scan, on_error="skip"|"block", timeout=None)`: `scan(text) ->
+   list[Finding]`, called after the core's pattern scan came back clean, on publish and on comment
+   save (`store._check_secrets`, `comments.second_scan`), in the slot where the core took its
+   second opinion (page bodies and previews, the fields whose caller asks for it, an agent
+   comment's second scan), not on titles, decision fields or human comments. `skip` judges the text
+   on the other scanners; `block` fails a publish and holds a comment. Each call is bounded (10 s,
+   or the scanner's own `timeout`, capped at 20 s, API 1.1). A scanner named `gitguardian` is the
+   second opinion that stamps an agent comment scanned. `ggscan.py` is deleted (9c) and core ships
+   the pattern scan only.
 5. **Mail backend.** `api.mail_backend(name, send, enabled)` with `send(to, subject, text)` (as
    built; not a message object); core has `mail.send(to, subject, text)` and
-   `mail.enabled()` that ask the one registered backend (or none: off). Mailgun has moved out (9b);
-   the sender and region/domain are settings the backend reads.
-6. **CLI command and client hooks.** `api.cli(name, main, help)` registers `artifacts <name>`
-   subcommands (and keeps the standalone console script working through a one-line entry in the
+   `mail.enabled()` that ask the one registered backend (or none: off). Mailgun has moved out and
+   its code is deleted from core (9b); the sender and region/domain are settings the backend reads.
+6. **CLI command and client hooks.** `api.cli(name, main, help)` registers `ream <name>`
+   subcommands (and keeps a standalone console script working through a one-line entry in the
    plug-in's own `pyproject`). `api.client_defaults(api_url=..., session_envs=[...],
    news=[...])` supplies the CLI's default endpoint, the session-label env names (`QD_OFFICE`,
-   `ARTIFACTS_SEAT`) and news lines. The tracker pages (`artifacts-beads-page`,
-   `artifacts-bead-metrics`) are CLI commands.
+   `ARTIFACTS_SEAT`) and news lines. The tracker pages are CLI commands of the house plug-in
+   `tracker-pages`; core's `beadpage.py`, `beadmetrics.py`, their two console scripts and the
+   `bd_command` setting are deleted (9a). **As built:** the house fallbacks the hooks were to
+   replace (`settings.HOUSE_DEFAULT_API`, `QD_OFFICE` and the seat, the house owner words) are
+   still in core as the lowest default (7b part 4 choice); they are not yet removed.
 
    *Trust and cost of the CLI hooks (7b part 4).* A plug-in's `register` runs in every
    command-line process, on every start, with the caller's rights (it can read the key file):
@@ -255,7 +296,17 @@ Plus **text** (as built, a variable or section value that is a function is cache
 fn)` for named slots in `agents.txt`/`skill.md` (`proxy`, `tools`, `integrations`), so the
 tracker-page paragraph of `skill.md` ships with the plug-in. And **routes**:
 `api.router(router, host)` mounts an inbound route on a dedicated host (the partner's inbound
-webhook, today `ARTIFACTS_PARTNER_INBOUND_HOST`); core never mounts it on the gallery host.
+webhook, `REAM_PARTNER_INBOUND_HOST`); core never mounts it on the gallery host. From API 1.5 a
+plug-in may take the partner inbound host: requests reach its route only while the `service_meta`
+key `partner_inbound_owner` names it, otherwise core's endpoint answers (9e-4).
+
+**As built, beyond the six (API 1.2 to 1.5; `docs/plugins.md` has each):** `api.schema` (a
+plug-in's own tables, prefixed with its name, created after the core's migration), `api.on_start`
+and `api.on_stop` (a thread of the plug-in's own), `api.read_side` (the copies of questions whose
+home is the partner, for the inbox, gallery, question list and listening state, with the
+outbox report and the "delivered" lookup), and the helpers in `ream.partner` by which a plug-in
+takes over the bridge from core's built-in code (`claim_bridge`, `hand_over`, `claim_inbound`,
+`hand_over_inbound` and their releases; step 9e).
 
 ### 4.3 What the core ships with no plug-in
 
@@ -263,22 +314,27 @@ Journal, outbox and sender thread, the generic **signed webhook sink** (built: a
 POST of the generic envelope `{key_id, sent_at, event}` to configured URLs, https and public
 addresses only unless a sink opts out, no redirects, 64 KiB cap; see `docs/plugins.md`; stays core as ruled, the part of `partner.py`
 that is not quarterdeck's contract), the pattern scanner, built-in answer sources
-(`page`, `terminal`, `telegram`, `in-person`, `other`), no mail, no tracker pages. Everything a
-plug-in does can be turned off by not installing it.
+(`page`, `terminal`, `telegram`, `in-person`, `other`, and `mcp`), no mail, no tracker pages.
+Everything a plug-in does can be turned off by not installing it. Until 9e-4 C2, core also carries
+the quarterdeck bridge (the built-in `partner` sink and sender, the inbound endpoint, the `slack`
+answer source), which stands down while a plug-in holds the bridge (the switches are `service_meta`
+keys, not plug-in names); the design's "core ships none" holds once C2 deletes it.
 
 ### 4.4 Transaction semantics
 
 | Step | Where | If it fails |
 |---|---|---|
 | Journal row, outbox rows | the action's transaction | the action rolls back |
-| `on_answer` hook | the answer's transaction, before commit | the answer rolls back; the caller sees a 5xx with the plug-in's name |
-| Outbox `deliver` | sender thread, after commit | retried with backoff; after N attempts parked and counted, never dropped |
+| `on_answer` hook | the answer's transaction, before commit | the answer rolls back; the caller sees a 503 naming the plug-in |
+| `stage` of a plug-in's sink | a savepoint in the action's transaction | only its writes are undone, counted as `<plug-in>:stage`, the action is kept; the stage of the plug-in that holds the bridge fails the action (`BridgeStageFailed`); a stage that ends the transaction fails the action whole |
+| Outbox `deliver` | sender thread, after commit | retried with backoff; after 20 attempts parked and counted, never dropped |
 | After-commit sink | the request thread's executor, after commit | logged and counted; the action is already done |
 | Scanner | before the write | per `on_error` |
 
 An outbox row names its sink. If a sink is not registered at start (plug-in removed), its rows
 stay pending, `artifacts-admin outbox` shows them by sink, and nothing is delivered or deleted;
-re-installing drains them.
+re-installing drains them. The partner bridge's own handover between core's outbox and a
+plug-in's, and its rollback, are in 9e-3 of the ledger and `docs/plugins.md`.
 
 ### 4.5 Failure isolation
 
@@ -286,16 +342,21 @@ A plug-in cannot take down a request or the sender thread: every call into one i
 exception becomes a log line with the plug-in and interface and a counter (there is no `/metrics` route: the counts
 are `plugin_api.failure_counts()` and `sinks.status()`, shared across workers through the
 `plugin_failure` table), and the per-sink circuit breaker pauses a
-sink that fails N times running (outbox rows wait). Exceptions: the answer hook and scanner
-`on_error="block"` fail the action by design (4.4). A plug-in that raises while registering, or
-declares an unsupported API version, **stops start-up** with its name: a missing scanner or
-source silently absent is worse than a pod that does not start.
+sink that fails 5 times running from at least two different events, for 60 seconds (outbox
+rows wait; the state is kept in the database, so every process sees one breaker). Exceptions: the
+answer hook and scanner `on_error="block"` fail the action by design (4.4). A plug-in that raises
+while registering, or declares an unsupported API version, **stops the server's start-up** with
+its name: a missing scanner or source silently absent is worse than a pod that does not start. A
+command-line tool skips such a plug-in with a warning (unset `REAM_PLUGINS`) or exits 2 (named in
+`REAM_PLUGINS`), because the tools run on every agent's machine.
 
 ### 4.6 Versioning
 
-`artifacts.plugin_api.API_VERSION = (1, 0)`. A plug-in's `register` is passed `api` whose
-`api.version` it checks, and declares `REQUIRES_API = "1"` as module data; core compares major
-and refuses a mismatch (start-up failure above). Minor additions only add registrations or
+`ream.plugin_api.API_VERSION` was `(1, 0)` and is `(1, 5)`. A plug-in's `register` is passed `api`
+whose `api.version` it checks, and declares `REQUIRES_API = "1"` as module data; core compares major
+and refuses a mismatch (start-up failure above). The minors so far: 1.1 the `timeout` of
+`api.scanner`; 1.2 `stage`, `schema`, `on_start`, `on_stop`; 1.3 `read_side`; 1.4 its `delivered`
+argument; 1.5 the `slack` source and the partner inbound host for one plug-in. Minor additions only add registrations or
 optional fields; removing or changing one is a major bump with one release of both. The `Event`
 dataclass only gains fields (plug-ins must accept unknown ones). The plug-in repo's CI pins the
 core it builds against (section 7), so a core change that breaks the API is a failing PR on the
@@ -356,6 +417,17 @@ signed-webhook sink, pattern scanner (`scan.py`, `secret_shapes.txt` with commen
 
 `partner.py`'s two halves are split in slice 5: the outbox and generic envelope to `outbox.py` and
 `webhook.py` (core), the quarterdeck specifics stay behind until slice 9 moves them.
+
+**As built (20 Nov 2026).** The generic half went to `sinks.py` (the outbox table, the registry,
+the sender and the breaker, slice 4) and `webhook.py` (the signed webhook sink); there is no
+`outbox.py`. The moves: `nudge.py`, `ggscan.py`, the Mailgun code, `beadpage.py` and
+`beadmetrics.py` are deleted from core and live in the house plug-in repo (`ream-homelab`) as the
+rows above say (9a to 9d). The quarterdeck rows (`partner.py` and `partner_in.py`) have not been
+deleted from core: 9e-1 to 9e-4 C1 built the plug-in API they needed (API 1.2 to 1.5) and the
+switches by which the plug-in takes over the bridge and core stands down, and the deletion (9e-4
+C2) waits on production running with the plug-in holding both halves. The last row's core side
+(the house default endpoint, `QD_OFFICE`, the seat and the house owner words) is still in core as
+the lowest default (4.2, item 6).
 
 **Renames (API clients and stored data keep working):**
 
@@ -431,6 +503,19 @@ The core has `tests/test_plugin_api.py` with a throwaway in-tree plug-in per int
 sink, source, scanner, mail backend, CLI command), including the failure cases (raises on
 register, wrong version, sink raises, hook aborts the answer). The plug-in repo's tests do not
 re-test the core; they test the house behaviour (envelopes, wording, Mailgun requests).
+
+### 7.5 As built (step 8)
+
+Option (A) was chosen (`docs/decisions.md`, 9 Nov 2026, answering 10.1 to 10.3). The plug-in repo is
+`runcove/ream-homelab`. Core's `image` job pushes `runcove/artifacts-core:<sha12>` and logs
+`PUBLISHED core image=...`; the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, main only)
+opens or updates one PR on ream-homelab that moves `core.lock`, set to merge when its checks
+succeed; ream-homelab builds the deployed image and opens the homelab pin PR. Core's own `pin` job
+is off. Runbook: `docs/agent/runbooks/image-from-ream-homelab.md`. Core's `core-bare` job (7.3) is
+built and runs the whole suite on both databases with no plug-in; as of 7b part 5 it was not
+listed as a required check, because the lander names its required checks in the homelab repo (not
+re-checked in this pass). **`core-with-house` was not built:** ream-homelab's own `test` job installs the core named in `core.lock` and tests the
+plug-ins against it, which is the drift check the job was for (step 8, part 1).
 
 ## 8. Slicing
 
@@ -711,12 +796,25 @@ drivers; CI only (not on the management machine).
    on `main`, and its lock PRs (`core: lock <sha12>`, branch `core-lock/next`) have merged on
    `runcove/ream-homelab` (#25 to #28); the production pod runs the image tagged with the plug-in
    repo's merge commit of #28, which locks core `9cc0b61fa9e9`, then `main`.
+   **Step 8 as built (summary, 20 Nov 2026).** Done: the plug-in repo exists and builds the deployed
+   image; core publishes the `-core` image and the lock-bump PRs; one real pin PR was merged as
+   proof; the lander binds to ream-homelab's run. Not done, by choice: `core-with-house` in core
+   (7.5).
 9. **Move, one at a time, each its own slice:** (9a) `beadpage`/`beadmetrics` and their console
    scripts, (9b) Mailgun, (9c) `ggscan`, (9d) doorbell, (9e) quarterdeck sink and inbound
    (the largest; includes the `slack` answer source and `on_answer` hook). Each: copy into the
    plug-in repo, ship, confirm the deployed behaviour, then delete from core in the next pin.
    Removing a console script from core means agents reinstall the tool
    (`uv tool install ... --force`); announced in `news` first.
+   **Step 9 as built (summary, 20 Nov 2026; the lines below are the record).** 9a, 9b, 9c and 9d are
+   done: the code is deleted from core and the house plug-in repo carries it (the tracker-page
+   commands, the Mailgun backend, the `gitguardian` scanner, the `doorbell` sink). 9e did not move
+   the way 9d did, because the plug-in API could not express the bridge: it grew first (API 1.2 to
+   1.4, 9e-1 to 9e-3), the outbound half now stands down in core behind a database switch (9e-3), and
+   the inbound half has its own switch with API 1.5 (9e-4, C1). **Still in core:** `partner.py`,
+   `partner_in.py`, the built-in `partner` sink and the `slack` source's registration. The deletion
+   (C2) waits on production running with the plug-in holding the bridge and on the end-to-end Slack
+   proof. The plug-in half (P1) lives in ream-homelab, outside this repo.
    **9a, first half built (`ci/9a-beadpage` on ream-homelab, 10 Nov 2026; CI green, not on its main).**
    Plug-in `tracker-pages` (`ream_homelab.tracker_pages:register`) holds copies of `beadpage` and
    `beadmetrics` with their tests, and registers `ream tracker-page` and `ream tracker-metrics`
@@ -1147,6 +1245,21 @@ drivers; CI only (not on the management machine).
     (`allow_http`, `allow_private`), no redirects, 64 KiB cap. Section 4 above now reads as built for
     the mail `send(to, subject, text)` signature, no `validate` on a sink, no `/metrics`, and the
     60 s text cache.
+    **Part 4 built (`ci/core-docs-step10`, 20 Nov 2026).** Covered: this design doc now reads as
+    built. The status paragraph at the top; section 4 (discovery under `ream.plugins` and
+    `REAM_PLUGINS`, the emit point and outbox as built, the six interfaces with their built
+    signatures and the API 1.1 to 1.5 additions, what core still carries, the failure table and
+    breaker numbers, the API version history); an "as built" note under section 6; section 7.5
+    (option A, the lock-bump bot, `core-bare`); and summaries of steps 8 and 9 above their ledger
+    lines (which are kept as the record). `docs/plugins.md`'s opening status paragraph is brought up
+    to date with step 9; `AGENTS.md`'s WHAT table said nothing to change. **Still not done:** core's
+    deletion of the partner inbound code (9e-4 C2) waits on production running with the plug-in
+    claimed and the end-to-end Slack proof, and this doc is not final until then (the status
+    paragraph, 4.3 and the 9e summary change with it); the office doc's deployment paragraph lives in
+    the runcove repo, not this one, and is not touched here; the house fallbacks in core
+    (4.2, item 6) and the chasing work (4.1) are not built. The 17 Nov ledger line for 9e-4 says the
+    plug-in half (P1) was still to do when written; this repo cannot see ream-homelab, so that half is
+    not described here as done.
 
 The chasing work (nudge once, `answer_dropped` after a day) follows slice 4 at the earliest, and
 only needs sinks to exist; it does not wait for the plug-in repo.
@@ -1170,6 +1283,10 @@ only needs sinks to exist; it does not wait for the plug-in repo.
   deployment; split later if it hurts.
 
 ## 10. Decisions for Jeremy
+
+Answered 9 Nov 2026, recorded in `docs/decisions.md`: 10.1 (the repo is `ream-homelab`), 10.2 (a) and
+10.3 (a). 10.4 and 10.5 were built as option (a) (steps 2 and 6 of the ledger); no `decisions.md`
+entry records them as asked. The questions below are kept as asked.
 
 10.1 **Where do our plug-ins live, and what is it called?** (a) A new repo under the same forge
 organisation as artifacts, named `artifacts-homelab` (homelab office creates it; the artifacts
