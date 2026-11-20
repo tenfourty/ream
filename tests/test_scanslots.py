@@ -457,8 +457,12 @@ def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass(monkeypat
     count = 4
     assert len(WORST_CASE) > scanslots.SMALL_PAGE
     start = threading.Barrier(count, timeout=20)
-    inside = threading.Barrier(count, timeout=20)
     peak: list[int] = []
+    # The count is read once in the barrier's action, which runs before any thread is
+    # released, so no scan can have finished and freed its slot first.
+    inside = threading.Barrier(
+        count, action=lambda: peak.append(scanslots.in_use()), timeout=20
+    )
     results: list[object] = []
     cpu: list[float] = []
     arrived = threading.local()
@@ -468,7 +472,6 @@ def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass(monkeypat
         if not getattr(arrived, "yes", False):
             arrived.yes = True
             inside.wait()  # all four hold a slot here, or this raises
-            peak.append(scanslots.in_use())
         real_check(deadline)
 
     monkeypatch.setattr(scan, "_check_deadline", check)
@@ -490,7 +493,7 @@ def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass(monkeypat
         for thread in threads:
             thread.join(120)
     assert results == [[]] * count, results
-    assert peak == [count] * count, "all four held a slot at the same moment"
+    assert peak == [count], "all four held a slot at the same moment"
     # Scaled from this page to the largest body the service stores: still inside the bound.
     scaled = max(cpu) * (store.MAX_BODY_BYTES / len(WORST_CASE))
     assert len(cpu) == count and scaled < scan.SCAN_CPU_SECONDS, (cpu, scaled)
