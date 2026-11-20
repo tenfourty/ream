@@ -897,10 +897,11 @@ SCAN_CPU_SECONDS = 10.0
 # every turn at the lock is a share of the other slots' work finishes in about that many
 # times its own CPU time, so the backstop is never reached by a legitimate page.
 # THIS IS A SLOT-HOLD LIMIT, NOT A PER-SCAN WALL BOUND: a scan may now take far longer than
-# ten seconds of wall time. That is acceptable only because publishing needs a Ream key,
-# so whoever can make a scan run is known and revocable. If a publish path that needs no
-# key ever appears, this must drop back to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall
-# clock, as before 20 Nov 2026) before it ships.
+# ten seconds of wall time. That is acceptable only because every path that starts a scan
+# needs a revocable credential (a Ream key, or a signed-in app's token), both the owner's to
+# end. If a path that starts a scan without such a credential ever appears, this must drop
+# back to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall clock, as before 20 Nov 2026)
+# before it ships.
 SCAN_WALL_SECONDS_PER_SLOT = 10.0
 # Measured in the pod on 20 Nov 2026 (image 1bdcba608c6a; no CPU limit, 50m request, 1Gi memory
 # limit), for an 8 MiB page of the seven assignment shapes with placeholder values: one scan took

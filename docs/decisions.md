@@ -1237,7 +1237,7 @@ runs the public image since 20 Nov 2026 (pod image line read by artifacts-mainta
 ## The secret scan stops at a time bound (released 20 Nov 2026)
 
 The secret scan stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the
-other readers' backstop; since renamed, see the follow-up below), checked before each shape and at each match. A scan past it raises
+other readers' backstop; the bound later changed from wall clock to the thread's CPU time, see the follow-up below), checked before each shape and at each match. A scan past it raises
 `ScanTimeout`, a `ScanBusy` with its own words (the page took too long to scan), so it is refused as
 a busy server is: 503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when
 it cannot finish the scan. A single regex search already running is not interrupted; each is linear
@@ -1251,9 +1251,10 @@ clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 the scanning thread's own `time.thread_time()`), because scans in threads share the interpreter lock
 and four legitimate worst-case pages all hit the wall bound. The wall clock stays as a backstop of
 `SCAN_WALL_SECONDS_PER_SLOT` (10 s) times the slot count, counted from taking the slot. That backstop is
-a slot-hold limit, not a per-scan wall bound, and is acceptable only because publishing needs a
-Ream key; if a publish path that needs no key ever appears, it must drop back to a per-scan wall
-bound. The per-call pattern bounds are unchanged.
+a slot-hold limit, not a per-scan wall bound, and is acceptable only because every path that starts
+a scan needs a revocable credential (a Ream key or a signed-in app's token, both the owner's to
+end); if a path that starts a scan without such a credential ever appears, it must drop back to a
+per-scan wall bound. The per-call pattern bounds are unchanged.
 
 **Not chosen:**
 - No bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.

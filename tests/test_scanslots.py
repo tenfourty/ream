@@ -389,14 +389,98 @@ def test_a_scan_that_uses_ten_cpu_seconds_is_refused_at_about_ten(monkeypatch):
     assert scanslots.in_use() == 0, "the slot was given back"
 
 
-def test_a_publish_that_uses_ten_cpu_seconds_is_a_503_and_stores_nothing(
+def test_a_publish_whose_body_scan_uses_ten_cpu_seconds_is_a_503_and_stores_nothing(
     api, auth, db, monkeypatch
 ):
+    """The CPU clock ticks only inside the scan of the body (a page over `SMALL_PAGE`),
+    so a refusal can only be the body's: the title and other small scans before it read
+    a clock that never moves and pass."""
+    ticks = []
+    inside = threading.local()
+    real = scan.scan
+    outcomes: list[tuple[int, str]] = []
+
+    def thread_time() -> float:
+        if getattr(inside, "big", False):
+            ticks.append(None)
+            return float(len(ticks))
+        return 0.0
+
+    def watched(text):
+        inside.big = len(text) > scanslots.SMALL_PAGE
+        try:
+            found = real(text)
+            outcomes.append((len(text), "clean"))
+            return found
+        except scan.ScanTimeout:
+            outcomes.append((len(text), "timeout"))
+            raise
+        finally:
+            inside.big = False
+
     with monkeypatch.context() as m:
-        _ticking_cpu(m)
+        m.setattr(scan, "scan", watched)
+        m.setattr(
+            scan,
+            "time",
+            types.SimpleNamespace(thread_time=thread_time, monotonic=time.monotonic),
+        )
         busy = publish(api, auth, PAGE)
     assert busy.status_code == 503
+    assert busy.json() == {"detail": scanslots.TIMED_OUT}
     assert store.list_for_agent(db, "seat") == []
+    assert outcomes[-1] == (len(PAGE), "timeout"), outcomes
+    assert all(kind == "clean" for size, kind in outcomes[:-1]), outcomes
+    assert 11 <= len(ticks) <= 13, len(ticks)
+
+
+_KEYS = (
+    "password=",
+    "passwd=",
+    "pass=",
+    "token=",
+    "secret=",
+    "PrivateKey =",
+    "PresharedKey =",
+)
+# The worst case measured in production (scan.py, beside SCAN_CPU_SECONDS), scaled down to
+# about 1 MiB: the seven assignment shapes with placeholder values, each key written plainly
+# and again split by a tag, so every shape matches in both views and finds nothing.
+_UNIT = "".join(
+    f"<p>{key}&lt;your-value&gt; {key[:2]}<i></i>{key[2:]}&lt;your-value&gt;</p>\n"
+    for key in _KEYS
+)
+WORST_CASE = "<html><body>" + _UNIT * (1024 * 1024 // len(_UNIT)) + "</body></html>"
+
+
+def test_four_worst_case_pages_scanned_at_once_on_real_clocks_all_pass():
+    count = 4
+    assert len(WORST_CASE) > scanslots.SMALL_PAGE
+    start = threading.Barrier(count, timeout=20)
+    peak: list[int] = []
+    results: list[object] = []
+    cpu: list[float] = []
+
+    def run() -> None:
+        try:
+            start.wait()
+            began = time.thread_time()
+            found = scan.scan(WORST_CASE)
+            cpu.append(time.thread_time() - began)
+            peak.append(scanslots.in_use())
+            results.append(found)
+        except BaseException as exc:  # noqa: BLE001 -- recorded and asserted below
+            results.append(exc)
+
+    with settings.override(scan_slots=str(count)):
+        threads = [threading.Thread(target=run) for _ in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(120)
+    assert results == [[]] * count, results
+    assert len(cpu) == count and max(cpu) < scan.SCAN_CPU_SECONDS / 2, cpu
+    assert max(peak) >= 2, "the scans overlapped, each holding a slot"
 
 
 def test_four_worst_case_pages_scanned_at_once_all_pass(monkeypatch):
