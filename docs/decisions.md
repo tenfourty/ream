@@ -1237,7 +1237,7 @@ runs the public image since 20 Nov 2026 (pod image line read by artifacts-mainta
 ## The secret scan stops at a time bound (released 20 Nov 2026)
 
 The secret scan stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the
-other readers' backstop), checked before each shape and at each match. A scan past it raises
+other readers' backstop; the bound later changed from wall clock to the thread's CPU time, see the follow-up below), checked before each shape and at each match. A scan past it raises
 `ScanTimeout`, a `ScanBusy` with its own words (the page took too long to scan), so it is refused as
 a busy server is: 503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when
 it cannot finish the scan. A single regex search already running is not interrupted; each is linear
@@ -1247,6 +1247,18 @@ with security's two wording and measurement fixes. The follow-up for four large 
 once comes next as an ordinary public change: it counts the deadline in CPU time, with the wall
 clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 
+**Follow-up (security approved, 20 Nov 2026):** the bound is now `scan.SCAN_CPU_SECONDS` (10 s of
+the scanning thread's own `time.thread_time()`), because scans in threads share the interpreter lock
+and four legitimate worst-case pages all hit the wall bound. The wall clock stays as a backstop of
+`SCAN_WALL_SECONDS_PER_SLOT` (10 s) times the slot count, counted from taking the slot. That backstop is
+a slot-hold limit, not a per-scan wall bound, and is acceptable only because a scan that can take a
+slot (a value over `scanslots.SMALL_PAGE`) is reachable only with a revocable credential. Today
+that is a page body alone, sent with a Ream key on `/api/v1`, with a key or an owner-only app token
+on `/mcp`, or from the owner's own gallery session; every other scanned field is capped at 64 KiB
+or less before its scan. `tests/test_scan_call_sites.py` holds this: a new place that starts a
+scan fails until it is classified. If a slot-taking scan ever becomes reachable without such a
+credential, the backstop must drop back to a per-scan wall bound. The per-call pattern bounds are unchanged.
+
 **Not chosen:**
 - No bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
 - Holding the release until the follow-up is done: the bound already refuses a scan that cannot
@@ -1254,5 +1266,5 @@ clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 
 **Evidence:** Jeremy approved the release on 20 Nov 2026 (decision: release now, follow-up next);
 security reviewed the fix and retested it live in production; the in-shape check is held by
-`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_WALL_SECONDS` in
+`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_CPU_SECONDS` in
 `src/ream/scan.py`.
