@@ -466,8 +466,13 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # another process. (3) The same happens, on bash 5.2, when a TERM ends the gate just after the watchdog's
 # fork and before bash records it as a job (see glist_stop): the trap cannot reach that watchdog.
 LIST_TIMEOUT=120
+# shellcheck disable=SC2034  # set by gate_pid, read by the trap string
 GATE_PID=
-GATE_EXIT_TRAP='if [ "${BASHPID:-$GATE_PID}" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
+# The id of the process that runs this: field 1 of /proc/self/stat, read by the builtin `read` in that very
+# process. Not BASHPID: on bash 5.2 a subshell TERMed just after its fork runs its EXIT trap with a stale
+# BASHPID (the parent's), so a guard on it passed in the watchdog. Where there is no /proc, BASHPID or $$.
+gate_pid() { if [ -r /proc/self/stat ]; then read -r "$1" _ </proc/self/stat; else printf -v "$1" %s "${BASHPID:-$$}"; fi; }
+GATE_EXIT_TRAP='gate_pid GATE_TRAP_ME; if [ "$GATE_TRAP_ME" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
 GLIST_DOG=
 GLIST_ACTIVE=
 glist() {
@@ -1106,8 +1111,10 @@ run_gate() {
   # until bash resets it, and a TERM that reaches it in that window (glist_stop sends one as soon as git ends)
   # runs this trap in the subshell, which removed the scratch directory under the running gate (measured: the
   # listing file gone before the parser read it, "git listed HEAD's side ... in a form the gate cannot read").
-  # BASHPID names the process running the trap (bash 4 and later; where it is unset the guard always passes).
-  GATE_PID=${BASHPID:-$$}
+  # BASHPID was no guard: on bash 5.2 that subshell runs the trap with a stale BASHPID equal to the gate's
+  # (measured in bash 5.2.15: scratch lost in 21 of 2500 runs, 0 of 2500 with /proc/self/stat). gate_pid reads
+  # the true id from /proc/self/stat; where there is no /proc it falls back to BASHPID, or $$ (always passes).
+  gate_pid GATE_PID
   # shellcheck disable=SC2064  # the trap is a constant string; its variables are read when it runs
   trap "$GATE_EXIT_TRAP" EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
@@ -1555,6 +1562,12 @@ EOF
 
   # A subshell TERMed just after its fork must not run the gate's EXIT trap (it removed the gate's scratch
   # directory: measured with the unguarded trap, hundreds of 400 forks did). Same trap string as the gate's.
+  # gate_pid names the process it runs in: a subshell's answer differs from its parent's (a stale or inherited
+  # id, as bash 5.2's BASHPID gives a just-forked subshell in its trap, would make them equal).
+  local gp_me gp_sub
+  gate_pid gp_me
+  gp_sub=$(gate_pid GATE_SUB_PID; echo "$GATE_SUB_PID")
+  check "gate_pid in a subshell is not the parent's id" 0 0 "$([ -n "$gp_me" ] && [ -n "$gp_sub" ] && [ "$gp_me" != "$gp_sub" ] && echo differ)" "differ"
   local lost rd="$tmp/trapdir"
   lost=$(
     n=0
@@ -1562,7 +1575,7 @@ EOF
       mkdir -p "$rd"
       if ! (
         # shellcheck disable=SC2034  # read by the trap string
-        GATE_PID=${BASHPID:-$$}; SCRATCH=$rd; GLIST_ACTIVE=
+        gate_pid GATE_PID; SCRATCH=$rd; GLIST_ACTIVE=
         # shellcheck disable=SC2064
         trap "$GATE_EXIT_TRAP" EXIT
         ( trap ':' TERM; sleep 5 & s=$!; wait "$s" ) </dev/null >/dev/null 2>&1 &
