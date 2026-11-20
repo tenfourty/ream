@@ -1234,17 +1234,25 @@ copy and hand-pinned, then made public and handed back to the normal image path
 **Evidence:** this office's call (reversible); security reviewed the fix before release; production
 runs the public image since 20 Nov 2026 (pod image line read by artifacts-maintainer).
 
-## The secret scan stops at a time bound (20 Nov 2026; not yet released)
+## The secret scan stops at a time bound (released 20 Nov 2026)
 
-Added after the release above, and neither released nor reviewed by security yet. The secret scan
-stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the other readers'
-backstop), checked before each shape and at each match. A scan past it raises `ScanTimeout`, a
-`ScanBusy` with its own words (the page took too long to scan), so it is refused as a busy server is:
-503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when it cannot finish
-the scan. A single regex search already running is not interrupted; each is linear in a page the size
-cap bounds.
+The secret scan stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the
+other readers' backstop), checked before each shape and at each match. A scan past it raises
+`ScanTimeout`, a `ScanBusy` with its own words (the page took too long to scan), so it is refused as
+a busy server is: 503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when
+it cannot finish the scan. A single regex search already running is not interrupted; each is linear
+in a page the size cap bounds. Built and proved under embargo in the private copy, then reviewed by
+security and retested live in production. Jeremy approved the release on 20 Nov 2026: release now
+with security's two wording and measurement fixes. The follow-up for four large pages scanned at
+once comes next as an ordinary public change: it counts the deadline in CPU time, with the wall
+clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 
-**Not chosen:** no bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
+**Not chosen:**
+- No bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
+- Holding the release until the follow-up is done: the bound already refuses a scan that cannot
+  finish, and waiting would leave the unbounded scan in production.
 
-**Evidence:** this office's call (reversible); the in-shape check is held by
-`tests/test_scanslots.py`.
+**Evidence:** Jeremy approved the release on 20 Nov 2026 (decision: release now, follow-up next);
+security reviewed the fix and retested it live in production; the in-shape check is held by
+`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_WALL_SECONDS` in
+`src/ream/scan.py`.
