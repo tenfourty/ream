@@ -124,8 +124,8 @@ need no plug-in: format, signing and the addresses it refuses are in `docs/plugi
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
 (`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the secret scan refuses the request (503 with `Retry-After`, nothing stored), the publish checks and the render findings say they did not run, the comment
 listings answer 200 with the pins of the pages they could not read unknown (`anchor_state` "", and `quote_state` "" too unless the page's words were already read), and a reader
-that a request needs answers 503 with `Retry-After`. The secret scan also has a wall-clock bound once it holds its slot
-(`scan.SCAN_WALL_SECONDS`, 10 s, checked before each shape and at each match): past it the scan raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
+that a request needs answers 503 with `Retry-After`. The secret scan also has a time bound once it holds its slot
+(`scan.SCAN_CPU_SECONDS`, 10 s of the scanning thread's own CPU time, checked before each shape and at each match; plus a wall-clock backstop of `SCAN_WALL_SECONDS_PER_SLOT` times the slot count, a slot-hold limit that is acceptable only because publishing needs a key): past either the scan raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
 `REAM_RENDERER_URL` (also `ARTIFACTS_RENDERER_URL`; unset: nothing changes, the browser runs in the
 service's own process as on a fresh install) names a renderer running as its own process or pod, for resource
 isolation: `python -m ream.renderd --port 8091`, same image. It must be `http://host:port` with an explicit port and

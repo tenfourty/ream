@@ -315,7 +315,7 @@ def test_the_secret_scan_waits_then_gives_up_on_a_large_body(full):
 
 
 def test_a_secret_scan_that_runs_past_its_time_bound_is_refused_not_clean(monkeypatch):
-    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)  # already spent
+    monkeypatch.setattr(scan, "SCAN_CPU_SECONDS", -1.0)  # already spent
     with pytest.raises(scanslots.ScanBusy) as raised:
         scan.scan(PAGE)
     assert isinstance(raised.value, scan.ScanTimeout)
@@ -342,16 +342,139 @@ def test_the_time_bound_is_also_checked_inside_one_shape(monkeypatch):
         calls.append(None)
         return float(len(calls))
 
-    monkeypatch.setattr(scan, "time", types.SimpleNamespace(monotonic=clock))
+    deadline = scan._Deadline(
+        10.5, 1e9
+    )  # made on the real clocks, then the clock is swapped
+    deadline.cpu_until = 10.5
+    monkeypatch.setattr(
+        scan,
+        "time",
+        types.SimpleNamespace(thread_time=clock, monotonic=lambda: 0.0),
+    )
     with pytest.raises(scan.ScanTimeout):
-        scan._scan(body, deadline=10.5)
+        scan._scan(body, deadline=deadline)
     assert len(calls) == 11, (
         "read once before the shape, then once per match, then stopped"
     )
 
 
+def _ticking_cpu(monkeypatch, wall_offset=None):
+    """`scan.time` with a thread clock that gains one second per read, and a wall clock
+    that is the real one plus `wall_offset[0]` (when given)."""
+    ticks = []
+
+    def thread_time() -> float:
+        ticks.append(None)
+        return float(len(ticks))
+
+    def monotonic() -> float:
+        return time.monotonic() + (wall_offset[0] if wall_offset else 0.0)
+
+    monkeypatch.setattr(
+        scan,
+        "time",
+        types.SimpleNamespace(thread_time=thread_time, monotonic=monotonic),
+    )
+    return ticks
+
+
+def test_a_scan_that_uses_ten_cpu_seconds_is_refused_at_about_ten(monkeypatch):
+    ticks = _ticking_cpu(monkeypatch)
+    assert scan.SCAN_CPU_SECONDS == 10.0
+    with pytest.raises(scan.ScanTimeout):
+        scan.scan(PAGE)
+    # One read to start, then one per shape: ten seconds of the thread's clock were spent
+    # at the eleventh read, and the scan stopped at the next.
+    assert 11 <= len(ticks) <= 13, len(ticks)
+    assert scanslots.in_use() == 0, "the slot was given back"
+
+
+def test_a_publish_that_uses_ten_cpu_seconds_is_a_503_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    with monkeypatch.context() as m:
+        _ticking_cpu(m)
+        busy = publish(api, auth, PAGE)
+    assert busy.status_code == 503
+    assert store.list_for_agent(db, "seat") == []
+
+
+def test_four_worst_case_pages_scanned_at_once_all_pass(monkeypatch):
+    """The slots run scans as threads that share the interpreter lock, so each one's wall
+    time is several times its CPU time. Four threads are held inside their slots until all
+    four are there, then the wall clock jumps past `SCAN_CPU_SECONDS` (as it would in
+    production, where all four took 10 s of wall each): each is still within its own CPU
+    time and the slot-hold backstop, so none is refused."""
+    count = 4
+    offset = [0.0]
+    _ticking_cpu_wall = types.SimpleNamespace(
+        thread_time=time.thread_time,
+        monotonic=lambda: time.monotonic() + offset[0],
+    )
+    monkeypatch.setattr(scan, "time", _ticking_cpu_wall)
+    inside = threading.Barrier(
+        count,
+        action=lambda: offset.__setitem__(0, 2 * scan.SCAN_CPU_SECONDS),
+        timeout=20,
+    )
+    peak = []
+    arrived = threading.local()
+    real_check = scan._check_deadline
+
+    def check(deadline):
+        if not getattr(arrived, "yes", False):
+            arrived.yes = True
+            peak.append(scanslots.in_use())
+            inside.wait()  # all four hold a slot here, or this raises
+        real_check(deadline)
+
+    monkeypatch.setattr(scan, "_check_deadline", check)
+    results: list[object] = []
+
+    def run() -> None:
+        try:
+            results.append(scan.scan(PAGE))
+        except BaseException as exc:  # noqa: BLE001 -- recorded and asserted below
+            results.append(exc)
+
+    with settings.override(scan_slots=str(count)):
+        threads = [threading.Thread(target=run) for _ in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+    assert results == [[]] * count, results
+    assert offset[0] > scan.SCAN_CPU_SECONDS, "the wall clock passed the CPU bound"
+    assert max(peak) == count, "all four ran at once, each holding a slot"
+
+
+def test_the_wall_backstop_still_ends_a_scan_that_holds_its_slot_too_long(monkeypatch):
+    offset = [0.0]
+    monkeypatch.setattr(
+        scan,
+        "time",
+        types.SimpleNamespace(
+            thread_time=time.thread_time,
+            monotonic=lambda: time.monotonic() + offset[0],
+        ),
+    )
+    real_check = scan._check_deadline
+    seen = []
+
+    def check(deadline):
+        if not seen:
+            seen.append(None)
+            offset[0] = scan.SCAN_WALL_SECONDS_PER_SLOT * SLOTS + 1
+        real_check(deadline)
+
+    monkeypatch.setattr(scan, "_check_deadline", check)
+    with pytest.raises(scan.ScanTimeout):
+        scan.scan(PAGE)
+    assert scanslots.in_use() == 0
+
+
 def test_a_scan_that_timed_out_does_not_say_the_server_is_busy(monkeypatch):
-    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+    monkeypatch.setattr(scan, "SCAN_CPU_SECONDS", -1.0)
     with pytest.raises(scan.ScanTimeout) as raised:
         scan.scan(PAGE)
     assert str(raised.value) == scanslots.TIMED_OUT
@@ -363,7 +486,7 @@ def test_a_publish_whose_secret_scan_ran_out_of_time_is_a_503_and_stores_nothing
     api, auth, db, monkeypatch
 ):
     with monkeypatch.context() as m:
-        m.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+        m.setattr(scan, "SCAN_CPU_SECONDS", -1.0)
         busy = publish(api, auth, PAGE)
     assert busy.status_code == 503
     assert busy.headers["retry-after"] == "5"
