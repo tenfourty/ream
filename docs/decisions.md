@@ -1214,3 +1214,22 @@ security's agreement and Jeremy's approval of that release.
 **Evidence:** Jeremy approved the release on 19 Nov 2026 (lettered answer (a): release once private CI
 is green and security has agreed the commit wording). The runbook's note is in
 `docs/agent/runbooks/embargoed-fix.md`, step 4.
+
+## A busy page scanner waits briefly, then says so (released 20 Nov 2026)
+
+Reading a large page (over 256 KiB) to check it, to anchor comments on it or to draw its findings
+is bounded per server process: `REAM_SCAN_SLOTS` (default 4) such scans run at once, and the rest
+wait up to 5 seconds (`src/ream/scanslots.py`). A scan that gets no slot never blocks the service
+and never passes as clean: the publish checks and the render findings say they did not run; the
+comment listings answer 200 with the pins they could not place marked unknown (`anchor_state` "",
+and `quote_state` "" unless the page's words were already read); a request that cannot be answered
+without the scan answers 503 with `Retry-After`. Shipped as an embargoed fix, built in the private
+copy and hand-pinned, then made public and handed back to the normal image path
+(`docs/agent/runbooks/embargoed-fix.md`).
+
+**Not chosen:**
+- An unbounded scan per request: one large page sent many times could hold every worker.
+- Skipping the scan silently when busy: a check that did not run would read as a clean page.
+
+**Evidence:** this office's call (reversible); security reviewed the fix before release; production
+runs the public image since 20 Nov 2026 (pod image line read by artifacts-maintainer).
