@@ -25,7 +25,8 @@ every scan through `settings.current()`). When all are taken it waits up to
   is saved) let it go up: the two apps answer 503 with `Retry-After`
   (`app._refuse_busy_scans`), and an MCP tool answers an error;
 * the secret scan (`scan.scan`, through `store._check_secrets`) is one of those: a body it
-  could not scan is never stored, the request answers 503 as above, and it is not counted
+  could not scan (no slot in time, or the scan itself ran past `scan.SCAN_WALL_SECONDS` of
+  wall clock, `scan.ScanTimeout`) is never stored, the request answers 503 as above, and it is not counted
   as a scanner failure. On an update it waits after the page's owner is checked, with that
   request's database connection open (no transaction, no lock held).
 
@@ -52,6 +53,7 @@ SMALL_PAGE = 256 * 1024
 WAIT_SECONDS = 5.0
 RETRY_AFTER_SECONDS = 5
 BUSY = "the server is busy reading other pages: try again in a few seconds"
+TIMED_OUT = "the page took too long to scan: try again shortly"
 
 
 class ScanBusy(Exception):
@@ -59,8 +61,8 @@ class ScanBusy(Exception):
 
     retry_after = RETRY_AFTER_SECONDS
 
-    def __init__(self) -> None:
-        super().__init__(BUSY)
+    def __init__(self, message: str = BUSY) -> None:
+        super().__init__(message)
 
 
 class _Mine(threading.local):

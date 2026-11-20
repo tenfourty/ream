@@ -221,3 +221,23 @@ def test_a_clean_page_says_the_scan_ran(tmp_path, capsys):
     )
     assert client.main(["--check", str(page)]) == 0
     assert "nothing shaped like a secret" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("raised", ["busy", "timeout"])
+def test_a_scan_that_could_not_finish_is_one_line_and_not_a_pass(
+    tmp_path, capsys, monkeypatch, raised
+):
+    """A refusal to scan (no slot, or past the time bound) is neither a clean page nor a
+    traceback: one line on stderr, a non-zero exit."""
+    from ream import scan, scanslots
+
+    def refuse(_body):
+        raise scan.ScanTimeout if raised == "timeout" else scanslots.ScanBusy
+
+    monkeypatch.setattr(scan, "scan", refuse)
+    assert client.main(["--check", _write(tmp_path, CLEAN)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.strip().splitlines()
+    assert len(lines) == 1 and "not checked" in lines[0]
+    assert "Traceback" not in captured.err

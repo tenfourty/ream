@@ -9,6 +9,7 @@ import contextlib
 import logging
 import threading
 import time
+import types
 
 import pytest
 from fastapi.testclient import TestClient
@@ -311,6 +312,65 @@ def test_the_secret_scan_waits_then_gives_up_on_a_large_body(full):
     assert scanslots.in_use() == SLOTS, "a refused wait takes nothing"
     small = HEAD + "<p>42 issues open</p>" + TAIL
     assert scan.scan(small) == [], "a small body is scanned though every slot is taken"
+
+
+def test_a_secret_scan_that_runs_past_its_time_bound_is_refused_not_clean(monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)  # already spent
+    with pytest.raises(scanslots.ScanBusy) as raised:
+        scan.scan(PAGE)
+    assert isinstance(raised.value, scan.ScanTimeout)
+    assert scanslots.in_use() == 0, "the slot was given back"
+    small = HEAD + "<p>42 issues open</p>" + TAIL
+    with pytest.raises(
+        scan.ScanTimeout
+    ):  # a small body has no slot, but the same bound
+        scan.scan(small)
+
+
+def test_the_time_bound_is_also_checked_inside_one_shape(monkeypatch):
+    """One shape with many matches on a body: the bound passes at the check before the
+    shape, then runs out partway through its matches, so it is the check at each match
+    that raises. Dropping `deadline` from `_shape_lines` makes this scan finish instead."""
+    shape = next(item for item in scan.SHAPES if item[0] == "password_assignment")
+    monkeypatch.setattr(scan, "SHAPES", [shape])
+    body = "<p>" + "DB_PASSWORD=hunter2fake " * 100 + "</p>"
+    assert [f.shape for f in scan._scan(body)] == ["password_assignment"]
+
+    calls = []
+
+    def clock() -> float:  # one tick per read: 1.0, 2.0, ...
+        calls.append(None)
+        return float(len(calls))
+
+    monkeypatch.setattr(scan, "time", types.SimpleNamespace(monotonic=clock))
+    with pytest.raises(scan.ScanTimeout):
+        scan._scan(body, deadline=10.5)
+    assert len(calls) == 11, (
+        "read once before the shape, then once per match, then stopped"
+    )
+
+
+def test_a_scan_that_timed_out_does_not_say_the_server_is_busy(monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+    with pytest.raises(scan.ScanTimeout) as raised:
+        scan.scan(PAGE)
+    assert str(raised.value) == scanslots.TIMED_OUT
+    assert "server" not in scanslots.TIMED_OUT
+    assert raised.value.retry_after == scanslots.RETRY_AFTER_SECONDS
+
+
+def test_a_publish_whose_secret_scan_ran_out_of_time_is_a_503_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    with monkeypatch.context() as m:
+        m.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+        busy = publish(api, auth, PAGE)
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert store.list_for_agent(db, "seat") == []
+    assert publish(api, auth, PAGE).status_code == 201, (
+        "and a retry inside the bound is scanned"
+    )
 
 
 def test_the_secret_scan_waits_for_a_slot_and_gets_it_when_one_is_given_back(

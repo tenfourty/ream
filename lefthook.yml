@@ -38,6 +38,11 @@
 # one that matches everything. Without it, a non-matching job prints
 # "(skip) no matching staged files", which is the line you are looking for.
 
+# No git-lfs hooks from lefthook (`skip_lfs`, a boolean in lefthook's schema). Left on, lefthook runs `git lfs
+# pre-push`, which would upload objects the secret scan never read: an LFS pointer's content sits in
+# .git/lfs/objects. The gate refuses a staged pointer too; this keeps the push from being the second way in.
+skip_lfs: true
+
 pre-commit:
   parallel: true
   commands:
