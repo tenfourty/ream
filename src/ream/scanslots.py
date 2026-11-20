@@ -25,7 +25,8 @@ every scan through `settings.current()`). When all are taken it waits up to
   is saved) let it go up: the two apps answer 503 with `Retry-After`
   (`app._refuse_busy_scans`), and an MCP tool answers an error;
 * the secret scan (`scan.scan`, through `store._check_secrets`) is one of those: a body it
-  could not scan is never stored, the request answers 503 as above, and it is not counted
+  could not scan (no slot in time, or the scan itself ran past `scan.SCAN_WALL_SECONDS` of
+  wall clock, `scan.ScanTimeout`) is never stored, the request answers 503 as above, and it is not counted
   as a scanner failure. On an update it waits after the page's owner is checked, with that
   request's database connection open (no transaction, no lock held).
 

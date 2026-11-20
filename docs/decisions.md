@@ -1227,6 +1227,12 @@ without the scan answers 503 with `Retry-After`. Shipped as an embargoed fix, bu
 copy and hand-pinned, then made public and handed back to the normal image path
 (`docs/agent/runbooks/embargoed-fix.md`).
 
+The secret scan also stops at a time bound (`scan.SCAN_WALL_SECONDS`, 10 s of wall clock, the same
+figure as the other readers' backstop), checked between the shapes and the matches. A scan past it
+raises `ScanTimeout`, a `ScanBusy`, so it is refused as a busy server is: 503 with `Retry-After`,
+nothing stored. A single regex search already running is not interrupted; each is linear in a page
+the size cap bounds.
+
 **Not chosen:**
 - An unbounded scan per request: one large page sent many times could hold every worker.
 - Skipping the scan silently when busy: a check that did not run would read as a clean page.

@@ -50,6 +50,7 @@ import functools
 import html
 import re
 import string
+import time
 from dataclasses import dataclass
 from importlib import resources
 
@@ -842,6 +843,7 @@ def _shape_lines(
     needs_lowered: bool,
     views: list[tuple[str, str]],
     offsets_for,
+    deadline: float | None = None,
 ) -> list[int]:
     """The distinct lines (up to `_MAX_LINES_PER_SHAPE`) where `pattern`
     matches something that isn't a placeholder, across both `(view,
@@ -864,6 +866,7 @@ def _shape_lines(
     for index, (view, lowered) in enumerate(views):
         search_text = lowered if needs_lowered else view
         for match in pattern.finditer(search_text):
+            _check_deadline(deadline)
             if _is_placeholder(name, match, view):
                 continue
             real_examined += 1
@@ -879,6 +882,24 @@ def _shape_lines(
         ):
             break
     return list(lines)
+
+
+# The most wall-clock time one secret scan may take, however large the page: the same ten
+# seconds as the other readers' backstop (`htmlbound.WALL_FACTOR` times
+# `renderfind.SCAN_SECONDS`). It is checked between the views, the shapes and the matches, so
+# one regex search already running is not cut short (each is linear in the page, which the
+# size cap bounds); a scan past it raises `ScanTimeout`.
+SCAN_WALL_SECONDS = 10.0
+
+
+class ScanTimeout(scanslots.ScanBusy):
+    """The scan ran past `SCAN_WALL_SECONDS`: the body was not fully scanned. A `ScanBusy`, so
+    every caller refuses as for a busy server (503 with `Retry-After`, nothing stored)."""
+
+
+def _check_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() > deadline:
+        raise ScanTimeout
 
 
 def scan(text: str) -> list[Finding]:
@@ -903,14 +924,16 @@ def scan(text: str) -> list[Finding]:
     A body over `scanslots.SMALL_PAGE` characters is scanned under a scan slot, as
     every other reader of a large page is: `scanslots.ScanBusy` when none comes free
     in time. It is never "no findings": a caller lets it go up, so a busy server is
-    a refusal to try again, never a clean scan.
+    a refusal to try again, never a clean scan. A scan that runs past `SCAN_WALL_SECONDS`
+    raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
     """
     with scanslots.slot(len(text)):  # ScanBusy goes up: a busy server, not this body
-        return _scan(text)
+        return _scan(text, time.monotonic() + SCAN_WALL_SECONDS)
 
 
-def _scan(text: str) -> list[Finding]:
-    """`scan` without the slot: the views, the shapes, the bounds."""
+def _scan(text: str, deadline: float | None = None) -> list[Finding]:
+    """`scan` without the slot: the views, the shapes, the bounds, and (when given) the
+    `time.monotonic()` deadline."""
     raw_view = "\n".join(text.splitlines())
     text_view = _text_view(raw_view)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
@@ -928,8 +951,11 @@ def _scan(text: str) -> list[Finding]:
 
     findings: list[Finding] = []
     for name, pattern in SHAPES:
+        _check_deadline(deadline)
         fast_pattern, needs_lowered = _fast_pattern(pattern)
-        for line in _shape_lines(name, fast_pattern, needs_lowered, views, offsets_for):
+        for line in _shape_lines(
+            name, fast_pattern, needs_lowered, views, offsets_for, deadline
+        ):
             findings.append(Finding(shape=name, line=line))
         if len(findings) >= _MAX_FINDINGS_TOTAL:
             break

@@ -313,6 +313,33 @@ def test_the_secret_scan_waits_then_gives_up_on_a_large_body(full):
     assert scan.scan(small) == [], "a small body is scanned though every slot is taken"
 
 
+def test_a_secret_scan_that_runs_past_its_time_bound_is_refused_not_clean(monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)  # already spent
+    with pytest.raises(scanslots.ScanBusy) as raised:
+        scan.scan(PAGE)
+    assert isinstance(raised.value, scan.ScanTimeout)
+    assert scanslots.in_use() == 0, "the slot was given back"
+    small = HEAD + "<p>42 issues open</p>" + TAIL
+    with pytest.raises(
+        scan.ScanTimeout
+    ):  # a small body has no slot, but the same bound
+        scan.scan(small)
+
+
+def test_a_publish_whose_secret_scan_ran_out_of_time_is_a_503_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    with monkeypatch.context() as m:
+        m.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+        busy = publish(api, auth, PAGE)
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert store.list_for_agent(db, "seat") == []
+    assert publish(api, auth, PAGE).status_code == 201, (
+        "and a retry inside the bound is scanned"
+    )
+
+
 def test_the_secret_scan_waits_for_a_slot_and_gets_it_when_one_is_given_back(
     monkeypatch,
 ):
