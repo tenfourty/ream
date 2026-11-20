@@ -9,9 +9,9 @@ against `main` at `8da2c2c`.
 **Status, 20 Nov 2026: built, with one deletion left.** Steps 1 to 9 are built and deployed
 (the ledger in section 8 says what each slice did and where it differed from this design). What is
 not done: core's own partner inbound code (`partner.py`, `partner_in.py` and the built-in `partner`
-sink and `slack` source) is still in core, standing down behind the switches of step 9e. It goes
-once production has run with the plug-in holding the bridge and the end-to-end Slack proof is in
-(9e-4, C2). Sections 3 to 7 keep the text as designed, with "as built" notes where the code
+sink and `slack` source) is still in core, standing down behind the switches of step 9e. The
+plug-in half is in production (ream-homelab #71, merged 18 Nov 2026; the plug-in holds inbound
+there), so what the deletion (9e-4, C2) waits on is the end-to-end proof of a Slack press. Sections 3 to 7 keep the text as designed, with "as built" notes where the code
 differs; where they disagree, the ledger and `docs/plugins.md` are right. Chasing dropped answers
 (section 2, 4.1) is separate work and is not built.
 
@@ -424,8 +424,8 @@ the sender and the breaker, slice 4) and `webhook.py` (the signed webhook sink);
 `beadmetrics.py` are deleted from core and live in the house plug-in repo (`ream-homelab`) as the
 rows above say (9a to 9d). The quarterdeck rows (`partner.py` and `partner_in.py`) have not been
 deleted from core: 9e-1 to 9e-4 C1 built the plug-in API they needed (API 1.2 to 1.5) and the
-switches by which the plug-in takes over the bridge and core stands down, and the deletion (9e-4
-C2) waits on production running with the plug-in holding both halves. The last row's core side
+switches by which the plug-in takes over the bridge and core stands down; the plug-in holds both
+halves in production, and the deletion (9e-4 C2) waits on the end-to-end proof of a Slack press. The last row's core side
 (the house default endpoint, `QD_OFFICE`, the seat and the house owner words) is still in core as
 the lowest default (4.2, item 6).
 
@@ -602,7 +602,9 @@ drivers; CI only (not on the management machine).
    plug-in design and is deferred). Outbox columns are the spec's plus `claimed_until`, `parked_at`,
    `last_error`, `last_error_at`. Converted call sites: `formanswer.py` and the set-aside loop in
    `store.py`. Not yet: the other fan-out sites (part 2), the per-sink circuit breaker and
-   the per-sink circuit breaker (4.4), and `change-owner` over `outbox.event_json`.
+   the per-sink circuit breaker (4.4), and `change-owner` over `outbox.event_json`. *Since done:
+   part 2 below built the other fan-out sites and the circuit breaker (7b part 1 made it shared
+   across processes). `change-owner` over `outbox.event_json` is not recorded as built.*
    **Part 2 built (`ci/slice4-emit-part2`).** All remaining fan-out sites emit through `events.emit`
    (decisions, store, comments); `partner_in.answer_here` stays on `partner.enqueue_foreign` (no
    artifact or agent to put on an `Event`). `deliver` has a protocol bound: it must return within
@@ -812,9 +814,13 @@ drivers; CI only (not on the management machine).
    the way 9d did, because the plug-in API could not express the bridge: it grew first (API 1.2 to
    1.4, 9e-1 to 9e-3), the outbound half now stands down in core behind a database switch (9e-3), and
    the inbound half has its own switch with API 1.5 (9e-4, C1). **Still in core:** `partner.py`,
-   `partner_in.py`, the built-in `partner` sink and the `slack` source's registration. The deletion
-   (C2) waits on production running with the plug-in holding the bridge and on the end-to-end Slack
-   proof. The plug-in half (P1) lives in ream-homelab, outside this repo.
+   `partner_in.py`, the built-in `partner` sink and the `slack` source's registration. The plug-in
+   half (P1) is in ream-homelab, outside this repo: PR #71 merged on 18 Nov 2026 (`2ceaea8`), and
+   production has run core `b659d10` plus P1 since about 19:35 UTC that day. `inbound-claim` was run
+   there: `inbound_owner` is `quarterdeck` and the rows moved equal core's counts. **Not done:** the
+   end-to-end proof of a Slack press (it is what the deletion, C2, waits on), and Postgres
+   coverage of the plug-in (ream-homelab's CI ran SQLite only; a follow-up test item was added in
+   ream-homelab and closed, and nothing more is claimed here).
    **9a, first half built (`ci/9a-beadpage` on ream-homelab, 10 Nov 2026; CI green, not on its main).**
    Plug-in `tracker-pages` (`ream_homelab.tracker_pages:register`) holds copies of `beadpage` and
    `beadmetrics` with their tests, and registers `ream tracker-page` and `ream tracker-metrics`
@@ -1220,7 +1226,9 @@ drivers; CI only (not on the management machine).
    refused list). **Not run here:** the full suite and Postgres (CI on the branch);
    `test_partner_inbound_standdown.py` passed serially on SQLite. **Left for C2 and P1:** the
    plug-in half (inbound module, `quarterdeck_*` tables, read side, claim and release command,
-   the owner-id check) and then core's deletion once production has run claimed.
+   the owner-id check) and then core's deletion once production has run claimed. *Since done
+   (20 Nov 2026): P1 is in production (see the step 9 summary above); C2 still waits on the
+   end-to-end Slack proof.*
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)
@@ -1231,7 +1239,8 @@ drivers; CI only (not on the management machine).
     and the guide are right: the mail backend's `send(to, subject, text)`, no `validate` on a
     sink, failure counts in `failure_counts()`
     and `sinks.status()` rather than `/metrics`), the office doc's deployment paragraph, and the
-    parts that describe steps 8 and 9, which are not built.
+    parts that describe steps 8 and 9, which are not built. *Since done: part 4 below (the extension
+    section and the parts on steps 8 and 9); the office doc's paragraph is in the runcove repo.*
     **Part 2 built (`ci/plugin-guards`, 8 Nov 2026).** Two gaps closed: `api.sink` refuses a kind
     that is in neither `events.KINDS` nor `events.BRIDGE_KINDS` (plug-ins cannot declare kinds)
     with a `PluginError` naming the plug-in, sink and kind, so start-up stops; and
@@ -1253,13 +1262,14 @@ drivers; CI only (not on the management machine).
     (option A, the lock-bump bot, `core-bare`); and summaries of steps 8 and 9 above their ledger
     lines (which are kept as the record). `docs/plugins.md`'s opening status paragraph is brought up
     to date with step 9; `AGENTS.md`'s WHAT table said nothing to change. **Still not done:** core's
-    deletion of the partner inbound code (9e-4 C2) waits on production running with the plug-in
-    claimed and the end-to-end Slack proof, and this doc is not final until then (the status
+    deletion of the partner inbound code (9e-4 C2) waits on the end-to-end proof of a Slack press
+    (production has run with the plug-in holding inbound since 18 Nov 2026), and this doc is not final until then (the status
     paragraph, 4.3 and the 9e summary change with it); the office doc's deployment paragraph lives in
     the runcove repo, not this one, and is not touched here; the house fallbacks in core
-    (4.2, item 6) and the chasing work (4.1) are not built. The 17 Nov ledger line for 9e-4 says the
-    plug-in half (P1) was still to do when written; this repo cannot see ream-homelab, so that half is
-    not described here as done.
+    (4.2, item 6) and the chasing work (4.1) are not built; Postgres coverage of the plug-in is not
+    done (ream-homelab's CI ran SQLite only; a test item was added there, nothing more is claimed).
+    The plug-in half (P1) is in production (ream-homelab #71, `2ceaea8`, 18 Nov 2026); the 17 Nov
+    ledger line for 9e-4 says it was still to do when written, and that line is kept as history.
 
 The chasing work (nudge once, `answer_dropped` after a day) follows slice 4 at the earliest, and
 only needs sinks to exist; it does not wait for the plug-in repo.

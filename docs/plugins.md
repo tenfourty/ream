@@ -16,8 +16,8 @@ second opinion, see Scanner below) and the doorbell (9d: the core's own `nudge` 
 The quarterdeck bridge (9e) did not move the same way: the API had to grow to carry it (1.2 to
 1.5, below), and core's own bridge code (`ream.partner`, `ream.partner_in`, the built-in `partner`
 sink and the registration of the `slack` answer source) is **still in the core**, standing down
-while a plug-in holds the bridge. It is deleted (9e-4, C2) once production has run with the
-plug-in holding it and the end-to-end Slack proof is in. Write against this guide for new code. The
+while a plug-in holds the bridge. The house plug-in holds it in production (ream-homelab #71,
+18 Nov 2026); core's code is deleted (9e-4, C2) once the end-to-end proof of a Slack press is in. Write against this guide for new code. The
 API is versioned (below), but only we use it: there is no promise to third parties yet.
 
 ## What a plug-in is
