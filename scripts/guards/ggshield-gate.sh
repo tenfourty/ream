@@ -797,7 +797,14 @@ open(sys.argv[2], "w").write("".join(out))
     *:nopath) could_not_scan "git listed an object of HEAD's side without its path"; return 1 ;;
     *:length) could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1 ;;
     *:form) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read (parser exited $prc: form)"; return 1 ;;
-    *) could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output ${bad:+non-}empty)"; return 1 ;;
+    *)
+      # Name the cause, not only that there was one: the parser's last output line (a traceback's last line
+      # names the error, e.g. FileNotFoundError), without control characters, at most 200 characters.
+      bad=${bad##*$'\n'}
+      bad=${bad//[^[:print:]]/}
+      could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output ${bad:+non-}empty${bad:+: ${bad:0:200}})"
+      return 1
+      ;;
   esac
   [ -s "$SCRATCH/base-ids" ] || return 0
   if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
@@ -2616,6 +2623,22 @@ exec %q "$@"
   check "a listing of HEAD's side that git cannot make is refused" "$rc" 1 "$out" "git could not list the objects HEAD's side of the change is read from"
   check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
   check "…at once, not at the time limit ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A parser that fails with an error of its own is refused as not scanned, and the refusal names that error:
+  # the listing file is removed once git has written it (Linux only: the wrapper finds the file through /proc).
+  if [ -d /proc/self/fd ]; then
+    local gonegit="$tmp/gitgone"
+    mkdir -p "$gonegit"
+    printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) %q "$@"; f=$(readlink /proc/$$/fd/1) && rm -f -- "$f"; exit 0 ;; esac
+exec %q "$@"
+' "$(command -v git)" "$(command -v git)" >"$gonegit/git"
+    chmod +x "$gonegit/git"
+    out=$(cd "$repo" && PATH="$gonegit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+    check "a listing the parser cannot open is refused" "$rc" 1 "$out" "could not be parsed (parser exited 1, its output non-empty"
+    check "…and the refusal names the parser's error" "$rc" 1 "$out" "non-empty: FileNotFoundError"
+    check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  fi
   # A gate stopped while git lists (TERM to the gate) leaves no git behind: a background child of a
   # non-interactive bash ignores SIGINT and SIGQUIT, so only the gate's EXIT trap stops it. The git records
   # its process id and never returns; the gate is stopped once it has, and that process must be gone. (TERM,
