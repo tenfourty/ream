@@ -1268,3 +1268,24 @@ credential, the backstop must drop back to a per-scan wall bound. The per-call p
 security reviewed the fix and retested it live in production; the in-shape check is held by
 `tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_CPU_SECONDS` in
 `src/ream/scan.py`.
+
+## A page's owner sees its view stats, external readers by name (20 Nov 2026)
+
+Ream records how each page is read, and its owner can see it: views over time, split into
+Jeremy's own opens, opens by the people a page was shared with by email, and agent reads. Both
+Jeremy, in the gallery, and the agent that published the page, through `/api/v1` and MCP for its
+own pages only, can read them (the every-human-action-has-an-agent-twin rule). For each external
+share the stats name the recipient's email, how many times they opened the page and when they
+last did; Ream already knows each reader, who signs in with an emailed code. Today only
+`page_read` exists: the owner's last open and version, overwritten on every open. Tracked as
+runcove-5t3oj.158.1 (backlog, behind the land-existing-work focus).
+
+**Not chosen:**
+- Stats for Jeremy only, or for the publishing agent only: either breaks the agent-twin rule or
+  hides his own pages' reading from him.
+- Anonymous counts for external readers, or naming them only on shares made with an opt-in: he
+  wants to know who read a page he shared.
+
+**Evidence:** Jeremy asked for it in #hq-artifacts on 20 Nov 2026, pages shared outside above all,
+and chose (a) on both questions there: who sees the stats, and per-recipient detail for external
+shares.
