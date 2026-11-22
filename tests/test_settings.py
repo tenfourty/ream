@@ -389,3 +389,38 @@ def test_the_renderer_url_is_unset_by_default_and_read_under_both_names(
     assert not [p for p in settings.current().problems() if "RENDERER" in p]
     monkeypatch.setenv("ARTIFACTS_RENDERER_URL", "http://renderer.svc:8091")
     assert settings.current().renderer_url == "http://renderer.svc:8091"
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ("", None),
+        ("8001", None),
+        ("1", None),
+        ("65535", None),
+        ("0", "must be a port number"),
+        ("65536", "must be a port number"),
+        ("-1", "must be a port number"),
+        ("80a", "must be a port number"),
+        ("8000", "must differ from the main port"),
+    ],
+)
+def test_the_internal_port_is_checked_at_start(value, problem):
+    with settings.override(internal_port=value) as current:
+        found = [p for p in current.problems() if "INTERNAL_PORT" in p]
+    if problem is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and problem in found[0], found
+
+
+def test_the_internal_port_is_unset_by_default_and_read_under_both_names(
+    fresh, monkeypatch
+):
+    assert settings.current().internal_port == ""
+    assert settings.current().internal_port_number() is None
+    monkeypatch.setenv("ARTIFACTS_INTERNAL_PORT", "8001")
+    assert settings.current().internal_port_number() == 8001
+    monkeypatch.setenv("REAM_INTERNAL_PORT", "8002")
+    with pytest.raises(SystemExit):
+        settings.current()

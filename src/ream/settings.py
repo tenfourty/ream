@@ -51,6 +51,10 @@ DEFAULT_OWNER_PRONOUN = "they"
 DEFAULT_GALLERY_ORIGIN = "http://localhost:8000"
 DEFAULT_SCAN_SLOTS = 4
 DEFAULT_BIND_HOST = "127.0.0.1"
+# The port the image's CMD serves the main listener on: it mirrors the Dockerfile CMD's
+# `--port` (`tests/test_internal_port.py` fails when they differ). The internal port may
+# not be this one.
+MAIN_PORT = 8000
 # The command-line tools' endpoint when `REAM_API` is unset. This is OUR house's address,
 # kept here so the many agents on several machines that run the tools with no variable set
 # keep working (core-and-plugins design, slice 2). It moves into the house plug-in's client
@@ -181,6 +185,9 @@ class Settings:
     # What the server binds to (the image sets 0.0.0.0). Only used to tell a local try-out
     # from a deployment at start-up.
     bind_host: str = DEFAULT_BIND_HOST
+    # A second listener that serves only /healthz and the partner inbound endpoint
+    # (`internal_port.py`). Unset: no second listener.
+    internal_port: str = ""
     partner_name: str = ""
     partner_events_url: str = ""
     partner_signing_key_file: str = ""
@@ -444,6 +451,20 @@ class Settings:
                 "REAM_MCP_ACCEPT_KEYS=0 needs sign-in (REAM_MCP_SIGN_IN=on): with"
                 " sign-in off, agent keys are the only credential /mcp takes"
             )
+        raw_port = self.internal_port
+        if raw_port:
+            if not (
+                raw_port.isascii()
+                and raw_port.isdigit()
+                and 1 <= int(raw_port) <= 65535
+            ):
+                found.append(
+                    f"{_ENV['internal_port']} must be a port number, 1 to 65535"
+                )
+            elif int(raw_port) == MAIN_PORT:
+                found.append(
+                    f"{_ENV['internal_port']} must differ from the main port ({MAIN_PORT})"
+                )
         for field_name in (
             "mcp_access_token_ttl_secs",
             "mcp_refresh_token_ttl_days",
@@ -559,6 +580,14 @@ class Settings:
             return int(raw)
         return DEFAULT_SCAN_SLOTS
 
+    def internal_port_number(self) -> int | None:
+        """`internal_port` as a number, or None when unset (or malformed: start-up refuses
+        that, so nothing here guesses)."""
+        raw = self.internal_port
+        if raw.isascii() and raw.isdigit() and 1 <= int(raw) <= 65535:
+            return int(raw)
+        return None
+
     def refresh_token_ttl_days(self) -> int:
         return int(self.mcp_refresh_token_ttl_days or 30)
 
@@ -610,6 +639,7 @@ _ENV = {
     "display_tz": "REAM_DISPLAY_TZ",
     "trusted_ip_header": "REAM_TRUSTED_IP_HEADER",
     "bind_host": "REAM_BIND_HOST",
+    "internal_port": "REAM_INTERNAL_PORT",
     "partner_name": "REAM_PARTNER_NAME",
     "partner_events_url": "REAM_PARTNER_EVENTS_URL",
     "partner_signing_key_file": "REAM_PARTNER_SIGNING_KEY_FILE",

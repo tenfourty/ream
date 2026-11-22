@@ -365,6 +365,10 @@ the deletion.
 | `hand_over_inbound(conn)` | returns and deletes every row of core's `partner_question`, `partner_version_seen` and `partner_event_seen`, as `InboundHandover(rows)`; insert them into your own tables before you commit, so a row is in one table set only (a row left in core would shadow your copy on the read side). No version counter is handed over: go on calling `next_version`. Refused while core holds inbound |
 | `release_inbound(conn, owner, read_rows)` | the undo, run **before** `release_bridge`: your rows go back and inbound returns to core. `read_rows(conn)` is **a function** that returns your rows in `hand_over_inbound`'s shape (and deletes them from your tables); the helper calls it only after it has locked the switch row, when every writer of yours has committed or is waiting, so no row written meanwhile is left behind. Do not read them beforehand and close over the result. It locks the switch row first and no decision row, so it cannot deadlock with an answer in flight. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot bring your rows back |
 
+With `REAM_INTERNAL_PORT` set, the internal listener serves the partner host only at `POST /partner/v1/events`
+(core's endpoint, or your route in its place while you hold inbound, through the same dispatch as on port 8000). A
+route of yours at any other path on that host is reachable on port 8000 only; keep an inbound route at that one path.
+
 From the claim's commit, core's endpoint (`POST /partner/v1/events`) answers **503 with
 `Retry-After`** (after the signature check) and records nothing; the hub retries, so the event
 reaches your route, which owns its own dedupe. His answer on a partner-home copy is "not mine" in
