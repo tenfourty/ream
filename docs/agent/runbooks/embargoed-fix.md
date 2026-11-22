@@ -69,7 +69,7 @@ fix touches none of them until release.
    without the hand-pinned rollout", `docs/decisions.md`, 19 Nov 2026). A later fix that changes
    nothing in the image skips them only with both again: security's agreement and Jeremy's answer
    for that release.
-5. **The pin is by hand.** Before pinning, if public main has moved since the `SEC BUILT` line, check its ancestry again (`sec-public-main-check.sh`) or re-run the job. No automation pins a sec image: nothing in this repo or in
+5. **The pin is by hand.** Before pinning, if public main has moved since the `SEC BUILT` line, re-run the `image` job (it checks the ancestry again; running the script by hand would need the token in a shell). No automation pins a sec image: nothing in this repo or in
    ream-homelab opens or merges a pin for it. The maintainer sends homelab's office the image
    reference (the `SEC BUILT` line) and the words "security fix", nothing about the weakness, and
    homelab pins it by hand. Production pulls it with the private owner's pull credentials, which
@@ -114,7 +114,7 @@ Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on
 | `SEC_CHECK_TOKEN` | the single token of `artifacts-sec-checker`, an **owner** of `runcove-sec` (conditions below) (Forgejo lists a repo's runners only to its owners: `reqOwner`, so a repo admin is refused 403), with the scopes `read:organization,read:repository` and no other: `sec-private-check.sh repo` proves that first, by probing, and stops if not. The runner list needs no further scope (it sits under `read:repository`) |
 | `SEC_REGISTRY_TOKEN` | package write on `runcove-sec` only, account `artifacts-sec-publisher` |
 | `SEC_HOMELAB_READ_TOKEN` | read of `runcove/ream-homelab` only |
-| `SEC_PUBLIC_READ_TOKEN` | read of `runcove/artifacts` only (the organization is limited-visibility, so public main is not readable anonymously): `sec-public-main-check.sh`; empty means the job fails |
+| `SEC_PUBLIC_READ_TOKEN` | a repository-scoped token with `read:repository`, for `runcove/artifacts` only (the organization is limited-visibility, so public main is not readable anonymously): `sec-public-main-check.sh`; empty means the job fails |
 
 `sec-private-check.sh repo` also requires artifacts-sec's collaborators to be exactly
 `artifacts-maintainer` (write), `security` (read), `artifacts-sec-checker` (owner: the forge
