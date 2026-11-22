@@ -210,7 +210,9 @@ def test_a_file_swapped_while_waiting_for_the_lock_is_used_not_rotated_again(
     monkeypatch.setattr(client, "_swap_lock", another_process_swaps_first)
     got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
     assert got == "art_swapped_elsewhere_0123456789"
-    assert _calls(log) == [], "no /me and no rotate once the file is fresh"
+    assert _calls(log) == ["GET /me"], (
+        "only the unlocked /me, no rotate, once the file is fresh"
+    )
     assert key_file.read_text().strip() == "art_swapped_elsewhere_0123456789"
     out = capsys.readouterr()
     assert "art_swapped_elsewhere_0123456789" not in out.out + out.err
@@ -234,7 +236,7 @@ def test_a_lock_that_cannot_be_taken_in_time_skips_the_swap_with_a_note(
         os.close(holder)
     assert got == "art_old_0123456789abcdefghij"
     assert 0.25 <= waited < 5
-    assert _calls(log) == []
+    assert _calls(log) == ["GET /me"]  # asked unlocked; no rotate
     assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
     err = capsys.readouterr().err
     assert "weekly key swap did not happen" in err
@@ -282,3 +284,62 @@ def test_without_fcntl_the_swap_still_works_unlocked(tmp_path, monkeypatch):
     assert _calls(log) == ["GET /me", "POST /keys/rotate"]
     assert key_file.read_text().strip() == "art_new_0123456789abcdefghij"
     assert not (tmp_path / "key.lock").exists()
+
+
+def test_a_key_that_is_not_rotating_makes_no_lockfile_and_says_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    key_dir = tmp_path / "keys"
+    key_dir.mkdir()
+    key_file = _stale_key_file(key_dir)
+    log = tmp_path / "calls"
+
+    def not_rotating(method, url, *a, **kw):
+        with open(log, "a") as handle:
+            handle.write(f"{method} {url.rsplit('/api/v1', 1)[-1]}\n")
+        return {"rotating": False}
+
+    monkeypatch.setattr(client, "_request", not_rotating)
+    monkeypatch.setattr(client, "_api_base", lambda: "http://ream.test/api/v1")
+    key_dir.chmod(0o500)  # read-only: a lockfile could not be made here
+    try:
+        got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
+    finally:
+        key_dir.chmod(0o700)
+    assert got == "art_old_0123456789abcdefghij"
+    assert _calls(log) == ["GET /me"]
+    assert not (key_dir / "key.lock").exists()
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
+
+
+def test_a_planted_symlink_lockfile_is_refused_and_its_target_untouched(
+    tmp_path, monkeypatch, capsys
+):
+    key_file = _stale_key_file(tmp_path)
+    log = tmp_path / "calls"
+    _fake_service(monkeypatch, log)
+    target = tmp_path / "precious"
+    target.write_text("keep me")
+    (tmp_path / "key.lock").symlink_to(target)
+    got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
+    assert got == "art_old_0123456789abcdefghij"
+    assert "POST /keys/rotate" not in _calls(log)
+    assert target.read_text() == "keep me"
+    assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
+    assert "weekly key swap did not happen" in capsys.readouterr().err
+
+
+def test_a_lockfile_owned_by_another_user_skips_the_swap(tmp_path, monkeypatch, capsys):
+    key_file = _stale_key_file(tmp_path)
+    log = tmp_path / "calls"
+    _fake_service(monkeypatch, log)
+    (tmp_path / "key.lock").write_text("")
+    monkeypatch.setattr(
+        os, "geteuid", lambda: os.stat(tmp_path / "key.lock").st_uid + 1
+    )
+    got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
+    assert got == "art_old_0123456789abcdefghij"
+    assert "POST /keys/rotate" not in _calls(log)
+    assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
+    assert "weekly key swap did not happen" in capsys.readouterr().err

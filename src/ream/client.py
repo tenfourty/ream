@@ -361,7 +361,7 @@ _SWAP_LOCK_POLL_SECONDS = 0.05
 @contextlib.contextmanager
 def _swap_lock(path: Path):
     """An exclusive `flock` on `<path>.lock` (0600, made beside the key file, never holding a
-    key), held for the body. Waits up to `_SWAP_LOCK_WAIT_SECONDS` in non-blocking tries, then
+    key; refused unless it is a regular file of this user), held for the body. Waits up to `_SWAP_LOCK_WAIT_SECONDS` in non-blocking tries, then
     raises `TimeoutError` (an `OSError`), as it does for a lockfile that cannot be opened. The
     lock goes with the descriptor, so a crashed holder never leaves one behind.
 
@@ -373,11 +373,24 @@ def _swap_lock(path: Path):
     except ImportError:
         yield
         return
+    # Read-only is enough for flock. NOFOLLOW refuses a planted symlink (the lock must not open
+    # some other file of the user's), and the fstat refuses anything that is not a regular file
+    # of ours, so a lockfile another user made in a shared directory is not trusted either.
     fd = os.open(
         path.with_name(path.name + ".lock"),
-        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
+        os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
         0o600,
     )
+    try:
+        info = os.fstat(fd)
+        geteuid = getattr(os, "geteuid", None)
+        if not stat.S_ISREG(info.st_mode) or (
+            geteuid is not None and info.st_uid != geteuid()
+        ):
+            raise OSError("the key swap lockfile is not a regular file of this user")
+    except BaseException:
+        os.close(fd)
+        raise
     try:
         deadline = time.monotonic() + _SWAP_LOCK_WAIT_SECONDS
         while True:
@@ -403,9 +416,12 @@ def maybe_rotate(args, key: str) -> str:
     key. A failure to rotate never fails the command the agent actually ran --
     the old key still works until the new one is first used.
 
-    The whole swap runs under `_swap_lock`. Once it holds the lock it looks at the file's age
-    again: a file now younger than the check threshold was swapped by another process while this
-    one waited, so the key in the file is returned and no second rotate is asked for."""
+    Only a rotating key takes the lock: `GET /me` comes first and unlocked, and a key that is
+    not rotating returns at once, so no lockfile is made for it (a read-only key directory
+    stays quiet). The rotate and the file write then run under `_swap_lock`. Once it holds the
+    lock it looks at the file's age again: a file now younger than the check threshold was
+    swapped by another process while this one waited, so the key in the file is returned and no
+    second rotate is asked for."""
     path = _key_file_in_use(args)
     if path is None:
         return key
@@ -416,6 +432,10 @@ def maybe_rotate(args, key: str) -> str:
     if age < _ROTATE_CHECK_AFTER_SECONDS:
         return key
     try:
+        base = _api_base()
+        me = _request("GET", f"{base}/me", key, None)
+        if not me.get("rotating"):
+            return key
         with _swap_lock(path):
             try:
                 age = time.time() - path.stat().st_mtime
@@ -426,10 +446,6 @@ def maybe_rotate(args, key: str) -> str:
                     return _read_key(path)
                 except (UsageError, OSError):
                     return key
-            base = _api_base()
-            me = _request("GET", f"{base}/me", key, None)
-            if not me.get("rotating"):
-                return key
             fresh = _request("POST", f"{base}/keys/rotate", key, {})
             new_key = fresh.get("key")
             if not isinstance(new_key, str) or not new_key.startswith("art_"):
