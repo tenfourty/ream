@@ -58,6 +58,7 @@ from ream import (
     keys,
     mcp_apps,
     onboarding,
+    pageviews,
     partdiff,
     sections,
     settings,
@@ -216,6 +217,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
     ),
     "url": _address(store.url_for),
     "page_url": _address(store.page_url_for),
+    **dict.fromkeys(("day", "since"), matches(r"\d{4}-\d\d-\d\d")),
     "comments": one_of("on", "off"),
     **dict.fromkeys(
         ("revision", "section_revision", "page_revision", "key_id"), _HEX16
@@ -243,6 +245,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "set_aside_since",
             "reopened_at",
             "needed_by",
+            "last_opened_at",
         ),
         _TIME,
     ),
@@ -454,6 +457,7 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         )
     except api.PastTheEnd as exc:
         raise ToolError(str(exc)) from None
+    pageviews.record_agent_read(call.db, page_id, call.agent, call.reach.writes())
     out = {
         **jsonable_encoder(stored.__dict__),
         **part,
@@ -547,6 +551,50 @@ def _screenshot_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         written_by=call.agent,
         images=(("image/png", shot.png),),
     )
+
+
+# --- page_stats -----------------------------------------------------------------------
+
+
+@tool(
+    "page_stats",
+    title="How often your page was read",
+    description=(
+        "How often one of YOUR OWN pages was read, and by whom: views per UTC day (days, "
+        "1 to 365, default 30) by the owner, external readers and other agents; all-time "
+        "totals; each named email recipient's opens and last open; and since, the day "
+        "of the first view counted (before it, nothing was kept). Your own reads are "
+        "not counted. Not for another agent's page (no such page) or a page's text: use "
+        "read_page."
+    ),
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    # Numbers, days and times are Ream's own; a recipient's email address was typed by
+    # the agent that shared the page, so it is fenced as that agent's text.
+    fences=Fences(ream=_REAM),
+    input_schema=_schema(
+        {
+            "page_id": PAGE_ID,
+            "days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365,
+                "description": "How many UTC days, today last (default 30).",
+            },
+        },
+        ("page_id",),
+    ),
+)
+def _page_stats(call: Call, arguments: dict[str, Any]) -> ToolOutput:
+    page_id = _str(arguments, "page_id", required=True)
+    days = _int(arguments, "days", 30, 1, 365)
+    # The route's own scope: the page must be this caller's to change, else "no such page".
+    try:
+        store.get_owned(call.db, call.agent, page_id)
+    except store.NotFound:
+        raise ToolError(NO_SUCH_PAGE) from None
+    return ToolOutput(pageviews.report(call.db, page_id, days), written_by=call.agent)
 
 
 # --- get_template ---------------------------------------------------------------------

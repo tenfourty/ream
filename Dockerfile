@@ -1,9 +1,21 @@
-# Two stages: `build` resolves dependencies and builds this project with uv, on
+# One Dockerfile, four stages. `build` resolves dependencies and builds this project with uv, on
 # top of a full Debian base (uv needs a working compiler toolchain for psycopg's
 # C extension isn't needed here -- psycopg[binary] ships wheels -- but the slim
-# base is enough either way). `runtime` copies only the finished virtualenv onto
-# a fresh copy of the same base image: uv and pip never exist in the image a
-# pod actually runs.
+# base is enough either way). The image a pod runs never contains uv or pip: it
+# gets only the finished virtualenv, copied onto a fresh copy of the same base.
+#
+#   base  the slim Debian image, tini, the environment, the user, ENTRYPOINT and CMD.
+#   app   base + the finished virtualenv and wheels. No browser and no fonts beyond
+#         what base needs: renders run in a renderer (REAM_RENDERER_URL; runbook
+#         docs/agent/runbooks/renderer-pod.md), never in this image.
+#   full  base + the headless browser and fonts + the same virtualenv and wheels. The
+#         LAST stage, so a plain `docker build .` (and `--target full`) is the image
+#         that renders in its own process, as a fresh install expects.
+#
+# CI builds `--target app` and publishes it as the core image (`artifacts-core`, which the deployed
+# service is built on, so it carries no browser), and builds `--target full` and publishes it as
+# `artifacts` and as the renderer image (`artifacts-renderer`). The two digests differ. CI then runs
+# the pushed core image and asserts it finds no browser (decisions.md, 22 Nov 2026).
 
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS build
 
@@ -57,7 +69,59 @@ RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%
  && [ "$(ls /app/dist/ream-*-py3-none-any.whl | wc -l)" = 1 ] \
  && ls /app/dist
 
-FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS base
+
+# tini is PID 1 in every image (see ENTRYPOINT below): it reaps the processes the service or a
+# renderer starts, so they never pile up as zombies.
+#
+# IMAGE_REFRESH is the ISO week, passed by CI to every target: a new week changes the RUN line
+# below, which rebuilds this layer, so tini's security updates arrive within a week (the
+# base image's own packages move only with its pinned digest) and a cached layer never goes stale for longer (the same rule as CHROMIUM_REFRESH in
+# `full`, which covers the browser layer). Unset, a plain build reuses its cached layer.
+ARG IMAGE_REFRESH=unset
+RUN echo "base layer for ${IMAGE_REFRESH}" && apt-get update \
+ && apt-get install -y --no-install-recommends tini \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER 10001:10001
+EXPOSE 8000
+
+# The CMD below binds every interface. Tell the service so: a container that leaves
+# REAM_GALLERY_ORIGIN unset then refuses to start instead of serving links to
+# localhost (settings.validate_for_serve). Set REAM_BIND_HOST=127.0.0.1 for a local
+# try-out that publishes the port on loopback only.
+ENV REAM_BIND_HOST=0.0.0.0
+
+# uvicorn reads FORWARDED_ALLOW_IPS from the environment itself when it is not
+# passed on the command line (uvicorn 0.53.0, config.py: `self.forwarded_allow_ips
+# = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")`) -- the deployment's
+# ConfigMap sets it, so it does not need to appear on this command line too.
+# --no-access-log is not a style choice: every content-page URL carries its
+# read capability token in the path, and an access log would put it on disk.
+# --timeout-graceful-shutdown is a BACKSTOP, not the mechanism: held /events
+# requests end themselves the moment SIGTERM arrives (ream.serve), so
+# uvicorn should find nothing to wait for. If something ever does hold on, 15
+# seconds is well inside Kubernetes' 30-second default grace period, so the
+# process exits on its own terms rather than being killed mid-answer.
+# tini is PID 1 so orphaned processes (a browser's helpers, where an image has a browser) are
+# reaped instead of piling up as zombies (homelab-o88p). -g forwards signals to the whole
+# group, so SIGTERM still reaches uvicorn for its graceful shutdown.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+CMD ["uvicorn", "ream.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]
+
+# The service image with no browser: the finished virtualenv and the agents' tool wheels, and
+# nothing else. Rendering needs a renderer (REAM_RENDERER_URL).
+FROM base AS app
+COPY --from=build /app/.venv /app/.venv
+COPY --from=build /app/dist /app/dist
+
+# The image that renders in its own process, and the renderer's image. Must stay the LAST stage:
+# a plain `docker build .` builds it.
+FROM base AS full
 
 # The headless browser that draws a page's thumbnail for the gallery wall
 # (homelab-ij8.22). By default the browser runs inside the service; a deployment
@@ -88,39 +152,13 @@ FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf22
 # previous build's cache image. CHROMIUM_REFRESH is the ISO week: a new week
 # changes this line, which rebuilds the layer, so chromium's security updates
 # arrive within a week and a cached layer never goes stale for longer.
+# base ends as the unprivileged user; the install needs root, and the user is set again after it.
 ARG CHROMIUM_REFRESH=unset
+USER root
 RUN echo "chromium layer for ${CHROMIUM_REFRESH}" && apt-get update \
- && apt-get install -y --no-install-recommends chromium fonts-dejavu-core tini \
+ && apt-get install -y --no-install-recommends chromium fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
+USER 10001:10001
 
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/dist /app/dist
-ENV PATH=/app/.venv/bin:$PATH \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
-USER 10001:10001
-EXPOSE 8000
-
-# The CMD below binds every interface. Tell the service so: a container that leaves
-# REAM_GALLERY_ORIGIN unset then refuses to start instead of serving links to
-# localhost (settings.validate_for_serve). Set REAM_BIND_HOST=127.0.0.1 for a local
-# try-out that publishes the port on loopback only.
-ENV REAM_BIND_HOST=0.0.0.0
-
-# uvicorn reads FORWARDED_ALLOW_IPS from the environment itself when it is not
-# passed on the command line (uvicorn 0.53.0, config.py: `self.forwarded_allow_ips
-# = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")`) -- the deployment's
-# ConfigMap sets it, so it does not need to appear on this command line too.
-# --no-access-log is not a style choice: every content-page URL carries its
-# read capability token in the path, and an access log would put it on disk.
-# --timeout-graceful-shutdown is a BACKSTOP, not the mechanism: held /events
-# requests end themselves the moment SIGTERM arrives (ream.serve), so
-# uvicorn should find nothing to wait for. If something ever does hold on, 15
-# seconds is well inside Kubernetes' 30-second default grace period, so the
-# process exits on its own terms rather than being killed mid-answer.
-# tini is PID 1 so orphaned chromium helpers are reaped instead of piling up as
-# zombies (homelab-o88p). -g forwards signals to the whole group, so SIGTERM
-# still reaches uvicorn for its graceful shutdown.
-ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
-CMD ["uvicorn", "ream.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]

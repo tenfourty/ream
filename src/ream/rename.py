@@ -14,6 +14,9 @@ Deliberately NOT rewritten: SESSION labels (`*.session`,
 time, not a reference to an agent, and nothing resolves them to one.
 `connect_request.suggested_name` is what a machine proposed before Jeremy
 named it, and `agent_key.replaces` is a key id.
+
+An agent's reads of other agents' pages (`page_viewer`, kind 'agent', viewer the name; see
+`pageviews`) move too, merged into `new`'s row where it has one for the same page.
 """
 
 from __future__ import annotations
@@ -207,6 +210,7 @@ def rename_agent(
         counts["seat_read.agent"] = _merge_reads(conn, old, new)
         counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
         counts["agent_pickup.agent"] = _merge_pickup(conn, old, new)
+        counts["page_viewer.viewer"] = _merge_viewers(conn, old, new)
 
         moved = sum(counts.values())
         already = conn.execute(
@@ -262,6 +266,28 @@ def _merge_grants(conn, old: str, new: str) -> int:
         "update seat_grant set agent = %s where agent = %s", (new, old)
     ).rowcount
     return dropped + moved
+
+
+def _merge_viewers(conn, old: str, new: str) -> int:
+    """An agent's reads of other agents' pages (`page_viewer`, kind 'agent', viewer the
+    name): they move to `new`. Where `new` already has a row for the same page the counts
+    add and the later `last_at` and `counted_at` win, so a rename never shortens a
+    dedupe window. `page_view_day` holds no names and needs nothing."""
+    conn.execute(
+        "insert into page_viewer (artifact_id, kind, viewer, views, last_at, counted_at)"
+        " select artifact_id, kind, %s, views, last_at, counted_at from page_viewer"
+        " where kind = 'agent' and viewer = %s"
+        " on conflict (artifact_id, kind, viewer) do update"
+        " set views = page_viewer.views + excluded.views,"
+        " last_at = case when excluded.last_at > page_viewer.last_at"
+        "   then excluded.last_at else page_viewer.last_at end,"
+        " counted_at = case when excluded.counted_at > page_viewer.counted_at"
+        "   then excluded.counted_at else page_viewer.counted_at end",
+        (new, old),
+    )
+    return conn.execute(
+        "delete from page_viewer where kind = 'agent' and viewer = %s", (old,)
+    ).rowcount
 
 
 def _merge_pickup(conn, old: str, new: str) -> int:

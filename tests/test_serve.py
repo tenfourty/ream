@@ -8,11 +8,14 @@ gallery host -- exactly the router behaviour `test_router.py` already proves,
 just reached through the real entrypoint this time.
 """
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
+from ream import settings
 from ream.db import Database
-from ream.serve import app_from_env
+from ream.serve import _warn_renderer_off, app_from_env
 
 
 def test_missing_database_url_exits_without_leaking_anything(monkeypatch):
@@ -62,3 +65,34 @@ def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(
         ).fetchall()
     tables = {row[0] for row in rows}
     assert {"agent_key", "artifact", "version"} <= tables
+
+
+def _renderer_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.name == "ream.serve" and r.levelno == logging.WARNING
+    ]
+
+
+def test_no_renderer_and_no_browser_warns_once_that_rendering_is_off(tmp_path, caplog):
+    with (
+        settings.override(renderer_url="", browser=str(tmp_path / "no-browser")),
+        caplog.at_level(logging.WARNING, logger="ream.serve"),
+    ):
+        _warn_renderer_off()
+    (record,) = _renderer_warnings(caplog)
+    assert "thumbnails" in record.getMessage() and "OFF" in record.getMessage()
+
+
+def test_a_named_renderer_or_a_browser_keeps_the_start_silent(tmp_path, caplog):
+    browser = tmp_path / "browser"
+    browser.write_text("")
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        with settings.override(
+            renderer_url="http://renderer:8091", browser=str(tmp_path / "none")
+        ):
+            _warn_renderer_off()
+        with settings.override(renderer_url="", browser=str(browser)):
+            _warn_renderer_off()
+    assert _renderer_warnings(caplog) == []

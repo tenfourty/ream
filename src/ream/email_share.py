@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ream import pageviews
 from ream.db import Database
+
+_log = logging.getLogger("ream.email_share")
 
 CODE_MINUTES = 10
 CODE_TRIES = 5
@@ -194,9 +198,20 @@ def device_ok(db: Database, share: Share, cookie: str | None) -> bool:
             " and s.revoked_at is null",
             (_hash(cookie), share.id, now),
         ).fetchone()
-        if row:
+    return row is not None
+
+
+def record_open(db: Database, share: Share) -> None:
+    """The recipient was served the page: stamp `last_opened_at` and count the view (kind
+    external, viewer the share id; `pageviews`). Called by the route only after the body
+    was found, never from `device_ok`, which a confirm page also passes through. Best-effort:
+    a failure here never fails the read."""
+    try:
+        with db.connect() as conn:
             conn.execute(
                 "update email_share set last_opened_at = %s where id = %s",
-                (now, share.id),
+                (datetime.now(UTC), share.id),
             )
-    return row is not None
+    except Exception as exc:  # noqa: BLE001 - the page is already read; the type is logged
+        _log.warning("share open not stamped (%s)", type(exc).__name__)
+    pageviews.record(db, share.artifact_id, pageviews.EXTERNAL, share.id)
