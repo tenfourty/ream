@@ -321,7 +321,7 @@ jobs:
       # the `core-lock` job reads it.
       core_ref: ${{ steps.core.outputs.ref }}
       # The renderer image's ref (the same digest as `ref`, under its own tag; empty if its
-      # step failed, or if it reused an existing image). Nothing reads it yet.
+      # step failed, or if it reused an existing image); the `core-lock` job passes it on.
       renderer_ref: ${{ steps.renderer.outputs.ref }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -597,4 +597,7 @@ jobs:
           # Through the environment, not interpolated into the script: the script
           # validates it as the core image's <repo>:<sha12>@sha256:<digest> before using it.
           CORE_REF: ${{ needs.image.outputs.core_ref }}
-        run: .forgejo/scripts/core-lock-pr.sh "$GITHUB_SHA" "$CORE_REF"
+          # The renderer image's ref (empty if its step failed: then only core.lock moves);
+          # validated by the script as the renderer's <repo>:<sha12>@sha256:<digest>.
+          RENDERER_REF: ${{ needs.image.outputs.renderer_ref }}
+        run: .forgejo/scripts/core-lock-pr.sh "$GITHUB_SHA" "$CORE_REF" "$RENDERER_REF"

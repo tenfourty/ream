@@ -196,7 +196,7 @@ unattributed until its next real change -- an identical republish mints no versi
 
 **A push to `main` asks to deploy.** CI tests, builds an image and pushes it as
 `runcove/artifacts-core:<sha12>`, then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
-`CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image, set to merge when that
+`CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image (and `renderer.lock` to `runcove/artifacts-renderer:<sha12>` when that image was published), set to merge when that
 repo's checks succeed. ream-homelab builds the deployed image and opens the homelab pin PR, which the homelab maintainer
 merges. Core's own `pin` job (`pin-pr.sh`) is off. How it flows, and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.
 

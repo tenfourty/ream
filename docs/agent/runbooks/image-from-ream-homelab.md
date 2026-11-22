@@ -18,11 +18,21 @@ here:
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that
    branch on ream-homelab itself and sits at the commit it pushed. It stands down if `core.lock`
-   already names this commit or a newer one.
+   already names this commit or a newer one. When the `image` job also published
+   `runcove/artifacts-renderer:<sha12>` (`PUBLISHED renderer image=...`), the same commit writes
+   `renderer.lock` (one line, the renderer's `<repo>:<sha12>@sha256:<digest>`, created if absent), so one
+   PR moves both. If the renderer step failed or reused a tag, only `core.lock` moves and the
+   renderer pin stays where it was until the next run that publishes one. The stand-down rules read
+   `core.lock` only; an existing `renderer.lock` that is not exactly one renderer ref is refused, not
+   overwritten.
 3. ream-homelab's CI runs the combined suite; green, the PR merges by itself. Red, it stays open
    for this office.
 4. ream-homelab's pin job builds the deployed image and opens the homelab pin PR; the homelab
-   maintainer merges it, and that deploys.
+   maintainer merges it, and that deploys. When ream-homelab has a `renderer.lock`, the same pin PR
+   also moves the renderer pod's image (`renderer.yaml`, both containers) to it, and the pin job
+   prints a second line, `PUBLISHED renderer image=... digest=...`. The app's `PUBLISHED image=...`
+   line is unchanged. With no `renderer.lock`, or while `renderer.yaml` still holds the placeholder
+   image, the pin PR changes the app's line only, so the two repos can land in either order.
 
 Needs the secret `CORE_LOCK_TOKEN` on `runcove/artifacts` (write access to ream-homelab, nothing
 else; never in a file or on a command line). Without it `core-lock` fails with "CORE_LOCK_TOKEN is
