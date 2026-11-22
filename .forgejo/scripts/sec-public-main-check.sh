@@ -19,14 +19,17 @@ set -euo pipefail
 
 PUBLIC_URL_DEFAULT="https://git.tenfourty.site/runcove/artifacts.git"
 
-# git, with the read token as a header when there is one; the token is never an argument.
+# gitr <seconds> <git args>: git bounded by a timeout (a timeout is a failure), with the read token
+# as a header when there is one; the token is never an argument.
 gitr() {
+  local lim="$1"
+  shift
   if [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ]; then
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
+    timeout "$lim" env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
       GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'sec:%s' "$SEC_PUBLIC_READ_TOKEN" | base64 -w0)" \
       GIT_TERMINAL_PROMPT=0 git "$@"
   else
-    GIT_TERMINAL_PROMPT=0 git "$@"
+    timeout "$lim" env GIT_TERMINAL_PROMPT=0 git "$@"
   fi
 }
 
@@ -40,13 +43,13 @@ check() {
   [[ "$built" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: no commit to check" >&2; return 1; }
   [ "$(git rev-parse --is-shallow-repository)" = "false" ] \
     || { echo "sec-public-main-check: the checkout is shallow, so ancestry cannot be judged" >&2; return 1; }
-  listed=$(gitr ls-remote "$url" refs/heads/main </dev/null) \
+  listed=$(gitr 60 ls-remote "$url" refs/heads/main </dev/null) \
     || { echo "sec-public-main-check: could not read public main" >&2; return 1; }
   [ "$(printf '%s\n' "$listed" | grep -c .)" = "1" ] \
     || { echo "sec-public-main-check: public main did not list exactly once" >&2; return 1; }
   pub=${listed%%[[:space:]]*}
   [[ "$pub" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: public main is not a commit id" >&2; return 1; }
-  gitr fetch --quiet --no-tags "$url" refs/heads/main </dev/null \
+  gitr 300 fetch --quiet --no-tags "$url" refs/heads/main </dev/null \
     || { echo "sec-public-main-check: could not fetch public main" >&2; return 1; }
   fetched=$(git rev-parse --verify "FETCH_HEAD^{commit}")
   [ "$fetched" = "$pub" ] \
@@ -64,6 +67,7 @@ selftest() {
   local d fails=0
   d=$(mktemp -d)
   trap 'rm -rf "$d"' RETURN
+  unset SEC_PUBLIC_READ_TOKEN
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
   g() { git -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
   g init -q -b main "$d/pub"
@@ -89,7 +93,11 @@ selftest() {
   expect fail "core behind public main" "$d/behind" "file://$d/pub"
   expect fail "shallow checkout" "$d/shallow" "file://$d/pub"
   expect fail "public url unreadable" "$d/ahead" "file://$d/missing"
-  expect fail "https url with no token" "$d/ahead" "https://git.tenfourty.site/runcove/artifacts.git"
+  local msg rc=0
+  msg=$(cd "$d/ahead" && check "https://git.tenfourty.site/runcove/artifacts.git" "$(git rev-parse HEAD)" 2>&1) || rc=$?
+  if [ "$rc" != 0 ] && [[ "$msg" == *"SEC_PUBLIC_READ_TOKEN is not set"* ]]; then
+    echo "ok   https url with no token is refused for the token, before any network"
+  else echo "FAIL https url with no token (exit $rc): $msg"; fails=$((fails + 1)); fi
   expect fail "public url has no main" "$d/ahead" "file://$d/nomain"
   [ "$fails" = 0 ] || { echo "selftest: $fails failed" >&2; return 1; }
   echo "selftest: ok"
