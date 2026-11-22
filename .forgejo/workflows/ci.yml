@@ -427,7 +427,8 @@ jobs:
       # differs from `artifacts:<sha12>`'s and from the renderer's, and the step fails if it is
       # the same. It shares the `build` stage with the full image (cached in this job's daemon),
       # so both carry the same wheels. A failure here fails nothing by itself (`core_ref` stays
-      # empty, so `core-lock` does not run), and the last step then fails the job. It logs in
+      # empty, so `core-lock` does not run); the last step then fails the job, even when the push
+      # succeeded and only the digest read-back failed (a fresh run with no core ref fails there). It logs in
       # again with the same token. A re-run reuses an existing core tag, as above.
       - name: push core image
         id: core
@@ -524,7 +525,7 @@ jobs:
       # proof. Both images also run tini. The core image is run by the ref the push step output
       # (`<repo>:<sha12>@sha256:<digest>`), pulled first so what runs is what the registry holds;
       # on a re-run (nothing pushed by this run) it is the tag's current image, and a tag that is
-      # not there fails the step. It runs AFTER the tags are pushed, so a failure here does not
+      # not there fails the step. It has no `continue-on-error` and no `if:` (tests pin both). It runs AFTER the tags are pushed, so a failure here does not
       # stop an image from being published, but it fails the job, and `core-lock` (which needs this
       # job to succeed) is skipped for that commit. A re-run does not recover it: the re-run finds
       # the pushed tag and reuses it, so `core_ref` is empty and `core-lock` stays off even when
@@ -533,9 +534,17 @@ jobs:
         env:
           REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
           CORE_REF: ${{ steps.core.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
         run: |
           set -eu
           [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          # A run that built the images must have published a core ref. Without one (the push or its
+          # digest read-back failed) `core-lock` is skipped, and the tag fallback below could find
+          # an image that was pushed anyway and let the job go green: fail here instead.
+          if [ -z "$CORE_REF" ] && [ "$BUILD_REUSED" = 0 ]; then
+            echo "the core image step published no ref in a run that built the images" >&2
+            exit 1
+          fi
           sha12="${GITHUB_SHA:0:12}"
           full="git.tenfourty.site/runcove/artifacts:${sha12}"
           core="${CORE_REF:-git.tenfourty.site/runcove/artifacts-core:${sha12}}"
@@ -549,9 +558,12 @@ jobs:
           available = rendercore.available()
           print(f"{sys.argv[1]}: available={available} found={found}")
           if sys.argv[1] == "core":
-              assert available is False and found == [], "the core image carries a browser"
+              ok, msg = available is False and found == [], "the core image carries a browser"
           else:
-              assert available is True and found, "the full image carries no browser"
+              ok, msg = available is True and bool(found), "the full image carries no browser"
+          if not ok:
+              print("FAIL: " + msg, file=sys.stderr)
+              sys.exit(1)
           '
           docker run --rm --entrypoint /app/.venv/bin/python "$core" -c "$check" core
           docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full

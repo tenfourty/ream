@@ -451,9 +451,12 @@ jobs:
           available = rendercore.available()
           print(f"{sys.argv[1]}: available={available} found={found}")
           if sys.argv[1] == "core":
-              assert available is False and found == [], "the core image carries a browser"
+              ok, msg = available is False and found == [], "the core image carries a browser"
           else:
-              assert available is True and found, "the full image carries no browser"
+              ok, msg = available is True and bool(found), "the full image carries no browser"
+          if not ok:
+              print("FAIL: " + msg, file=sys.stderr)
+              sys.exit(1)
           '
           docker run --rm --entrypoint /app/.venv/bin/python "$CORE_REF" -c "$check" core
           docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full

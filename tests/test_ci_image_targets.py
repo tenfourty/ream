@@ -115,3 +115,26 @@ def test_sec_proves_no_browser_before_it_builds_the_deployed_image():
     assert names.index("core image has no browser") < names.index(
         "build and push the deployed image"
     )
+
+
+def test_the_ci_check_step_cannot_be_skipped_or_ignored():
+    steps = _image_steps()
+    step = steps["core image has no browser"]
+    assert "continue-on-error" not in step
+    assert not re.search(r"^\s*if:", step, re.MULTILINE)
+    names = list(steps)
+    assert names.index("core image has no browser") > names.index("push core image")
+    # the fallback for a re-run names the core repository, not another image
+    assert "git.tenfourty.site/runcove/artifacts-core:${sha12}" in step
+    # a fresh run with no core ref fails here, even if the push itself went through
+    assert '[ -z "$CORE_REF" ] && [ "$BUILD_REUSED" = 0 ]' in step
+
+
+def test_the_browser_probe_exits_nonzero_explicitly_instead_of_asserting():
+    # `python -O` drops asserts; the probe must fail with sys.exit(1) and a message
+    for step in (
+        _image_steps()["core image has no browser"],
+        _sec_image_steps()["core image has no browser"],
+    ):
+        assert "assert " not in step
+        assert "sys.exit(1)" in step
