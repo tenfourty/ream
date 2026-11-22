@@ -46,7 +46,11 @@ fix touches none of them until release.
    `.github/workflows` too (the GitHub mirror's `publish.yml`): every job there is gated to
    `github.repository == 'tenfourty/ream'`, so a forge setting or version that reads that folder still
    dispatches nothing in artifacts-sec.
-4. **Images.** On artifacts-sec `main` only: `runcove-sec/artifacts-core:<sha12>`, built
+4. **Images.** On artifacts-sec `main` only, and only when public `main` of `runcove/artifacts` is an
+   ancestor of the commit built (`.forgejo/scripts/sec-public-main-check.sh`, read anonymously, run first and
+   again before the line; it fails the job when public main cannot be read, so merge public main into the
+   private copy first, or the run is red and prints no pin line: such an image would roll production back):
+   `runcove-sec/artifacts-core:<sha12>`, built
    `--target app` (the Dockerfile's browser-free target, as in the public pipeline), then the
    deployed image `runcove-sec/artifacts:<sha12>-<plugins sha12>` from ream-homelab's Dockerfile
    at its `main` on that core, so the deployed service has no browser either. Straight after its push each is proved to exist (an authenticated
