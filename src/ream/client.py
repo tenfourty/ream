@@ -11,7 +11,6 @@ every error path below carries a status code and the server's own JSON
 
 import argparse
 import contextlib
-import fcntl
 import http.client
 import ipaddress
 import json
@@ -364,7 +363,16 @@ def _swap_lock(path: Path):
     """An exclusive `flock` on `<path>.lock` (0600, made beside the key file, never holding a
     key), held for the body. Waits up to `_SWAP_LOCK_WAIT_SECONDS` in non-blocking tries, then
     raises `TimeoutError` (an `OSError`), as it does for a lockfile that cannot be opened. The
-    lock goes with the descriptor, so a crashed holder never leaves one behind."""
+    lock goes with the descriptor, so a crashed holder never leaves one behind.
+
+    `fcntl` is imported here, not at the top, because Ream ships on PyPI and the client must
+    import on every platform. Where it is missing (Windows) the swap runs without the lock, as
+    it did before the lock existed."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
     fd = os.open(
         path.with_name(path.name + ".lock"),
         os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,

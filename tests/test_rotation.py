@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import multiprocessing
 import os
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -266,3 +267,18 @@ def test_two_processes_swapping_at_once_rotate_exactly_once(tmp_path, monkeypatc
     assert _calls(log).count("POST /keys/rotate") == 1
     assert got == ["art_new_0123456789abcdefghij", "art_new_0123456789abcdefghij"]
     assert key_file.read_text().strip() == "art_new_0123456789abcdefghij"
+
+
+def test_without_fcntl_the_swap_still_works_unlocked(tmp_path, monkeypatch):
+    key_file = _stale_key_file(tmp_path)
+    log = tmp_path / "calls"
+    _fake_service(monkeypatch, log)
+    monkeypatch.setitem(
+        sys.modules, "fcntl", None
+    )  # `import fcntl` now raises ImportError
+    assert client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij") == (
+        "art_new_0123456789abcdefghij"
+    )
+    assert _calls(log) == ["GET /me", "POST /keys/rotate"]
+    assert key_file.read_text().strip() == "art_new_0123456789abcdefghij"
+    assert not (tmp_path / "key.lock").exists()
