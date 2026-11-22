@@ -1357,12 +1357,12 @@ the hand-pinned rollout, once security agrees to skip that step).
 
 `REAM_INTERNAL_PORT` (unset: nothing changes) opens a second listener whose own app answers
 `GET /healthz` and the partner inbound endpoint on its host, and a plain 404 for everything else
-whatever the Host header says. Port 8000 behaves as before. The deployment's network policy can then
-admit only the ingress to 8000 and send probes and the partner to the internal port. Recommended
-number for the deployment: 8001.
+whatever the Host header says. Port 8000 behaves as before. The deployment's network policy can send
+probes and the partner to the internal port. Recommended number for the deployment: 8001.
 
 **Not chosen:**
-- A port check inside the shared router: one missed branch away from serving the gallery there.
+- A port check inside the shared router: a separate app with an allow-list of two paths keeps the
+  internal listener's surface small and easy to read.
 - Changing the image's CMD to a two-socket entrypoint: the second server runs inside the existing
   process instead, so the old CMD keeps working and the main listener's flags are untouched.
 

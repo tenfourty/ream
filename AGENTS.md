@@ -118,8 +118,8 @@ differ from the gallery host and `REAM_API_HOST`. Runbook: `docs/agent/runbooks/
 `REAM_INTERNAL_PORT` (also `ARTIFACTS_INTERNAL_PORT`; unset: no second listener, nothing changes) opens a second listener
 on `REAM_BIND_HOST` that serves only `GET /healthz` and the partner inbound endpoint (on the partner host, as on the main
 port); everything else there, whatever the Host header, is a plain 404. It is its own ASGI app that holds no gallery, API,
-content or MCP app (`src/ream/internal_port.py`), so a network policy can keep in-cluster callers other than the ingress
-off the main port. A whole number from 1 to 65535, not 8000 (the image's port); a port that cannot be bound stops start-up.
+content or MCP app (`src/ream/internal_port.py`), so the health check and partner events get their own listener, which
+serves nothing else. A whole number from 1 to 65535, not 8000 (the image's port); a port that cannot be bound stops start-up.
 The image's CMD is unchanged. Tests: `tests/test_internal_port.py`.
 `REAM_PLUGINS` picks which installed `ream.plugins` (or old `artifacts.plugins`) entry points load at server start (unset: all;
 `none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
