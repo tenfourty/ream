@@ -3082,6 +3082,125 @@ def screenshot_run() -> None:
     sys.exit(screenshot_main())
 
 
+# --- ream stats (runcove-5t3oj.158.1, slice 3) ------------------------------------------
+
+
+def build_stats_parser() -> argparse.ArgumentParser:
+    parser = _Parser(
+        prog=prog_name("ream stats"),
+        description=(
+            "How often one of YOUR OWN pages was read, and by whom (GET "
+            "/api/v1/pages/ID/stats): views per day by the owner, external readers and "
+            "other agents, all-time totals, and each named email recipient's opens. Your "
+            "own reads are not counted. Counting began on the day the service says: "
+            "views before it were not kept."
+        ),
+    )
+    parser.add_argument("page_id", metavar="PAGE-ID")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        metavar="N",
+        choices=range(1, 366),
+        help="how many UTC days, today last (1 to 365, default 30)",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the service's answer as JSON"
+    )
+    parser.add_argument(
+        "--key-file",
+        help=f"the file holding the agent key (default {_DEFAULT_KEY_FILE}, "
+        "or $REAM_KEY_FILE)",
+    )
+    parser.add_argument(
+        "--key-fd",
+        type=int,
+        metavar="N",
+        help="read the key from an already-open descriptor (or set $REAM_KEY_FD)",
+    )
+    parser.add_argument("--session", help="the session label (default $REAM_SESSION)")
+    return parser
+
+
+def _stats_text(found: dict, days: int) -> str:
+    """The answer as lines for a person: counts only, and every string from the service
+    (an email an agent typed) passed through `_printable`."""
+    since = found.get("since")
+    lines = [f"page {_printable(found.get('artifact_id'))}"]
+    if not since:
+        lines.append("no views counted yet")
+    else:
+        lines.append(
+            f"first view counted on {_printable(since)} (views before it were not kept)"
+        )
+    totals = found.get("totals") or {}
+    lines.append(
+        "all time: "
+        + "  ".join(
+            f"{k} {int(totals.get(k) or 0)}" for k in ("owner", "external", "agent")
+        )
+    )
+    shown = [d for d in found.get("days") or [] if any(d.get(k) for k in _STAT_KINDS)]
+    lines.append(f"last {days} days:" + ("" if shown else " no views"))
+    for d in shown:
+        lines.append(
+            f"  {_printable(d.get('day'))}  "
+            + "  ".join(f"{k} {int(d.get(k) or 0)}" for k in _STAT_KINDS)
+        )
+    for share in found.get("shares") or []:
+        opens = int(share.get("opens") or 0)
+        last = share.get("last_opened_at")
+        lines.append(
+            f"shared with {_printable(share.get('email'))}"
+            + (" (withdrawn)" if share.get("withdrawn") else "")
+            + f": {opens} open{'' if opens == 1 else 's'}"
+            + (f", last {_printable(last)}" if last else "")
+        )
+    return "\n".join(lines)
+
+
+_STAT_KINDS = ("owner", "external", "agent")
+
+
+def stats_main(argv: list[str] | None = None) -> int:
+    args = build_stats_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    use_session(session_label(args.session))
+    try:
+        key = _resolve_key(args)
+        key = maybe_rotate(args, key)
+        found = _request(
+            "GET",
+            f"{_api_base()}/pages/{quote(args.page_id, safe='')}/stats?days={args.days}",
+            key,
+            None,
+        )
+        print(
+            json.dumps(found, ensure_ascii=False)
+            if args.json
+            else _stats_text(found, args.days)
+        )
+        return 0
+    except HTTPFailure as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    except UsageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- last resort: `str(exc)` can carry
+        # the key. Only the exception's class name is ever safe to print.
+        print(f"error: {type(exc).__name__}", file=sys.stderr)
+        return 1
+
+
+def stats_run() -> None:
+    """`ream stats PAGE-ID [--days N] [--json]`."""
+    plugin_cli.load_or_exit()
+    news.announce()
+    sys.exit(stats_main())
+
+
 def changes_run() -> None:
     """`ream changes ID [--from N] [--to M]`: the publish tool's --changes, with its other flags."""
     rest = sys.argv[1:]

@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-22b",
+        "You can now see how often your own page is read: `ream stats PAGE-ID [--days N] [--json]`, the MCP tool `page_stats`, and `GET /api/v1/pages/ID/stats` (also under /artifacts/). It gives views per UTC day (30 days unless you ask for up to 365) by the owner, by external readers and by other agents; all-time totals; each named email recipient's opens and last open; and `since`, the day of the first view counted on this service. Counting began then and nothing before it was kept, so a zero before `since` means unknown. A reload or a polling client counts once per 30 minutes (5 for an anonymous link), and your own reads of your own page are not counted. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 10; `ream --version` shows your level.",
+    ),
+    (
         "2026-11-22a",
         "The weekly key swap now takes a lock (an empty `<key file>.lock` beside the key file), so two processes sharing one key file, such as several Claude Code sessions starting `ream mcp-headers` together, can no longer swap at once and leave the file holding a key the service has just revoked. A process that finds the file already swapped uses its key; one that cannot get the lock within 10 seconds skips the swap and keeps the old key. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 9; `ream --version` shows your level.",
     ),
