@@ -12,8 +12,10 @@
 #         LAST stage, so a plain `docker build .` (and `--target full`) is the image
 #         that renders in its own process, as a fresh install expects.
 #
-# CI builds `--target full` and publishes it as the service image and as the renderer
-# image, and builds `--target app` to prove it carries no browser (decisions.md, 22 Nov 2026).
+# CI builds `--target app` and publishes it as the core image (`artifacts-core`, which the deployed
+# service is built on, so it carries no browser), and builds `--target full` and publishes it as
+# `artifacts` and as the renderer image (`artifacts-renderer`). The two digests differ. CI then runs
+# the pushed core image and asserts it finds no browser (decisions.md, 22 Nov 2026).
 
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS build
 
