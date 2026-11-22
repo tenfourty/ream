@@ -5,30 +5,48 @@
 # image that would have rolled production back 40 commits (22 Nov 2026). Runbook:
 # docs/agent/runbooks/embargoed-fix.md, step 4.
 #
-#   sec-public-main-check.sh [<public-url>]   run in the checkout, with the full history (not shallow);
+#   sec-public-main-check.sh [<url>]          needs SEC_PUBLIC_READ_TOKEN in the environment; run in the checkout, with the full history (not shallow);
 #                                             the commit built is $GITHUB_SHA
 #   sec-public-main-check.sh --selftest       offline, against local repositories
 #
-# Public main is read anonymously (the repository is public; no credential is used or needed).
-# Anything it cannot establish -- the address unreadable, no `main`, a second answer, a shallow
+# Public main is read with SEC_PUBLIC_READ_TOKEN (read of runcove/artifacts only): the organization
+# is limited-visibility, so an anonymous read is refused. The token rides in git's environment as an
+# extra header, never on a command line, and is required for an https address (a file:// address,
+# used by the selftest, needs none). Anything it cannot establish -- the address unreadable, no `main`, a second answer, a shallow
 # checkout, a fetch that fails or lands on another commit than the one listed -- is a FAILURE, never
 # a skip: "could not tell" stops the build, and the SEC BUILT line is never printed.
 set -euo pipefail
 
 PUBLIC_URL_DEFAULT="https://git.tenfourty.site/runcove/artifacts.git"
 
+# git, with the read token as a header when there is one; the token is never an argument.
+gitr() {
+  if [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ]; then
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
+      GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'sec:%s' "$SEC_PUBLIC_READ_TOKEN" | base64 -w0)" \
+      GIT_TERMINAL_PROMPT=0 git "$@"
+  else
+    GIT_TERMINAL_PROMPT=0 git "$@"
+  fi
+}
+
 check() {
   local url="$1" built="$2" listed pub fetched
+  case "$url" in
+    file://*) ;;
+    *) [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ] \
+         || { echo "sec-public-main-check: SEC_PUBLIC_READ_TOKEN is not set on this repo, so public main cannot be read" >&2; return 1; } ;;
+  esac
   [[ "$built" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: no commit to check" >&2; return 1; }
   [ "$(git rev-parse --is-shallow-repository)" = "false" ] \
     || { echo "sec-public-main-check: the checkout is shallow, so ancestry cannot be judged" >&2; return 1; }
-  listed=$(GIT_TERMINAL_PROMPT=0 timeout 60 git ls-remote "$url" refs/heads/main </dev/null) \
+  listed=$(gitr ls-remote "$url" refs/heads/main </dev/null) \
     || { echo "sec-public-main-check: could not read public main" >&2; return 1; }
   [ "$(printf '%s\n' "$listed" | grep -c .)" = "1" ] \
     || { echo "sec-public-main-check: public main did not list exactly once" >&2; return 1; }
   pub=${listed%%[[:space:]]*}
   [[ "$pub" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: public main is not a commit id" >&2; return 1; }
-  GIT_TERMINAL_PROMPT=0 timeout 300 git fetch --quiet --no-tags "$url" refs/heads/main </dev/null \
+  gitr fetch --quiet --no-tags "$url" refs/heads/main </dev/null \
     || { echo "sec-public-main-check: could not fetch public main" >&2; return 1; }
   fetched=$(git rev-parse --verify "FETCH_HEAD^{commit}")
   [ "$fetched" = "$pub" ] \
@@ -71,6 +89,7 @@ selftest() {
   expect fail "core behind public main" "$d/behind" "file://$d/pub"
   expect fail "shallow checkout" "$d/shallow" "file://$d/pub"
   expect fail "public url unreadable" "$d/ahead" "file://$d/missing"
+  expect fail "https url with no token" "$d/ahead" "https://git.tenfourty.site/runcove/artifacts.git"
   expect fail "public url has no main" "$d/ahead" "file://$d/nomain"
   [ "$fails" = 0 ] || { echo "selftest: $fails failed" >&2; return 1; }
   echo "selftest: ok"

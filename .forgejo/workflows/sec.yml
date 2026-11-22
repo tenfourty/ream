@@ -145,6 +145,9 @@ jobs:
       - name: sec-private-check selftest
         run: .forgejo/scripts/sec-private-check.sh --selftest
 
+      - name: sec-public-main-check selftest
+        run: .forgejo/scripts/sec-public-main-check.sh --selftest
+
       - name: tests
         env:
           # The browser tests run in `test-sqlite`. Name no browser here (an explicit
@@ -373,6 +376,8 @@ jobs:
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
 
       - name: prove public main is in this commit
+        env:
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
         run: .forgejo/scripts/sec-public-main-check.sh
 
       - name: docker cli
@@ -518,6 +523,7 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
           SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
           DEPLOYED_REF: ${{ steps.deployed.outputs.ref }}
         run: |
           set -euo pipefail

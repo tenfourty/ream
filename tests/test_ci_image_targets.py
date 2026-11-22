@@ -152,5 +152,15 @@ def test_sec_proves_public_main_is_in_the_commit_before_it_builds_and_again_befo
     assert "SEC BUILT image=" in last
     assert last.index("sec-public-main-check.sh") < last.index("SEC BUILT image=")
     assert sum("SEC BUILT image=" in s for s in steps.values()) == 1
-    # the ancestry needs the whole history
-    assert "fetch-depth: 0" in SEC.read_text().split("\n  image:\n", 1)[1]
+    # the ancestry needs the whole history, and the check can be neither skipped nor allowed to fail
+    image = SEC.read_text().split("\n  image:\n", 1)[1]
+    checkout = image.split("\n      - ")[1]  # the first step, which has no name
+    code = "\n".join(
+        ln for ln in checkout.splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert code.startswith("uses: actions/checkout@") and re.search(
+        r"^\s+fetch-depth: 0\b", code, re.MULTILINE
+    )
+    for text in (steps[check], last):
+        assert "SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}" in text
+        assert "continue-on-error" not in text and "\n        if:" not in text
