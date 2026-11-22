@@ -55,9 +55,11 @@ route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
    Dockerfile's `full` target, the one with the browser. Since 22 Nov 2026 (step 3 of the browser-free
    service image) the service's own image, `runcove/artifacts-core:<sha12>`, is the `app` target and has
    no browser, so **the two images differ by digest and the renderer must never be the app image**: a
-   renderer pod on it has no browser and cannot render. The deployment's renderer pod guard must refuse
-   a renderer image equal to the app image (homelab's `ream-renderer-pod-guard.sh`; that switch-over
-   ships with step 3, on homelab's side; until then the two digests were the same). Give the start line as the container's
+   renderer pod on it has no browser and cannot render. CI refuses a core digest equal to the
+   renderer's (the full image's), and ream-homelab's pin (`pin-pr.sh --check-renderer-lock`) is to refuse a
+   `renderer.lock` digest equal to `core.lock`'s (added in ream-homelab, separately from this repo's change).
+   Homelab's `ream-renderer-pod-guard.sh` checks only that the renderer's image is
+   `artifacts-renderer:<12 hex>@sha256:`; it compares no digests. Give the start line as the container's
    `args:`, and set no `command:`:
 
    ```yaml
@@ -115,8 +117,12 @@ the same container, and is ended with every render.
 Unset `REAM_RENDERER_URL` on the service and restart it: renders run in the service's own process again.
 That works only if the service runs a `full` image (one with the browser), not an `app` image: with
 neither a renderer nor a browser the service starts, logs one WARNING that thumbnails, render checks and
-screenshots are off, and does not draw them. The deployed service is built on `artifacts-core`, an `app`
-image, so on the homelab going back also means moving the service onto a `full` image
-(`runcove/artifacts:<sha12>`, or `artifacts-renderer`'s digest) first; a deployment that does that has
-chosen to run the browser in the service's process again. Put the service on a `full` image first, then
-unset the variable. The renderer can then be removed.
+screenshots are off, and does not draw them. A fresh install on a plain `docker build .` (the `full`
+image) is not affected.
+
+**On the homelab, do not go back this way.** The deployed service is `artifacts-core` (an `app` image, no
+browser) plus ream-homelab's plug-ins layer, so unsetting the variable there leaves it with no renderer and
+no browser. Going back to a browser in the service would need a core lock on a full-target core, and CI no
+longer builds one (the core is the `app` target). Until one exists, keep the renderer pod. Never pin a plain
+`runcove/artifacts:<sha12>` or `artifacts-renderer` image as the service: either would deploy a core without
+ream-homelab's plug-ins.

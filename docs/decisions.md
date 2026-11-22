@@ -1309,9 +1309,20 @@ Debian's chromium and fonts, then the same copies). `full` is the last stage, so
 and `--target full` still give the image that renders in its own process. CI publishes `full` under the
 existing tags and under a new `runcove/artifacts-renderer:<sha12>` (the same digest), and builds `app`
 only to run it and assert it finds no browser (with the full image as the positive control). Nothing
-deployed changes in this step. The aim: once the renderer pod has its own pin, the service can run the
+deployed changed in that first step. The aim: once the renderer pod has its own pin, the service can run the
 `app` image and rendering stays in the renderer. A start with neither a renderer named nor a browser
 found logs one warning that thumbnails, render checks and screenshots are off.
+
+**Step 3 (22 Nov 2026): the core is the app target.** `runcove/artifacts-core:<sha12>`, the image
+ream-homelab builds the deployed service on, is now built `--target app` and has no browser, so rendering in
+the service's own process cannot be turned back on by configuration. `artifacts:<sha12>` and
+`artifacts-renderer:<sha12>` stay the `full` build, and the core's digest differs from theirs: CI refuses
+a core digest equal to the full image's, and ream-homelab's pin is to refuse a `renderer.lock` digest equal
+to `core.lock`'s. The `image` job's last step, `core image has no browser`, pulls the pushed core and
+asserts it finds no browser, with the full image as the positive control; it has no `continue-on-error`,
+and a fresh run that published no core ref fails the job. The embargoed pipeline (`sec.yml`) builds its
+private core the same way and builds no renderer. Going back to a browser in the deployed service would
+need a core lock on a full-target core, which CI no longer builds; until one exists the renderer pod stays.
 
 **Not chosen:**
 - Two Dockerfiles: the browser-free one drifts from the other, and CI would need a proof that they match.
@@ -1319,5 +1330,6 @@ found logs one warning that thumbnails, render checks and screenshots are off.
   thumbnails and render checks, which is the default a fresh install expects.
 
 **Evidence:** `tests/test_dockerfile_targets.py` (the stage chain of `app` names no browser; `full`
-exists, is last and installs chromium; both carry tini) and the `app image has no browser` step of the
-`image` job in `.forgejo/workflows/ci.yml`, which runs both images.
+exists, is last and installs chromium; both carry tini) and the `core image has no browser` step of the
+`image` job in `.forgejo/workflows/ci.yml` (and the same step in `sec.yml`), which runs the pushed core
+image and the full image; `tests/test_ci_image_targets.py` pins which target each image is built from.

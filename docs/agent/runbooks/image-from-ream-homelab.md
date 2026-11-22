@@ -41,11 +41,15 @@ here:
    order only while `renderer.yaml` has the placeholder: in the same change that replaces it, the
    homelab repo must remove the kustomize `replacements` that copy the app image onto the renderer
    pod and teach its pin lander that the artifacts target may change `renderer.yaml`
-   (homelab bead homelab-q9dof). That has landed. **Homelab's renderer pod guard
-   (`ream-renderer-pod-guard.sh`) must now refuse a renderer image whose digest equals the app image's**
-   (until this change the same digest was expected); that guard switch-over ships with this change, on
-   homelab's side. The renderer's tag still follows the app's (`renderer.lock` tag equals `core.lock`'s),
-   but the two files hold different digests.
+   (homelab bead homelab-q9dof). That has landed. **The two digests are
+   now checked in two places.** Here, the core step of the `image` job refuses a core digest equal to the
+   full image's, which is the renderer's. In ream-homelab, the pin (`pin-pr.sh --check-renderer-lock`) is to
+   refuse a `renderer.lock` whose digest equals `core.lock`'s (that check is added in ream-homelab,
+   separately from this repo's change, and agreed with homelab). Homelab's `ream-renderer-pod-guard.sh`
+   checks only the renderer image's repository name (`artifacts-renderer:<12 hex>@sha256:`); it does not
+   compare digests, and the deployed app image (core plus ream-homelab's plug-ins layer) can never equal
+   the renderer's anyway. The renderer's tag still follows the app's (`renderer.lock` tag equals
+   `core.lock`'s), but the two files hold different digests.
 
 Needs the secret `CORE_LOCK_TOKEN` on `runcove/artifacts` (write access to ream-homelab, nothing
 else; never in a file or on a command line). Without it `core-lock` fails with "CORE_LOCK_TOKEN is
@@ -54,8 +58,9 @@ the `test` job and for a rollback.
 
 ## Roll back
 
-Core's `pin` job, if switched back on, pins `runcove/artifacts:<sha12>`, which is the `full` image (it
-has the browser; the deployed service is normally built on `artifacts-core`, which has none). Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
+Core's `pin` job, if switched back on, pins `runcove/artifacts:<sha12>`, a plain `full` image with the
+browser and without ream-homelab's plug-ins layer, so it is not a rollback for the deployed service
+(which is built on `artifacts-core`, no browser, plus the plug-ins). Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
 back to its main-only condition, keeping the `github.repository == 'runcove/artifacts'` conjunct (the workflow-runner guard
 refuses a job without it), and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
 again, which is the homelab maintainer's change; without it the pin PRs are refused. Close any open
