@@ -1344,3 +1344,34 @@ alter table connect_request add column if not exists origin_key text;
 -- `agent_key.revoked_by` (10 Nov 2026, runcove-5t3oj.110): who revoked it ('admin', the owner's
 -- id, or the key's own agent for a rotation); with `revoked_reason`, said back in the 401.
 alter table agent_key add column if not exists revoked_by text;
+
+-- HOW OFTEN A PAGE IS READ, AND BY WHOM (22 Nov 2026, runcove-5t3oj.158.1;
+-- docs/agent/specs/2026-11-22-view-stats-design.md). Counts, never a row per load.
+-- `page_view_day`: views of a page per UTC day (`day` is text YYYY-MM-DD) and kind of reader
+-- (`kind`: owner, external or agent; checked in `pageviews`, not here). `page_viewer`: one row
+-- per (page, kind, viewer) with the total, the last open and the last COUNTED view (the dedupe
+-- window runs from it). `viewer` is '' for the owner (never his id) and for an anonymous link,
+-- an agent's name for an agent, an `email_share.id` for a named recipient. Written only by
+-- `pageviews.record`. SQLite does the same as its schema step 35.
+create table if not exists page_view_day (
+    artifact_id text    not null references artifact(id) on delete cascade,
+    day         text    not null,
+    kind        text    not null,
+    views       integer not null default 0,
+    primary key (artifact_id, day, kind)
+);
+
+create table if not exists page_viewer (
+    artifact_id text        not null references artifact(id) on delete cascade,
+    kind        text        not null,
+    viewer      text        not null,
+    views       integer     not null default 0,
+    last_at     timestamptz not null,
+    counted_at  timestamptz not null,
+    primary key (artifact_id, kind, viewer)
+);
+
+-- The day counting began, written once (`on conflict do nothing`): there is no backfill.
+insert into service_meta (key, value)
+    values ('views_since', to_char(now() at time zone 'utc', 'YYYY-MM-DD'))
+    on conflict do nothing;

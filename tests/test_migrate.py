@@ -402,6 +402,16 @@ def _seed(database: Database) -> None:
         ),
         ("page_read", "artifact_id, read_version, read_at", ["a1", 2, T1]),
         (
+            "page_view_day",
+            "artifact_id, day, kind, views",
+            ["a1", "2026-10-15", "owner", 3],
+        ),
+        (
+            "page_viewer",
+            "artifact_id, kind, viewer, views, last_at, counted_at",
+            ["a1", "agent", "beta é", 2, T1, T0],
+        ),
+        (
             "email_share",
             (
                 "id, artifact_id, email, token_sha256, created_at, revoked_at,"
