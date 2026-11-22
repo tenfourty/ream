@@ -373,12 +373,13 @@ def _swap_lock(path: Path):
     except ImportError:
         yield
         return
-    # Read-only is enough for flock. NOFOLLOW refuses a planted symlink (the lock must not open
+    # Read-only is enough for flock. NONBLOCK so opening a planted FIFO returns at once (it would
+    # block for ever, past the wait bound) and the fstat below can refuse it. NOFOLLOW refuses a planted symlink (the lock must not open
     # some other file of the user's), and the fstat refuses anything that is not a regular file
     # of ours, so a lockfile another user made in a shared directory is not trusted either.
     fd = os.open(
         path.with_name(path.name + ".lock"),
-        os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+        os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
         0o600,
     )
     try:

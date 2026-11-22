@@ -343,3 +343,19 @@ def test_a_lockfile_owned_by_another_user_skips_the_swap(tmp_path, monkeypatch, 
     assert "POST /keys/rotate" not in _calls(log)
     assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
     assert "weekly key swap did not happen" in capsys.readouterr().err
+
+
+def test_a_fifo_planted_as_the_lockfile_is_refused_promptly(
+    tmp_path, monkeypatch, capsys
+):
+    key_file = _stale_key_file(tmp_path)
+    log = tmp_path / "calls"
+    _fake_service(monkeypatch, log)
+    os.mkfifo(tmp_path / "key.lock")
+    started = time.monotonic()
+    got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
+    assert time.monotonic() - started < 5, "opening a FIFO must not block"
+    assert got == "art_old_0123456789abcdefghij"
+    assert "POST /keys/rotate" not in _calls(log)
+    assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
+    assert "weekly key swap did not happen" in capsys.readouterr().err
