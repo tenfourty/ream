@@ -62,6 +62,7 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `list_pages` | `scope` (`mine`, `all`), `folder`, `limit` (1-1000, 100) | `pages`, `truncated`, your `folders` | `GET /pages`, `/folders`, `/folders/{slug}/pages` |
 | `read_page` | `page_id`; at most one of `version`, `section` (an element id), `history`, `changes_since` (a version number); for the live page or a version, `offset` (characters, 0) and `limit` (1 to 8 MiB of characters, 50,000) | the body (fenced; at most `limit` characters from `offset`), `offset`, `size` (the whole page, in characters), `next_offset` (where the next part starts; null at the end), `partial` (true unless the body is the whole page: a part is never a whole-page body for `update_page`, though `revision` is the whole page's), `warnings` and the render check's `render_verdict` and `render_findings`; one version (paged the same way); one element's `html` (fenced); `versions`; or which `parts` changed since that version (`id`, `label`, `change`) | `GET /pages/{id}/body`, `/versions/{n}` (both take `?offset=&limit=`; without `limit` the whole body), `/sections/{el}`, `/versions`, `/changes?from=N` |
 | `screenshot_page` | `page_id`; `version`; at most one of `element` (an id) and `section` (a heading's words); `width` (`1280` or `390`); `theme` (`light` or `dark`) | `artifact_id`, `version`, `width`, `height`, `truncated`, `page_height`, then Ream's label and the PNG as an image block | `GET /pages/{id}/screenshot` |
+| `page_stats` | `page_id`; `days` (1 to 365, 30) | `artifact_id`, `since`, `days` (one `{day, owner, external, agent}` per UTC day, today last), `totals`, `shares` (`email` fenced, `opens`, `last_opened_at`, `created_at`, `withdrawn`) | `GET /pages/{id}/stats` |
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |
@@ -112,6 +113,15 @@ agent's, where the answers to its questions go).
 Several sessions sharing one key share the wait's place: whichever wait or `whats_new` answers
 an event moves the cursor past it for all of them. Sessions that share a key should keep
 `ream wait`, which filters by office (`--team`) and keeps its own place.
+
+`page_stats` says how often one of the calling agent's OWN pages was read, through the same
+scope as `GET /pages/{id}/stats` (another agent's page is `no such page`, word for word like a page
+that is not there; a connected app reads the pages of its person's app agents). `since` is the day
+of the first view counted on the service, not of the page: views before it were not kept, so a page
+older than `since` has no history before it. Counts are per UTC day and kind (`owner`, `external`,
+`agent`) with 30 minutes (5 for the anonymous link) as one reader's window, so a reload or a
+polling client is one view. The calling agent's own reads are not counted. `totals` is all time,
+not the window.
 
 `screenshot_page` takes a picture of one of the calling agent's OWN pages, on demand and kept
 nowhere, through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): another
