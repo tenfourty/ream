@@ -1256,3 +1256,19 @@ clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 security reviewed the fix and retested it live in production; the in-shape check is held by
 `tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_WALL_SECONDS` in
 `src/ream/scan.py`.
+
+## An optional internal port serves only the health check and the partner endpoint (22 Nov 2026)
+
+`REAM_INTERNAL_PORT` (unset: nothing changes) opens a second listener whose own app answers
+`GET /healthz` and the partner inbound endpoint on its host, and a plain 404 for everything else
+whatever the Host header says. Port 8000 behaves as before. The deployment's network policy can then
+admit only the ingress to 8000 and send probes and the partner to the internal port. Recommended
+number for the deployment: 8001.
+
+**Not chosen:**
+- A port check inside the shared router: one missed branch away from serving the gallery there.
+- Changing the image's CMD to a two-socket entrypoint: the second server runs inside the existing
+  process instead, so the old CMD keeps working and the main listener's flags are untouched.
+
+**Evidence:** `tests/test_internal_port.py` (404 for the gallery, API, content and MCP requests on the
+internal app; the real socket answers only `/healthz`); the main app is covered by the existing suite.
