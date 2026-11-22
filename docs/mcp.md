@@ -225,7 +225,7 @@ file already swapped when it gets the lock uses that key and asks for no second 
 sent. Limit: a process that read the key just before another's swap keeps that old key in memory, which
 stays valid until the new key's first use, so it can get one 401 if the swapper uses the new key first.
 Where the platform has no `fcntl` (Windows) the swap runs without the lock.
-The swap needs tools at level 8 or later (`ream --version` shows the level). Rotating keys are refused 14 days after they were made unless swapped, so
+The swap needs tools at level 8 or later, and its lock level 9 or later (`ream --version` shows the level). Rotating keys are refused 14 days after they were made unless swapped, so
 this is what keeps an office that uses Ream only through MCP connected:
 
 ```bash

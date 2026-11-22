@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-22a",
+        "The weekly key swap now takes a lock (an empty `<key file>.lock` beside the key file), so two processes sharing one key file, such as several Claude Code sessions starting `ream mcp-headers` together, can no longer swap at once and leave the file holding a key the service has just revoked. A process that finds the file already swapped uses its key; one that cannot get the lock within 10 seconds skips the swap and keeps the old key. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 9; `ream --version` shows your level.",
+    ),
+    (
         "2026-11-20a",
         "`ream mcp-headers` (the command behind a Claude Code `headersHelper`) now swaps a weekly key that is due, so a session that reaches Ream only through MCP keeps its access instead of being refused once its key is 14 days old. It never updates the tool itself, even when the service says it is out of date. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 8; `ream --version` shows your level.",
     ),
