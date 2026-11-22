@@ -64,9 +64,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
@@ -160,9 +161,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
@@ -251,9 +253,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
