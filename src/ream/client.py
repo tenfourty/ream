@@ -10,6 +10,8 @@ every error path below carries a status code and the server's own JSON
 """
 
 import argparse
+import contextlib
+import fcntl
 import http.client
 import ipaddress
 import json
@@ -349,12 +351,53 @@ def save_key_file(path: Path, key: str) -> None:
         raise
 
 
+# The swap is serialised across processes on a sibling lockfile, `<key file>.lock`: the service
+# withdraws an unused pending successor when the same key asks to rotate again, so two processes
+# swapping at once (Claude Code runs `ream mcp-headers` on every MCP connect) could leave the file
+# holding a key the service has just revoked. The lockfile holds nothing; it is only locked.
+_SWAP_LOCK_WAIT_SECONDS = 10.0
+_SWAP_LOCK_POLL_SECONDS = 0.05
+
+
+@contextlib.contextmanager
+def _swap_lock(path: Path):
+    """An exclusive `flock` on `<path>.lock` (0600, made beside the key file, never holding a
+    key), held for the body. Waits up to `_SWAP_LOCK_WAIT_SECONDS` in non-blocking tries, then
+    raises `TimeoutError` (an `OSError`), as it does for a lockfile that cannot be opened. The
+    lock goes with the descriptor, so a crashed holder never leaves one behind."""
+    fd = os.open(
+        path.with_name(path.name + ".lock"),
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        deadline = time.monotonic() + _SWAP_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "another process held the key swap lock for over "
+                        f"{_SWAP_LOCK_WAIT_SECONDS:g} s"
+                    ) from None
+                time.sleep(_SWAP_LOCK_POLL_SECONDS)
+        yield
+    finally:
+        os.close(fd)
+
+
 def maybe_rotate(args, key: str) -> str:
     """Replace this machine's key if it is due (homelab-ij8.34, Jeremy's (3a)):
     keys from artifacts-connect swap themselves weekly, and one never swapped is
     refused after two weeks. Returns the key to use from here on. Never prints a
     key. A failure to rotate never fails the command the agent actually ran --
-    the old key still works until the new one is first used."""
+    the old key still works until the new one is first used.
+
+    The whole swap runs under `_swap_lock`. Once it holds the lock it looks at the file's age
+    again: a file now younger than the check threshold was swapped by another process while this
+    one waited, so the key in the file is returned and no second rotate is asked for."""
     path = _key_file_in_use(args)
     if path is None:
         return key
@@ -365,15 +408,25 @@ def maybe_rotate(args, key: str) -> str:
     if age < _ROTATE_CHECK_AFTER_SECONDS:
         return key
     try:
-        base = _api_base()
-        me = _request("GET", f"{base}/me", key, None)
-        if not me.get("rotating"):
-            return key
-        fresh = _request("POST", f"{base}/keys/rotate", key, {})
-        new_key = fresh.get("key")
-        if not isinstance(new_key, str) or not new_key.startswith("art_"):
-            return key
-        save_key_file(path, new_key)
+        with _swap_lock(path):
+            try:
+                age = time.time() - path.stat().st_mtime
+            except OSError:
+                return key
+            if age < _ROTATE_CHECK_AFTER_SECONDS:
+                try:
+                    return _read_key(path)
+                except (UsageError, OSError):
+                    return key
+            base = _api_base()
+            me = _request("GET", f"{base}/me", key, None)
+            if not me.get("rotating"):
+                return key
+            fresh = _request("POST", f"{base}/keys/rotate", key, {})
+            new_key = fresh.get("key")
+            if not isinstance(new_key, str) or not new_key.startswith("art_"):
+                return key
+            save_key_file(path, new_key)
     except (HTTPFailure, UsageError, OSError) as exc:
         print(
             f"note: this machine's weekly key swap did not happen ({exc}); "

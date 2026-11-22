@@ -218,6 +218,11 @@ swap is only a note, and the old key is sent). The helper makes no request excep
 file is over 7 days old, the weekly key swap (`GET /me`, `POST /keys/rotate`); a younger key
 file, or a key from `--key-fd`, makes none. It never updates the tool itself, even when the
 service says it is out of date; other `ream` commands do that.
+The swap is one at a time per key file: it takes an exclusive lock on `<key file>.lock`, an empty
+file (mode 600) the tools create beside the key and never put a key in, and a process that finds the
+file already swapped when it gets the lock uses that key and asks for no second one. It waits up to
+10 seconds for the lock; past that the swap is skipped with the usual stderr note and the old key is
+sent.
 The swap needs tools at level 8 or later (`ream --version` shows the level). Rotating keys are refused 14 days after they were made unless swapped, so
 this is what keeps an office that uses Ream only through MCP connected:
 
@@ -237,7 +242,8 @@ Restart the session once to load the tools; they appear as `mcp__ream__*`.
   Session label above). A label that is not printable ASCII or is over 120 characters is refused.
 - **No network but the swap, no other side effects.** Beyond the key swap above it makes no
   request, checks for no update, prints no news and writes the key nowhere else: not to a log or
-  an argument list (the swap rewrites the key file only, as every verb does). A key-reading
+  an argument list (the swap rewrites the key file only, as every verb does, and locks the empty
+  `<key file>.lock` beside it). A key-reading
   wrapper that opens it on a descriptor works as for any verb (`REAM_KEY_FD`), and that key is
   never swapped.
 - **Failure.** A missing, unreadable, over-permissive or malformed key is a message on stderr
