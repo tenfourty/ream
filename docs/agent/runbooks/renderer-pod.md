@@ -51,8 +51,11 @@ route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
 
 ## What a deployment adds
 
-1. **A Deployment** of one replica running the service's own image (the same digest). Give the start
-   line as the container's `args:`, and set no `command:`:
+1. **A Deployment** of one replica running the renderer image: `runcove/artifacts-renderer:<sha12>`,
+   which CI pushes with the same digest as the service's `full` image (the Dockerfile's `full` target,
+   the one with the browser). The service's own image may be the `app` target, which has no browser;
+   the renderer must never be an `app` image. Give the start line as the container's `args:`, and set
+   no `command:`:
 
    ```yaml
    args: ["python", "-m", "ream.renderd", "--end-all-after-render", "--port", "8091"]
@@ -60,7 +63,7 @@ route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
 
    `args:` replaces only the image's `CMD`, so the image's `ENTRYPOINT` (`/usr/bin/tini -g --`) stays,
    tini is pid 1 and renderd its child. A `command:` replaces the entrypoint too: renderd is then pid 1
-   and refuses to start. The image already has the browser, fonts and init, and sets
+   and refuses to start. The renderer image already has the browser, fonts and init, and sets
    `REAM_BIND_HOST=0.0.0.0`, which renderd binds to.
 
    After every render, renderd ends every process of its uid in its container (`kill(-1, SIGKILL)`) and
@@ -107,4 +110,7 @@ the same container, and is ended with every render.
 ## Going back
 
 Unset `REAM_RENDERER_URL` on the service and restart it: renders run in the service's own process again.
-The renderer can then be removed.
+That works only if the service runs a `full` image (one with the browser), not an `app` image: with
+neither a renderer nor a browser the service starts, logs one WARNING that thumbnails, render checks and
+screenshots are off, and does not draw them. Put the service back on a `full` image first, then unset the
+variable. The renderer can then be removed.

@@ -19,6 +19,7 @@ from ream import (
     partner,
     partner_in,
     plugin_api,
+    rendercore,
     repack,
     scanners,
     settings,
@@ -185,6 +186,20 @@ def _warn_doorbell_off() -> None:
     )
 
 
+def _warn_renderer_off() -> None:
+    """One warning when no renderer is named (`REAM_RENDERER_URL`) and this process finds no
+    browser either: thumbnails, the render checks and screenshots are then off. A warning, not
+    a refusal: an image with no browser is a valid install when a renderer is named, and a
+    fresh install without either still serves. Reads the settings at call time."""
+    if settings.current().renderer_url or rendercore.available():
+        return
+    log.warning(
+        "no REAM_RENDERER_URL is set and no browser was found: thumbnails, render checks"
+        " and screenshots are OFF. Name a renderer (REAM_RENDERER_URL), or use an image"
+        " that carries a browser"
+    )
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
@@ -246,6 +261,7 @@ def app_from_env():
     _warn_second_scan_off()
     _warn_mail_off()
     _warn_doorbell_off()
+    _warn_renderer_off()
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
     # turns it off, for tests that build the real app.

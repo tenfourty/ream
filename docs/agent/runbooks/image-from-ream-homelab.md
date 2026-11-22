@@ -5,7 +5,12 @@ here:
 
 1. A push to `main` here passes `test` and `test-sqlite`; `image` builds the image and pushes
    `runcove/artifacts-core:<sha12>`, printing `PUBLISHED core image=... digest=...`. A
-   `REUSED core` line means no new image: step 2 is skipped.
+   `REUSED core` line means no new image: step 2 is skipped. The same job builds `--target full`
+   (the Dockerfile's last stage, the image with the browser), pushes that one digest as
+   `runcove/artifacts:<sha12>`, `runcove/artifacts-core:<sha12>` and `runcove/artifacts-renderer:<sha12>`
+   (printing `PUBLISHED renderer image=... digest=...`; job output `renderer_ref`, which nothing reads yet),
+   then builds `--target app`, runs it and the full image, and fails if the app image finds a browser or
+   the full image finds none. The app image is not pushed.
 2. `core-lock` runs `.forgejo/scripts/core-lock-pr.sh`: it force-pushes branch `core-lock/next` on
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that

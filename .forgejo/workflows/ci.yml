@@ -320,6 +320,9 @@ jobs:
       # The core image's ref (empty if its step failed, or if it reused an existing image);
       # the `core-lock` job reads it.
       core_ref: ${{ steps.core.outputs.ref }}
+      # The renderer image's ref (the same digest as `ref`, under its own tag; empty if its
+      # step failed, or if it reused an existing image). Nothing reads it yet.
+      renderer_ref: ${{ steps.renderer.outputs.ref }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -392,7 +395,10 @@ jobs:
               *"manifest unknown"*|*"not found"*) ;;
               *) echo "$pulled" >&2; echo "could not tell whether $image exists" >&2; exit 1 ;;
             esac
-            docker build --network host \
+            # --target full: the image with the browser, as a plain `docker build .` builds it
+            # (Dockerfile; `full` is its last stage). The `app` target is built and checked
+            # in the last step of this job, never pushed under a deployed tag.
+            docker build --network host --target full \
               --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
               -t "$image" .
             docker push "$image"
@@ -456,6 +462,81 @@ jobs:
           [ "$digest" = "${BUILD_REF##*@}" ] || { echo "core digest differs from the built image's" >&2; exit 1; }
           echo "ref=${core}@${digest}" >> "$GITHUB_OUTPUT"
           echo "PUBLISHED core image=${core} digest=${digest}"
+
+      # The renderer's own image tag: runcove/artifacts-renderer:<sha12>, the SAME digest as
+      # the image built above (the full image, which holds the browser), so a deployment can pin
+      # the renderer apart from the service (docs/decisions.md, 22 Nov 2026). Like the core image
+      # nothing consumes it yet and the pin job never reads it, so a failure here is reported but
+      # does not fail the job. A re-run reuses an existing renderer tag.
+      - name: push renderer image
+        id: renderer
+        continue-on-error: true
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+          # Tagged from the exact digest the build step produced, never from the mutable
+          # :<sha12> tag; and only when this run built it (reused=0).
+          BUILD_REF: ${{ steps.build.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
+        run: |
+          set -eu
+          if [ "$BUILD_REUSED" != 0 ]; then
+            echo "REUSED renderer: the image was not built by this run (reused=${BUILD_REUSED:-unset}), so no renderer image is pushed or certified"
+            exit 0
+          fi
+          case "$BUILD_REF" in
+            git.tenfourty.site/runcove/artifacts:*@sha256:*) ;;
+            *) echo "unexpected build ref" >&2; exit 1 ;;
+          esac
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          sha12="${GITHUB_SHA:0:12}"
+          renderer="git.tenfourty.site/runcove/artifacts-renderer:${sha12}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u artifacts-publisher --password-stdin
+          if pulled=$(docker pull "$renderer" 2>&1); then
+            echo "REUSED renderer: $renderer already exists in the registry; nothing pushed, not certified by this run"
+            exit 0
+          fi
+          case "$pulled" in
+            *"manifest unknown"*|*"not found"*) ;;
+            *) echo "$pulled" >&2; echo "could not tell whether $renderer exists" >&2; exit 1 ;;
+          esac
+          docker tag "$BUILD_REF" "$renderer"
+          docker push "$renderer"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$renderer" \
+            | grep -m1 '^git.tenfourty.site/runcove/artifacts-renderer@sha256:' | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $renderer after the push" >&2; exit 1; }
+          [ "$digest" = "${BUILD_REF##*@}" ] || { echo "renderer digest differs from the built image's" >&2; exit 1; }
+          echo "ref=${renderer}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "PUBLISHED renderer image=${renderer} digest=${digest}"
+
+      # The browser-free image, proved by running it (never pushed, so no deployed tag can name it
+      # until the renderer has its own pin): build `--target app` and assert, inside it, that no
+      # browser is found; then the same assertion on the full image the steps above built, which
+      # must find one, so an empty result cannot pass for a proof. Both images also run tini.
+      # Last in the job, so a failure here never stops an image from being published; it fails
+      # the job, and so holds the core.lock PR back, until the image is fixed.
+      - name: app image has no browser
+        run: |
+          set -eu
+          sha12="${GITHUB_SHA:0:12}"
+          full="git.tenfourty.site/runcove/artifacts:${sha12}"
+          app="artifacts-app-check:${sha12}"
+          docker build --network host --target app -t "$app" .
+          check='
+          import shutil, sys
+          from ream import rendercore
+          found = [n for n in ("chromium", "chrome-headless-shell") if shutil.which(n)]
+          available = rendercore.available()
+          print(f"{sys.argv[1]}: available={available} found={found}")
+          if sys.argv[1] == "app":
+              assert available is False and found == [], "the app image carries a browser"
+          else:
+              assert available is True and found, "the full image carries no browser"
+          '
+          docker run --rm --entrypoint /app/.venv/bin/python "$app" -c "$check" app
+          docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full
+          docker run --rm --entrypoint /usr/bin/tini "$app" --version
+          docker run --rm --entrypoint /usr/bin/tini "$full" --version
 
   # Opens the pull request on the deployment repo that moves production onto this image
   # (15 Oct 2026): the manifests live there, pinned by digest, and only a

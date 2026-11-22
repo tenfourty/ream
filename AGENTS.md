@@ -81,7 +81,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | The logo guide and the gallery's named design values (colours, type, spacing) | `docs/brand.md`, `src/ream/design.py` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
-| Container | `Dockerfile` |
+| Container (one Dockerfile, two targets: `full` has the browser and is the last stage, so a plain `docker build .` renders in-process; `app` has none and needs a renderer) | `Dockerfile`; `tests/test_dockerfile_targets.py` |
 | Deployment values | the deployment's own repo (for the homelab, the homelab repo); this repo keeps none |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
 | An embargoed security fix: built in the private `runcove-sec/artifacts-sec` and pinned by hand before it is public | `.forgejo/workflows/sec.yml` (on the dedicated runner labels only: `runcove-sec` for the image build, `runcove-sec-unpriv` for every other job), `.forgejo/scripts/sec-private-check.sh`, `scripts/guards/workflow-runner-guard.sh`; runbook `docs/agent/runbooks/embargoed-fix.md` |
@@ -136,7 +136,7 @@ nothing else (no path, query, fragment or credentials), on a host other than the
 answer (down, slow past 30 s, busy, or an answer failing `renderwire`'s checks) stores the verdict `unchecked` with
 one finding saying so, and is never replaced by a render in the service's own process. Preview answers 200 as
 before, with `reason: "renderer_unavailable"` then. renderd takes no key: who may call it is the deployment's
-network policy. Runbook: `docs/agent/runbooks/renderer-pod.md`.
+network policy. Runbook: `docs/agent/runbooks/renderer-pod.md`. With neither it nor a browser found (an `app` image, no renderer named), start-up logs one WARNING that thumbnails, render checks and screenshots are off (`serve._warn_renderer_off`).
 
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
 `X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older

@@ -1289,3 +1289,24 @@ runcove-5t3oj.158.1 (backlog, behind the land-existing-work focus).
 **Evidence:** Jeremy asked for it in #hq-artifacts on 20 Nov 2026, pages shared outside above all,
 and chose (a) on both questions there: who sees the stats, and per-recipient detail for external
 shares.
+
+## One Dockerfile, two targets: an app image with no browser (22 Nov 2026)
+
+The Dockerfile now has a shared `base` (slim image, tini, environment, user, entrypoint), an `app`
+stage (base plus the finished virtualenv and wheels, no browser, no fonts) and a `full` stage (base plus
+Debian's chromium and fonts, then the same copies). `full` is the last stage, so a plain `docker build .`
+and `--target full` still give the image that renders in its own process. CI publishes `full` under the
+existing tags and under a new `runcove/artifacts-renderer:<sha12>` (the same digest), and builds `app`
+only to run it and assert it finds no browser (with the full image as the positive control). Nothing
+deployed changes in this step. The aim: once the renderer pod has its own pin, the service can run the
+`app` image and rendering stays in the renderer. A start with neither a renderer named nor a browser
+found logs one warning that thumbnails, render checks and screenshots are off.
+
+**Not chosen:**
+- Two Dockerfiles: the browser-free one drifts from the other, and CI would need a proof that they match.
+- `app` as the last stage: a plain `docker build .` on a fresh install would then silently lose
+  thumbnails and render checks, which is the default a fresh install expects.
+
+**Evidence:** `tests/test_dockerfile_targets.py` (the stage chain of `app` names no browser; `full`
+exists, is last and installs chromium; both carry tini) and the `app image has no browser` step of the
+`image` job in `.forgejo/workflows/ci.yml`, which runs both images.
