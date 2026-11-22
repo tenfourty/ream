@@ -79,6 +79,9 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec-unpriv "$SEC_REGISTRY_OWNER"
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=privacy bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test:
     runs-on: runcove-sec-unpriv
@@ -163,6 +166,9 @@ jobs:
         # (the deployment repo's CI-builders doc); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test-sqlite:
     runs-on: runcove-sec-unpriv
@@ -258,6 +264,9 @@ jobs:
           REAM_TEST_DB: sqlite
           REAM_BROWSER: /nonexistent/browser
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test-sqlite bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
   # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
@@ -329,6 +338,9 @@ jobs:
         env:
           REAM_TEST_DB: sqlite
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=core-bare bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   image:
     needs: [runner-guard, privacy, test, test-sqlite, core-bare]
