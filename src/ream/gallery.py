@@ -52,6 +52,7 @@ from ream import (
     mcp_apps,
     oauth,
     pagediff,
+    pageviews,
     partner,
     readside,
     rename,
@@ -6800,6 +6801,10 @@ def gallery_router(db: Database) -> APIRouter:
             ).fetchone()
         prev_read_at = prev[0] if prev else None
         store.mark_read(db, artifact_id)
+        # A reader of the page (runcove-5t3oj.158.1): this request's own connections are
+        # closed here, and the route is sync, as `pageviews.record` asks. Not a deleted page.
+        if row[7] is None:
+            pageviews.record(db, artifact_id, pageviews.OWNER, "")
         # Open or answered-but-not-closed decisions: a closed one is the agent
         # saying it no longer needs an answer, so it has nothing left to show
         # here -- unless he left a note and a thread grew under it, which is a

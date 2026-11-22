@@ -62,6 +62,7 @@ from ream import (
     markdown,
     onboarding,
     pagediff,
+    pageviews,
     partchanges,
     partdiff,
     partner_in,
@@ -2284,6 +2285,7 @@ def agent_router(
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
         part = _part_or_422(stored.body, offset, limit)
+        pageviews.record_agent_read(db, artifact_id, agent)
         report = store.render_report(db, artifact_id)
         return {
             **stored.__dict__,
@@ -2510,9 +2512,11 @@ def agent_router(
             stored = store.get_version_body(db, agent, artifact_id, n, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact or version") from exc
+        part = _part_or_422(stored.body, offset, limit)
+        pageviews.record_agent_read(db, artifact_id, agent)
         return {
             **stored.__dict__,
-            **_part_or_422(stored.body, offset, limit),
+            **part,
             "warnings": _warnings_for(artifact_id, stored.body),
         }
 

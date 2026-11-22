@@ -143,6 +143,24 @@ def record(
         return False
 
 
+def record_agent_read(db: Database, artifact_id: str, reader: str) -> bool:
+    """`reader` was served the body of page `artifact_id`: count it as an agent view unless
+    `reader` is the page's own agent (the publisher reading back what it published, or
+    polling, is not a reader; office decision A). Same rules as `record`: AFTER the request's
+    own transaction, never raises."""
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                "select agent from artifact where id = %s", (artifact_id,)
+            ).fetchone()
+    except Exception as exc:  # noqa: BLE001 - best-effort, as `record`
+        _log.warning("page view not recorded (%s)", type(exc).__name__)
+        return False
+    if row is None or row[0] == reader:
+        return False
+    return record(db, artifact_id, AGENT, reader)
+
+
 @dataclass(frozen=True)
 class Viewer:
     kind: str
