@@ -452,9 +452,21 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt, skill.md and the artifacts-publish help re-taken on 12 Nov 2026 for publishing a page closed (`--closed-to-agents`) and the read-state line.
 # agents.txt and skill.md re-taken on 15 Nov 2026 for the screenshot route (a short paragraph in each), and again for what its 503s and 413 mean.
 # agents.txt and skill.md re-taken on 15 Nov 2026 for `ream screenshot` and the MCP `screenshot_page` tool (one sentence in each; agents.txt's MCP tool list names it).
+# skill.md re-taken on 16 Nov 2026 for embedded fonts (the Fonts bullet: data: fonts allowed, and Ream's own pictures may show a fallback font for now); agents.txt and agent.json did not move.
+# skill.md re-taken on 16 Nov 2026 for questions that stand alone (two lines under the lettered-options bullet); agents.txt and agent.json did not move.
+# agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"), and again the same day for its review: both now say sessions sharing one key share its place and keep `ream wait`; agent.json did not move.
+# agents.txt and the artifacts-decide help re-taken on 16 Nov 2026 for option previews (`--preview`, three lines) and reading a large page in parts (two lines on the body route); skill.md and agent.json did not move.
+# agents.txt re-taken again on 16 Nov 2026 for the review of that change: previews are not shown in Slack, and `partial` (a part is never a whole page to update with).
+# skill.md re-taken on 16 Nov 2026 for HTML-in-Canvas (one bullet after Fonts: the Chrome 157 API names, feature detection and fallback, the `canvas` template); agents.txt and agent.json did not move.
+# skill.md re-taken again on 16 Nov 2026: the HTML-in-Canvas bullet says each drawn child is marked `drawable`, and to fall back when drawing fails.
+# skill.md re-taken on 16 Nov 2026 for what a larger HTML-in-Canvas page taught (runcove-5t3oj.155): the bullet shrinks to a pointer, and a new section "HTML-in-Canvas pages" carries both API generations, the paint-event upload, hit-testing geometry, data colours, drawing on demand, the safety nets and the caret; agents.txt and agent.json did not move.
+# skill.md re-taken on 17 Nov 2026 for the review of that section (runcove-5t3oj.155): the API renamed in Chrome 155, texElementSubImage2D's five arguments with the texture sized from getElementImageDefaultSize, 2D drawElementImage syncing hit-testing itself, the first-frame checks for an ink slab, a blank picture and a GL error, and the pointer to the section says above; agents.txt and agent.json did not move.
+# agents.txt and skill.md re-taken on 17 Nov 2026 for the window-high frame (`<meta name="ream-frame" content="viewport">`: one section in agents.txt, one bullet in skill.md); agent.json did not move.
+# agents.txt re-taken on 17 Nov 2026: the window-high frame is 96px shorter on a touch or narrow screen, so a strip of the gallery stays reachable (one clause); skill.md and agent.json did not move.
+# skill.md re-taken on 17 Nov 2026: the HTML-in-Canvas rules bullet says which Chrome builds draw it (157+, or 147-156 with the `canvas-draw-element` flag), that the page must read as plain HTML elsewhere, and where the `canvas` template is fetched (the same bullet, no new one); agents.txt and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "f03fd4935ee88cfcffc3f142d7dd5c4e0c482cd55061ddf39d865b4e482264b2",
-    "skill.md": "7b4703e1e2290a02e705519ace8a4e3059f309cde42b2acd0cb74452626f41d2",
+    "agents.txt": "538d0cc5c03331321485ab2bd6add83819ad0899558ee488d656bbf55476b235",
+    "skill.md": "bc2f08daaffdd8c0b4e69ee8efbaabc4785546ea7aceef31afc08512c95459ea",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -499,7 +511,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
-    "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
+    "artifacts-decide": "1d592613826304b91d11381e64fef393d6020a2a5245e743ebad8aa86abbf88b",
 }
 
 
@@ -515,7 +527,7 @@ def _help(parser: argparse.ArgumentParser) -> str:
 
 def test_every_template_ends_with_the_same_footer():
     names = templates.names()
-    assert len(names) == 8
+    assert len(names) == 9
     for name in names:
         assert re.findall(r"<footer>.*?</footer>", templates.body(name)) == [FOOTER], (
             name

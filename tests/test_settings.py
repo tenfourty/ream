@@ -46,7 +46,10 @@ def test_override_takes_any_setting_and_lets_go(monkeypatch):
 
 
 def test_the_repr_prints_no_secret(monkeypatch):
-    monkeypatch.setenv("REAM_NUDGE_TOKEN", "token-do-not-print")
+    # A field that still exists and names a secret's place; the guard below keeps the test
+    # from going vacuous again if the field is renamed or dropped.
+    monkeypatch.setenv("REAM_PARTNER_SIGNING_KEY_FILE", "/run/keys/do-not-print")
+    assert settings.current().partner_signing_key_file == "/run/keys/do-not-print"
     text = f"{settings.current()!r} {settings.current()}"
     assert "do-not-print" not in text
 
@@ -386,3 +389,38 @@ def test_the_renderer_url_is_unset_by_default_and_read_under_both_names(
     assert not [p for p in settings.current().problems() if "RENDERER" in p]
     monkeypatch.setenv("ARTIFACTS_RENDERER_URL", "http://renderer.svc:8091")
     assert settings.current().renderer_url == "http://renderer.svc:8091"
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ("", None),
+        ("8001", None),
+        ("1", None),
+        ("65535", None),
+        ("0", "must be a port number"),
+        ("65536", "must be a port number"),
+        ("-1", "must be a port number"),
+        ("80a", "must be a port number"),
+        ("8000", "must differ from the main port"),
+    ],
+)
+def test_the_internal_port_is_checked_at_start(value, problem):
+    with settings.override(internal_port=value) as current:
+        found = [p for p in current.problems() if "INTERNAL_PORT" in p]
+    if problem is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and problem in found[0], found
+
+
+def test_the_internal_port_is_unset_by_default_and_read_under_both_names(
+    fresh, monkeypatch
+):
+    assert settings.current().internal_port == ""
+    assert settings.current().internal_port_number() is None
+    monkeypatch.setenv("ARTIFACTS_INTERNAL_PORT", "8001")
+    assert settings.current().internal_port_number() == 8001
+    monkeypatch.setenv("REAM_INTERNAL_PORT", "8002")
+    with pytest.raises(SystemExit):
+        settings.current()

@@ -191,3 +191,144 @@ def test_the_sync_script_agrees_that_nothing_is_stale():
         check=False,  # the assertion below reports the script's own message
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_the_canvas_template_falls_back_to_plain_html():
+    """HTML-in-Canvas (runcove-5t3oj.149) draws only where the browser has the API, and
+    most readers, and an agent's own read_page, see the HTML. So the starter tests for
+    the API before it moves anything into the canvas, keeps the card in normal flow
+    until then, and reaches for nothing off the page."""
+    body = _body(CANON / "canvas.html")
+    visible = _strip_comments(body)
+    check = "if (!api.paint || !(api.webgl || api.draw2d))"
+    move = "canvas.appendChild(card)"
+    assert check in visible and move in visible
+    assert visible.index(check) < visible.index(move), (
+        "the card moves into the canvas before the API is checked for"
+    )
+    # Both generations of the API, detected by name, never by browser.
+    for name in (
+        "drawElementImage",
+        "drawElement",
+        "texElementSubImage2D",
+        "texElementImage2D",
+        "updateElementGeometry",
+        "requestPaint",
+    ):
+        assert f'"{name}"' in visible, f"the starter does not test for {name}"
+    assert not re.search(r"userAgent|navigator\.vendor", visible), (
+        "support is decided by the feature, never by the browser's name"
+    )
+    assert re.search(
+        r'<canvas[^>]*\blayoutsubtree\b[^>]*content="drawable"[^>]*\bhidden\b', body
+    )
+    after_canvas = body.split("</canvas>", 1)[1]
+    assert 'id="drawn"' in after_canvas, (
+        "the card must start outside the canvas, readable without the API"
+    )
+    drawn = re.search(r'<div\b[^>]*\bid="drawn"[^>]*>', body)
+    assert drawn and re.search(r"\sdrawable[\s>]", drawn.group()), (
+        "drawElementImage draws only a child marked drawable"
+    )
+    assert re.search(r"\.stage\[hidden\]\s*\{\s*display:\s*none", visible), (
+        "the stage's display:block would show a blank band where the canvas is hidden"
+    )
+    assert re.search(r"catch\s*\(\w+\)\s*\{\s*fallBack\(\)", visible), (
+        "a throw after the card has moved must put the plain HTML back"
+    )
+    assert "visibilityState" in visible, (
+        "a tab opened in the background does not paint: the no-paint timer must "
+        "run only while the page is visible"
+    )
+    assert re.search(r'getElementById\("plain"\)', visible) and re.search(
+        r'<button\b[^>]*\bid="plain"[^>]*\bhidden\b', body
+    ), "the reader needs a way to see the page without the effect, hidden until it runs"
+
+
+def test_the_canvas_template_carries_the_lessons():
+    """runcove-5t3oj.155: what a larger page built on the API taught, kept in the starter
+    an agent copies: the drawn transform given to the browser for hit-testing, data
+    colours scoped to the shader, drawing on demand, and the safety nets."""
+    visible = _strip_comments(_body(CANON / "canvas.html"))
+    # Hit-testing follows the drawing, with a probe and a CSS fallback.
+    assert "canvasTransform: new DOMMatrix(m)" in visible
+    assert 'card.style.transform = "matrix("' in visible
+    assert "getElementTransform" not in _body(CANON / "canvas.html")
+    # Data colours, only while the shader draws, and the masks read from them.
+    assert re.search(r"\.stage\.gl \.card\s*\{[^}]*color:#000", visible)
+    assert re.search(
+        r"\.stage\.gl[^{]*::selection\s*\{\s*background:#f00;color:#00f", visible
+    )
+    assert "max(t.a - t.r - t.g - t.b, 0.)" in visible
+    # On demand: pictures on the paint event's changed elements and the reader's events.
+    assert "changedElements" in visible and "selectionchange" in visible
+    for event in ("input", "change", "focusin", "focusout", "click", "keyup"):
+        assert f'"{event}"' in visible
+    # Safety nets.
+    assert "readPixels" in visible, "a dark first frame must be caught"
+    assert "webglcontextlost" in visible
+    assert re.search(r"Math\.min\(2, Math\.max\(1, window\.devicePixelRatio", visible)
+    assert "MAX_PIXELS" in visible
+    assert "prefers-reduced-motion" in visible
+    off_page = re.findall(r"https?://|\b(?:src|href)=\"//|url\(", visible)
+    assert not off_page, f"the starter reaches off the page: {off_page}"
+    assert not re.search(r"\bnew\s+(?:Shared)?Worker\b|\bfetch\(|@import", visible)
+
+
+def _js_block(text: str, head: str) -> str:
+    """The body of the block that opens at the first `{` after `head`, braces matched."""
+    start = text.index(head)
+    at = text.index("{", start)
+    depth = 0
+    for i in range(at, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[at + 1 : i]
+    raise AssertionError(f"no end to the block after {head!r}")
+
+
+def test_the_canvas_template_safety_nets_do_what_they_say():
+    """runcove-5t3oj.155 review: the safety nets pinned by what their code does,
+    not by the names it mentions."""
+    visible = _strip_comments(_body(CANON / "canvas.html"))
+    # Falling back stops everything that could draw again or move the card back.
+    back = _js_block(visible, "function fallBack(why)")
+    for stop in (
+        "removeEventListener",
+        "cancelAnimationFrame(frameId)",
+        "clearTimeout(timer)",
+        "watcher.disconnect()",
+    ):
+        assert stop in back, f"fallBack does not {stop}"
+    # The reader's button falls back, then focuses the card it gave back.
+    click = _js_block(visible, 'on(button, "click", function ()')
+    assert "fallBack(" in click
+    assert click.index("fallBack(") < click.index("card.focus(")
+    assert re.search(r'<span\b[^>]*\bid="mode"[^>]*\brole="status"', visible)
+    # Reduced motion: no tilt, and no pointer listeners at all.
+    assert re.search(r"var angle = still \? 0 :", visible)
+    pointer = _js_block(visible, "if (!still)")
+    assert '"pointermove"' in pointer and visible.count('"pointermove"') == 1
+    # Neither drawing call present: the listeners already bound are dropped.
+    assert "if (!api.draw2d) { fallBack(); return; }" in visible
+    # The first frame drawn is the one checked, and a blank picture fails too.
+    assert "drawGL(m, !drawn)" in visible
+    assert "check = true" not in visible
+    gl_draw = _js_block(visible, "function drawGL(m, check)")
+    assert re.search(
+        r"if \(check && \(dark\(m\) \|\| blank\(\)\)\) \{ fallBack\(\); \}", gl_draw
+    )
+    assert "inkOnly" in _js_block(visible, "function dark(m)")
+    # The upload: the documented five arguments, and a GL error is a throw.
+    upload = _js_block(visible, "function upload()")
+    assert "gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, card);" in upload
+    assert "getElementImageDefaultSize" in upload
+    assert re.search(r"if \(gl\.getError\(\)\) \{ throw ", upload)
+    # The current 2D call places the card itself: no second geometry update.
+    assert 'if (api.draw2d === "drawElementImage") { geo = "auto"; }' in visible
+    assert 'if (geo === "auto") { return; }' in _js_block(visible, "function place(m)")
+    # The starter has no editable, so it sets no caret rule.
+    assert "caret-color" not in visible

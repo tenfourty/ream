@@ -1040,8 +1040,9 @@ removal or any other role is refused like any other change. Not chosen: granting
 each named job and noting that the 12 Nov grant ended, which would leave the branch-rule proof
 waiting on a fresh grant each time.
 
-**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov
-2026, lettered answer (b) to security's question in #hq-security)
+**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov 2026,
+lettered answer (b) to security's question in #hq-security); the grant was gone again on 16 Nov 2026
+and the operator re-added it (lettered answer (a) in #hq-artifacts)
 
 ## The renderer can run as its own process or pod, beside the in-process one (13 Nov 2026)
 
@@ -1099,3 +1100,175 @@ same 404 as a page that is not there.
 **Evidence:** Jeremy's ask (13 Nov 2026, relayed by gg-ops, runcove-uap8t) was for an agent to
 take a screenshot of its own published page; the own-agent-only scope is as asked. The rest is the
 maintainer's design for runcove-uap8t and its build brief for the HTTP slice, 15 Nov 2026.
+
+## Pages may embed their own fonts (16 Nov 2026)
+
+A page may carry fonts as data: URLs in `@font-face`, so HTML-in-Canvas and other designed pages
+render as their authors drew them. Only `font-src` changes, to `'self' data:`; nothing else in the
+page policy moves (no data: in script-src, style-src or worker-src, and background workers stay
+blocked: nobody asked for them). The fonts count inside the existing page size limit
+(`store.MAX_BODY_BYTES`, 8 MiB; the limit is on the body, so no check changed). Publishing answers a
+warning, `embedded_fonts`, saying how many font files and how many bytes, and why it matters: a
+custom font can make the text a person sees differ from the page's source text. The warning is
+advisory, made for an honest author: one linear pass counts the data: addresses with a font media
+type wherever they appear in the page's text (a comment too), with no parsing of CSS. It does not
+see fonts added by script, written with CSS escapes or embedded without a font type.
+`embedded_fonts_not_run` beside it means the check did not run (the page is too large, the time
+ran out, or the server was busy), so silence is not a clean page. A limit that may exist until a
+renderer change settles it: Ream's own picture of a page (the wall thumbnail, the render check,
+`ream screenshot`) is drawn with Chromium launched with `--disable-remote-fonts`, which very likely
+also stops data: fonts, so those pictures may show a fallback font for now. The full policy string, live
+and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
+
+**Not chosen:**
+- A separate font allowance outside the page limit: a page could carry a blob as a font.
+- Fonts from other sites: a new origin and a way out for a page's data.
+
+**Evidence:** confirmed (Jeremy, 16 Nov 2026, lettered answer (a) in #hq-artifacts); security's
+advice, 16 Nov 2026, no hold.
+
+## A page opts in to a window-high frame; Ream does not detect one (16 Nov 2026)
+
+A page that sizes itself from its window declares it in its head: `<meta name="ream-frame"
+content="viewport">` (`src/ream/pageframe.py`). The shim reports `frame: "viewport"` with every
+height report; the gallery then keeps the page's frame at the window's height less the gallery bar's
+(and 96px less on a touch or narrow screen, so an iPhone always has a strip of gallery to swipe),
+follows the window, lets the frame scroll, and ignores the page's height reports. The frame carries
+`data-frame="viewport"` and the comments script treats it as it treats full screen (the pill is placed
+from where the frame shows the words, no pin badges, and jumping to a comment only brings the frame up
+under the bar). Decision controls are not lifted onto such a frame, because page coordinates move as it
+scrolls: they stay above the page. A whole-page screenshot of such a page is one window high, taken
+without letting the browser grow the window, and `truncated` is true when more of the page is below.
+
+The trigger was a claude.ai WebGL page that sized its canvas from `innerHeight`: its height fed back
+through auto-height (frame grows, window grows, page grows) until the frame reached the 100000px cap,
+leaving a blurry canvas, text far below and fixed buttons off screen.
+
+Auto-height stays the default. Ream does not detect such pages, because the signs (`innerHeight`,
+`100vh`, `position: fixed`) are also in harmless pages, and a wrong guess would take a normal page's
+height away from it and break its sizing; the author knows which page it wrote. The value is read
+without case or surrounding white space and any other value is the default, so a typo costs nothing.
+
+**Not chosen:**
+- Detecting it (a script scan, or a frame that grows twice in a row): false positives on pages that
+  are fine, and a heuristic the next page defeats.
+- Capping growth lower for every page: it cuts off long pages that are meant to be long.
+- A `data-artifact-*` attribute on the body: this is a setting of the whole page, which HTML already
+  puts in a `<meta>` (`viewport`, `color-scheme`), and the old spelling is for old callers only.
+
+**Evidence:** the claude.ai page that grew its frame to the cap (16 Nov 2026); the opt-in's tests in
+`tests/js/shim.test.mjs`, `viewer.test.mjs`, `comments.test.mjs`, `tests/test_shots.py` and
+`tests/test_panel_browser.py`.
+
+## Hosting a claude.ai canvas page, and the full-screen frame (16-18 Nov 2026)
+
+Jeremy asked whether Ream can host a page like a claude.ai HTML-in-Canvas artifact (the Explainer).
+It can, for readers in Chrome, and the decision has three parts.
+
+**Chosen:**
+- **Full support (16 Nov 2026).** Such pages work in his browser, with embedded fonts allowed
+  ("Pages may embed their own fonts", 16 Nov 2026), and agents get a how-to ("HTML-in-Canvas pages"
+  in the served onboarding text) and a starter (the `canvas` template).
+- **How to test it (16 Nov 2026).** Publish the saved page unchanged, then rebuild its three effects
+  (melt, lamp, pool) on the improved WebGL starter and compare the two.
+- **What the first test found.** The unchanged copy first rendered wrongly: the gallery sizes a frame
+  to its content, while the page sizes itself from the window's height, so each fed the other. The fix
+  is the page's own opt-in, `<meta name="ream-frame" content="viewport">`, which asks for a frame the
+  height of the window that scrolls inside (`src/ream/pageframe.py`; "A page opts in to a window-high
+  frame", 16 Nov 2026). With that line the unchanged copy looks like the original in Chrome (Jeremy,
+  18 Nov 2026).
+- **Agent guidance (17 Nov 2026): the simplest minimum.** One note in the served skill, and one in the
+  house ream skill, that canvas pages work for readers in Chrome, pointing to the canvas starter and
+  the how-to. No new skill.
+
+**Not chosen:**
+- Rebuild the effects only, without publishing the saved page unchanged: it would not show whether
+  Ream hosts the original, and the frame problem would not have surfaced.
+- Publish the saved page only, without the rebuild: shows that it displays, not whether our starter
+  can reach the same effects.
+- A separate canvas-effects skill: a second document for agents to find and keep in step with the
+  starter and the how-to, for what one note and a pointer cover.
+
+**Evidence:** confirmed (Jeremy, lettered answers (a) of 16 Nov 2026 for full support and for how to
+test it, and 17 Nov 2026 for the agent guidance; he saw the unchanged copy match the original in
+Chrome on 18 Nov 2026). The served skill's note is in `src/ream/onboarding.py`.
+
+## The 19 Nov 2026 secret-scan gate fix is released without the hand-pinned rollout (19 Nov 2026)
+
+The secret-scan gate fix of 19 Nov 2026 changed only a commit hook (`scripts/guards/ggshield-gate.sh`),
+nothing in the deployed image. For this one release the embargoed-fix runbook's steps 4 and 5 (the
+private image and its hand pin) were skipped: security agreed, and Jeremy approved this release.
+
+**Chosen:** this fix is released from the private repository once its CI is green and security has
+agreed the commit wording, on two conditions:
+- the release text names the behaviour, not the weakness;
+- the release post says how each clone picks the hook up: lefthook runs the script from the working
+  tree, so a pull of `main` is enough, and an office VM gets it at its next refresh.
+
+**Not chosen:** building and hand-pinning a private image for this fix, which would not differ from the
+public one.
+
+A later fix that changes nothing in the deployed image skips steps 4 and 5 only with both again:
+security's agreement and Jeremy's approval of that release.
+
+**Evidence:** Jeremy approved the release on 19 Nov 2026 (lettered answer (a): release once private CI
+is green and security has agreed the commit wording). The runbook's note is in
+`docs/agent/runbooks/embargoed-fix.md`, step 4.
+
+## A busy page scanner waits briefly, then says so (released 20 Nov 2026)
+
+Reading a large page (over 256 KiB) to check it, to anchor comments on it or to draw its findings
+is bounded per server process: `REAM_SCAN_SLOTS` (default 4) such scans run at once, and the rest
+wait up to 5 seconds (`src/ream/scanslots.py`). A scan that gets no slot never blocks the service
+and never passes as clean: the publish checks and the render findings say they did not run; the
+comment listings answer 200 with the pins they could not place marked unknown (`anchor_state` "",
+and `quote_state` "" unless the page's words were already read); a request that cannot be answered
+without the scan answers 503 with `Retry-After`. Shipped as an embargoed fix, built in the private
+copy and hand-pinned, then made public and handed back to the normal image path
+(`docs/agent/runbooks/embargoed-fix.md`).
+
+**Not chosen:**
+- An unbounded scan per request: one large page sent many times could hold every worker.
+- Skipping the scan silently when busy: a check that did not run would read as a clean page.
+
+**Evidence:** this office's call (reversible); security reviewed the fix before release; production
+runs the public image since 20 Nov 2026 (pod image line read by artifacts-maintainer).
+
+## The secret scan stops at a time bound (released 20 Nov 2026)
+
+The secret scan stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the
+other readers' backstop), checked before each shape and at each match. A scan past it raises
+`ScanTimeout`, a `ScanBusy` with its own words (the page took too long to scan), so it is refused as
+a busy server is: 503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when
+it cannot finish the scan. A single regex search already running is not interrupted; each is linear
+in a page the size cap bounds. Built and proved under embargo in the private copy, then reviewed by
+security and retested live in production. Jeremy approved the release on 20 Nov 2026: release now
+with security's two wording and measurement fixes. The follow-up for four large pages scanned at
+once comes next as an ordinary public change: it counts the deadline in CPU time, with the wall
+clock kept as a backstop (tracked as runcove-5t3oj.161.1).
+
+**Not chosen:**
+- No bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
+- Holding the release until the follow-up is done: the bound already refuses a scan that cannot
+  finish, and waiting would leave the unbounded scan in production.
+
+**Evidence:** Jeremy approved the release on 20 Nov 2026 (decision: release now, follow-up next);
+security reviewed the fix and retested it live in production; the in-shape check is held by
+`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_WALL_SECONDS` in
+`src/ream/scan.py`.
+
+## An optional internal port serves only the health check and the partner endpoint (22 Nov 2026)
+
+`REAM_INTERNAL_PORT` (unset: nothing changes) opens a second listener whose own app answers
+`GET /healthz` and the partner inbound endpoint on its host, and a plain 404 for everything else
+whatever the Host header says. Port 8000 behaves as before. The deployment's network policy can then
+admit only the ingress to 8000 and send probes and the partner to the internal port. Recommended
+number for the deployment: 8001.
+
+**Not chosen:**
+- A port check inside the shared router: one missed branch away from serving the gallery there.
+- Changing the image's CMD to a two-socket entrypoint: the second server runs inside the existing
+  process instead, so the old CMD keeps working and the main listener's flags are untouched.
+
+**Evidence:** `tests/test_internal_port.py` (404 for the gallery, API, content and MCP requests on the
+internal app; the real socket answers only `/healthz`); the main app is covered by the existing suite.

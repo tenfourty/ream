@@ -13,6 +13,7 @@ from ream import (
     comments,
     envnames,
     events,
+    internal_port,
     mail,
     maintenance,
     owner,
@@ -31,7 +32,7 @@ from ream.db import Database
 log = logging.getLogger("ream.serve")
 
 
-def _arm_shutdown_signals(app):
+def _arm_shutdown_signals(app, internal=None):
     """Wrap `app` so every held /events request ends as soon as this process is
     asked to stop.
 
@@ -81,7 +82,12 @@ def _arm_shutdown_signals(app):
 
             async def watching(message):
                 # The app has finished shutting down: stop the core outbox sender.
+                if message["type"] == "lifespan.startup.complete" and internal:
+                    # The internal port answers only once the app has started.
+                    await internal.start()
                 if message["type"].startswith("lifespan.shutdown"):
+                    if internal is not None:
+                        await internal.stop()
                     plugin_api.stop_all()
                     sinks.stop(timeout=2.0)
                     comments.stop_sweeper(timeout=2.0)
@@ -163,6 +169,28 @@ def _warn_mail_off() -> None:
     )
 
 
+# The after-commit sink the house plug-in registers for the doorbell (step 9d).
+DOORBELL_SINK = "doorbell"
+
+
+def _warn_doorbell_off() -> None:
+    """One warning when the retired doorbell variables are set and no sink named `doorbell` is
+    registered: nothing then rings the owning agent's inbox (every event still reaches it
+    through the journal, `GET /api/v1/events`). Call it after the plug-ins and the webhook
+    sinks load. A warning, not a refusal, as `_warn_second_scan_off`; names the variables,
+    never a value."""
+    stale = settings.retired_nudge_set()
+    if not stale or any(s.name == DOORBELL_SINK for s in sinks.registered()):
+        return
+    log.warning(
+        "%s set, but no %r sink plug-in is loaded: the doorbell is OFF (agents still get"
+        " every event from the journal). The core no longer reads these; install the"
+        " plug-in that registers the sink, or unset them",
+        ", ".join(stale),
+        DOORBELL_SINK,
+    )
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
@@ -223,6 +251,7 @@ def app_from_env():
     partner.warn_if_owner_absent(db)
     _warn_second_scan_off()
     _warn_mail_off()
+    _warn_doorbell_off()
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
     # turns it off, for tests that build the real app.
@@ -241,4 +270,8 @@ def app_from_env():
     sinks.bind(db)
     sinks.start(db)
     plugin_api.start_all(db)  # plug-in start hooks (API 1.2)
-    return _arm_shutdown_signals(create_app(db, inbound))
+    # The optional second listener (REAM_INTERNAL_PORT): /healthz and the partner endpoint
+    # only. Bound here, so a taken port stops the start; it starts serving on the main loop
+    # when the lifespan startup completes, so it never answers before the app is up.
+    internal = internal_port.maybe_create(db, inbound, configured)
+    return _arm_shutdown_signals(create_app(db, inbound), internal)

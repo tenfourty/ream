@@ -60,6 +60,7 @@ from ream import (
     packing,
     scan,
     scanners,
+    scanslots,
     settings,
 )
 from ream import reach as caller_reach
@@ -482,6 +483,11 @@ def _check_secrets(
         raise _invalid_text(field, agent, artifact_id) from exc
     try:
         findings = scan.scan(value)
+    except scanslots.ScanBusy:
+        # Every scan slot stayed taken: the value was not scanned, and nothing is stored.
+        # Not a scanner defect (no `scan_failed` line): the request is answered 503 with
+        # Retry-After (`app._refuse_busy_scans`), and a retry is scanned in full.
+        raise
     except Exception as exc:
         # scan() can raise (the known case was CPython's integer-to-string
         # conversion limit inside html.unescape, since fixed at the source --
@@ -937,6 +943,10 @@ def patch(
             )
 
         if scanned is None or _digest(body) not in scanned:
+            # Scanned after the owner check, so inside this connection: a body over
+            # `scanslots.SMALL_PAGE` may wait here for a scan slot (at most
+            # `scanslots.WAIT_SECONDS`) with the connection open but idle, no transaction
+            # or lock held; when none frees, `ScanBusy` goes up as a 503.
             _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
             if scanned is not None:
                 scanned.add(_digest(body))

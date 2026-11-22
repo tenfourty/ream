@@ -67,6 +67,13 @@ MAX_QUESTION_BYTES = 500
 # itself, because "(a) <label>" needs to read at a glance.
 MAX_LABEL_BYTES = 200
 
+# An option may carry a preview of what choosing it looks like (a snippet of code or
+# markup, a short layout sketch), shown beside its button. It is the agent's text like
+# the label -- size-capped, secret-scanned, and always shown as text, never rendered as
+# markup -- and small: a glance at each choice, not a page.
+MAX_PREVIEW_BYTES = 1_000
+MAX_PREVIEW_LINES = 15
+
 # Jeremy's note travels back to the agent as-is; it is a short aside ("go ahead, but
 # watch the disk"), not a reply. Small enough that answering never becomes its own
 # comment thread -- that already exists, on purpose, as a separate feature.
@@ -135,6 +142,7 @@ _COLUMNS = (
 # a column leaves both alone; inserting one before them moves them.
 _SESSION_IDX = 17
 _KIND_IDX = 18
+_ANSWER_SOURCE_IDX = 14
 _REVIEW_MODE_IDX = 19
 _ASKED_BY_IDX = 34
 
@@ -260,9 +268,9 @@ class RoundRow:
 
 
 class TapStands(Exception):
-    """An app's relay on a question he already answered with his own tap. The tap
-    stands; he can answer again on the page if he changed his mind. `row` is the
-    question as it stands."""
+    """An app's relay, or a press in Slack, on a question he already answered with
+    his own tap. The tap stands; he can answer again on the page if he changed his
+    mind. `row` is the question as it stands."""
 
     def __init__(self, row: "DecisionRow") -> None:
         super().__init__("answer")
@@ -311,16 +319,20 @@ def _validate_options(options: object) -> tuple[list[dict], set[str]]:
     it uses, so `ask` can check `recommended` against exactly what was just validated
     rather than re-deriving it. Raises `InvalidOptions` for anything that doesn't
     match: not a list, too few or too many entries, an entry that isn't a dict with
-    exactly `letter` and `label`, a `letter` that isn't one lowercase ASCII character,
-    a `letter` repeated within the same decision, or a `label` that is empty or over
-    `MAX_LABEL_BYTES`."""
+    `letter` and `label` (and optionally `preview`), a `letter` that isn't one
+    lowercase ASCII character, a `letter` repeated within the same decision, a `label`
+    that is empty or over `MAX_LABEL_BYTES`, or a `preview` that is not a non-empty
+    string within `MAX_PREVIEW_BYTES` and `MAX_PREVIEW_LINES`."""
     if not isinstance(options, list) or not (2 <= len(options) <= MAX_OPTIONS):
         raise InvalidOptions()
 
     validated: list[dict] = []
     letters: set[str] = set()
     for option in options:
-        if not isinstance(option, dict) or option.keys() != {"letter", "label"}:
+        if not isinstance(option, dict) or option.keys() not in (
+            {"letter", "label"},
+            {"letter", "label", "preview"},
+        ):
             raise InvalidOptions()
         letter, label = option["letter"], option["label"]
         if not (isinstance(letter, str) and len(letter) == 1 and "a" <= letter <= "z"):
@@ -342,8 +354,25 @@ def _validate_options(options: object) -> tuple[list[dict], set[str]]:
         if label_size > MAX_LABEL_BYTES:
             raise InvalidOptions()
         letters.add(letter)
-        validated.append({"letter": letter, "label": label})
+        clean = {"letter": letter, "label": label}
+        if "preview" in option:
+            clean["preview"] = _validate_preview(option["preview"])
+        validated.append(clean)
     return validated, letters
+
+
+def _validate_preview(preview: object) -> str:
+    """An option's preview: a non-empty string of at most `MAX_PREVIEW_BYTES` bytes
+    and `MAX_PREVIEW_LINES` lines, or `InvalidOptions` (naming only the field)."""
+    if not isinstance(preview, str) or not preview.strip():
+        raise InvalidOptions()
+    try:
+        size = len(preview.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise InvalidOptions() from exc
+    if size > MAX_PREVIEW_BYTES or len(preview.splitlines()) > MAX_PREVIEW_LINES:
+        raise InvalidOptions()
+    return preview
 
 
 URGENCIES = ("blocking", "by", "when_you_can")
@@ -745,6 +774,10 @@ def ask(
             store._check_secrets(
                 option["label"], "options", agent=agent, artifact_id=artifact_id
             )
+            if "preview" in option:
+                store._check_secrets(
+                    option["preview"], "options", agent=agent, artifact_id=artifact_id
+                )
         for value, name in (
             (fields.context, "context"),
             (fields.blocked_on, "blocked_on"),
@@ -1168,13 +1201,13 @@ CORE_SOURCES = ("page", *ANSWER_SOURCES, MCP_SOURCE)
 # Sources a plug-in writes, registered at import time (core-and-plugins design,
 # section 5). A stored value is data, not code: a row whose source is not
 # registered (its plug-in is absent) still reads, shown by its raw value.
-# 'slack' is declared here, in core, until the Slack plug-in moves out (slice 6):
-# it is stored by the partner bridge, inbound, but is NOT in ANSWER_SOURCES, because
-# a relay is an agent's word and 'slack' means quarterdeck verified who pressed.
-# Only `answer(..., source='slack')`, called from partner_in, writes it.
+# 'slack' is declared here, in core, so a 'slack' answer is stored and labelled with
+# no plug-in loaded. It is NOT in ANSWER_SOURCES, because a relay is an agent's word
+# and 'slack' means the press was verified: only `answer(..., source='slack')` writes
+# it, from core's partner_in or from the one plug-in that registered it (API 1.5).
 _REGISTERED: list[str] = ["slack"]
 # A source's human label, for wording ("Open in Slack"). One without a label shows
-# its raw value. 'slack' is labelled here until the Slack plug-in moves out.
+# its raw value. 'slack' is labelled here; the plug-in that registers it may reword it.
 _LABELS: dict[str, str] = {"slack": "Slack"}
 
 # What a plug-in's source adds beyond a label (plugin_api.answer_source): whether an
@@ -1183,10 +1216,11 @@ _RELAY: list[str] = []
 _VERIFIED_LABELS: dict[str, str] = {}
 _ROUTE_LABELS: dict[str, str] = {}
 
-# Names no plug-in may register: 'slack' means quarterdeck verified who pressed, and
-# core's partner bridge alone stores it; a plug-in taking it with relay=True would let
-# an agent key record answers stamped as Slack-verified.
-_RESERVED_SOURCES = ("page", "slack", "mcp")
+# Names no plug-in may register.
+_RESERVED_SOURCES = ("page", "mcp")
+# Names a plug-in may register but never with relay=True: 'slack' means the press was
+# verified, and a relay would let an agent key record answers stamped as Slack-verified.
+_NEVER_RELAYED = ("slack",)
 
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
@@ -1203,13 +1237,16 @@ def register_source(
     (a source without one shows its raw value). Idempotent; a core source or a
     name that is not lower-case letters, digits and hyphens (at most 32) is refused, so
     a plug-in can neither shadow 'page' nor store something the gallery would have to
-    take apart to show. `relay=True` lets an agent record it (`relay_sources()`);
+    take apart to show. `relay=True` lets an agent record it (`relay_sources()`), and
+    is refused for 'slack', which an agent may never record;
     `verified_label` and `route_label` are read back with `verified_label_of` and
     `route_label_of`."""
     if not isinstance(name, str) or not _SOURCE_NAME.match(name):
         raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
     if name in CORE_SOURCES or name in _RESERVED_SOURCES:
         raise ValueError(f"answer source {name!r} is core's")
+    if relay and name in _NEVER_RELAYED:
+        raise ValueError(f"answer source {name!r} may not be relayed by an agent")
     if label is not None:
         if not isinstance(label, str) or not label.strip() or len(label) > 40:
             raise ValueError(f"answer source {name!r}: a label is 1-40 characters")
@@ -1861,7 +1898,11 @@ def record_elsewhere(
                 ).fetchone()
                 if current is None or _set_aside_fields(current)["set_aside"]:
                     raise store.NotFound()
-                if by_app and current[_KIND_IDX] != "review" and current[14] == "page":
+                if (
+                    by_app
+                    and current[_KIND_IDX] != "review"
+                    and current[_ANSWER_SOURCE_IDX] == "page"
+                ):
                     raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)
             # A new human act: what was declared about an earlier answer (or before
@@ -1982,6 +2023,12 @@ def answer(
     if source != "page" and source not in _REGISTERED:
         raise InvalidSource(source)
     require_stored_source(source)
+    # An inbound answer names the party that vouched for it; his own tap has none,
+    # so a stored `recorded_by` always means "not tapped on the page".
+    if source != "page" and not recorded_by:
+        raise InvalidSource("an inbound answer must name who vouched for it")
+    if source == "page" and recorded_by is not None:
+        raise InvalidSource("a page answer takes no recorded_by")
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
     emissions: list[events.Emission] = []
@@ -2060,11 +2107,19 @@ def answer(
             # first verdict. A second writer waits on the row lock, re-tests
             # and updates nothing.
             answered_at = datetime.now(UTC)
+            # A press in Slack never replaces his own tap on the page (the rule
+            # `record_elsewhere` holds an app's relay to); tested in the write, so
+            # a tap landing between the read above and here still stands.
+            keep_tap = (
+                " and (answer_source is null or answer_source <> 'page')"
+                if source == "slack"
+                else ""
+            )
             written = conn.execute(
-                "update decision set answer = %s, answer_note = %s, answered_at = %s,"
+                "update decision set answer = %s, answer_note = %s, answered_at = %s,"  # noqa: S608 -- fixed text, no caller input
                 " answered_by = %s, answer_source = %s, recorded_by = %s,"
                 " said_at = null where id = %s and closed_at is null"
-                " and (kind <> 'review' or answer is null)"
+                " and (kind <> 'review' or answer is null)" + keep_tap +
                 # The page must still be live AT THE WRITE: the set-aside check
                 # above read the row before this transaction, and an archive in
                 # between must not let an answer land on a parked question.
@@ -2087,6 +2142,12 @@ def answer(
                     # Closed (withdrawn, or replaced) between the read above
                     # and this write: answered exactly as a closed decision is.
                     raise store.NotFound()
+                if (
+                    source == "slack"
+                    and current[_KIND_IDX] != "review"
+                    and current[_ANSWER_SOURCE_IDX] == "page"
+                ):
+                    raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)
             # A new human act: what was declared about an earlier answer (or before
             # any) is history, and the acknowledgement reads as new again.
@@ -2155,7 +2216,7 @@ def answer(
             )
             # The journal row and the nudge, as one event. The nudge fires after the
             # commit (below): it must never be mistaken for an answer that failed
-            # (nudge.py's docstring), and the journal row must be durable before any
+            # (a raising after-commit sink is a log line, sinks.deliver_late), and the journal row must be durable before any
             # other agent is told to go read it. HIS WORDS TRAVEL WITH IT: `note` on
             # the journal (the feed would say only "a: Yes" otherwise) and in the
             # mailbox (homelab-873), with the recommendation, because a letter that
@@ -2747,6 +2808,9 @@ _SLOT_IN_BODY = re.compile(
 )
 
 
+_SLOT_CHUNK = 500  # bound values per query, well under any driver's limit
+
+
 def unresolved_slots(
     db: Database, artifact_id: str, body: str
 ) -> list[tuple[str, int]]:
@@ -2786,13 +2850,19 @@ def unresolved_slots(
             first[slot] = line
     if not first:
         return []
+    real: set[str] = set()
+    ids = list(first)
     with db.connect() as conn:
-        rows = conn.execute(
-            "select id from decision where artifact_id = %s"  # noqa: S608 -- placeholders only
-            f" and id in {in_list(first)}",
-            (artifact_id, *first),
-        ).fetchall()
-    real = {r[0] for r in rows}
+        # In chunks: one `in` list of every slot id passes a driver's limit on bound
+        # values (SQLite 32766, Postgres 65535) on a page of very many slots.
+        for at in range(0, len(ids), _SLOT_CHUNK):
+            chunk = ids[at : at + _SLOT_CHUNK]
+            rows = conn.execute(
+                "select id from decision where artifact_id = %s"  # noqa: S608 -- placeholders only
+                f" and id in {in_list(chunk)}",
+                (artifact_id, *chunk),
+            ).fetchall()
+            real.update(r[0] for r in rows)
     return [(slot, line) for slot, line in first.items() if slot not in real]
 
 

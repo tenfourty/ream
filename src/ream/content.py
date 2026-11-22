@@ -20,6 +20,7 @@ from ream import (
     image_store,
     mail,
     pagediff,
+    pageframe,
     stamp,
     store,
     templates,
@@ -33,7 +34,7 @@ from ream.text import LEADING_DOCTYPE as _LEADING_DOCTYPE
 
 _BASE_CSP = (
     "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-    "script-src 'self' 'unsafe-inline'; font-src 'self'; form-action 'none'; "
+    "script-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; "
     "base-uri 'none'; worker-src 'none'; webrtc 'block'; "
 )
 
@@ -417,6 +418,11 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
       brings back the second scrollbar this is here to remove. A page wider than its
       frame adds its horizontal scrollbar's thickness for the same reason (10 Oct 2026:
       a 1060px image in a 1085px frame left an inner scrollbar the frame's full height).
+    - `frame`: `"viewport"` when the page declares `<meta name="ream-frame"
+      content="viewport">` (`pageframe`), else `"content"`. Read from the DOM on every
+      report, so a page that adds or removes the tag while it runs is followed. The
+      gallery then keeps the frame at the window's height and ignores `height`; the
+      page can affect nothing but its own frame, which it sizes already.
     - `slots`: the page-coordinate rectangle (id, top, left, width) of every element the
       agent marked with `data-artifact-decision="<id>"` -- never the element's own
       contents. What a reported id is even allowed to mean is entirely the gallery's
@@ -430,6 +436,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
     assigned.
     """
     origin = json.dumps(gallery_origin())
+    frame_meta = json.dumps(f'meta[name="{pageframe.META_NAME}" i]')
     return (
         "<script>try{(function(){"
         + _missing_notes(missing)
@@ -446,8 +453,13 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "x=Math.max(0,(window.innerHeight||0)-d.clientHeight)}catch(e){}"
         "return Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,"
         "b.getBoundingClientRect().bottom+scrollY)+m+x)}"
+        # `frame`: the page's own declaration (pageframe), checked on every report.
+        f"function fm(){{try{{var m=document.querySelector({frame_meta});"
+        'if(m&&String(m.getAttribute("content")||"").trim().toLowerCase()==='
+        f"{json.dumps(pageframe.VIEWPORT)})return {json.dumps(pageframe.VIEWPORT)}}}catch(e){{}}"
+        f"return {json.dumps(pageframe.CONTENT)}}}"
         'function send(){parent.postMessage({type:"artifact-state",'
-        "height:h(),"
+        "height:h(),frame:fm(),"
         # `wide`: the page is wider than its frame. The gallery then leaves the frame
         # able to scroll, because turning scrolling off would cut the right of the
         # page off with no way to reach it (runcove-5t3oj.62).

@@ -261,3 +261,17 @@ def test_the_line_of_each_slot_is_where_it_first_appears_on_a_long_page(db):
     for slot, line in found.items():
         assert f"'{slot}'" in lines[line - 1]
         assert not any(f"'{slot}'" in earlier for earlier in lines[: line - 1])
+
+
+def test_a_page_of_very_many_slots_is_checked_in_bounded_queries(db):
+    """One `in` list of every distinct slot id broke past a driver's limit on bound
+    values (Postgres 65535): the check is made in chunks, and a real decision among
+    the last of them still resolves."""
+    art = store.publish(db, "ops-seat", "Board", page())
+    real = _ask(db, art.id)
+    slots = [f"slot-{n}" for n in range(70000)] + [real]
+    body = "<!doctype html>\n" + "".join(
+        f"<div data-artifact-decision='{slot}'></div>\n" for slot in slots
+    )
+    found = decisions.unresolved_slots(db, art.id, body)
+    assert [slot for slot, _line in found] == slots[:-1]

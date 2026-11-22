@@ -2832,6 +2832,14 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   the house plug-in's mail backend sends all mail, and with none registered mail is off, as on a fresh
   install. A deployment that still sets `REAM_MAILGUN_*` or `REAM_MAIL_FROM` starts, with one warning
   if no backend is loaded. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9b.
+- **The doorbell leaves the core (15 Nov 2026, step 9d of core-and-plugins, second half; branch
+  `ci/9d-core-doorbell-out`, held off `main` until one real ring through the plug-in is seen in
+  production).** Core no longer carries its own doorbell (`nudge.py`, its `nudge` sink with the
+  stand-down check, and the `nudge_*` settings are deleted): the house plug-in's after-commit sink
+  `doorbell` rings, and with none registered nothing rings (every event still reaches its agent
+  through the journal). Core keeps what the sink reads: the event, with `nudge_note` in `data`. A
+  deployment that still sets `REAM_NUDGE_*` starts, with one warning if no `doorbell` sink is loaded.
+  Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9d.
 - **Receipts slice 2: the decision strip in the gallery (11 Nov 2026; branch `ci/receipts-slice2`).**
   A settled decision's card shows the agent's current receipt in place of the pickup line: "Working,
   cove, cove/lane-3. note", "Answered, ... note" with its link, "Blocked", "Won't do", each with a
@@ -2841,3 +2849,19 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   serves the page and the API's `receipt.lapsed`; `current_map` and `history` take `now`. Wording in
   `listening.RECEIPT_WORDING` (`receipt_line`); a clean place is left for slice 3's "told in Slack" line.
   Spec §7 slice 2. Live proof on his phone is still to do after deploy.
+- **The inbound half stands down behind its own switch (17 Nov 2026, step 9e-4 of core-and-plugins, C1,
+  core's half; branch `ci/9e4-inbound-standdown`, not on `main`).** A second `service_meta` key,
+  `partner_inbound_owner` (absent means core; no schema step), which every inbound writer in core locks
+  first and writes under only while core holds it. Once a plug-in claims it (`partner.claim_inbound`,
+  `hand_over_inbound`, `release_inbound`): core's partner endpoint answers 503 `stood_down` with
+  `Retry-After`, his answer on a partner-home copy is "not mine" in core, core's stage refuses to write
+  core's outbox (503 with `Retry-After`, or one line from `artifacts-admin`, never a traceback), and
+  `release_bridge` is refused until inbound is released. The per-question version counter stays in
+  core's column: the plug-in takes every version from `partner.next_version` and keeps none of its own. Plug-in API 1.5: one plug-in
+  may register the `slack` answer source (never as a relay), may mount a route on the partner inbound
+  host (served only while the key names it), and `Copy` lives in `readside`. `decisions.answer` now
+  demands `recorded_by` for an inbound source and refuses it for a page answer, and a Slack press never
+  replaces his own page tap. `artifacts-admin purge-deleted` loads the plug-ins. Built: C1 (core). Still
+  to do: C2 (core deletes `partner.py` and `partner_in.py`, after production has run claimed) and P1 (the
+  house plug-in's inbound half, in `ream-homelab`). Ledger: `specs/2026-11-04-core-and-plugins-design.md`,
+  step 9e-4.

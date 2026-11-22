@@ -357,7 +357,7 @@ while True:
     method, sid, params = msg["method"], msg.get("sessionId"), msg.get("params", {})
     note(method=method, session=sid, params=params)
     result, events = {}, []
-    if method in cfg.get("refuse", []):
+    if method in cfg.get("refuse", []) and sid in cfg.get("refuse_in", [sid]):
         out({"id": msg["id"], "error": {"code": -32000, "message": "no"}, "sessionId": sid})
         continue
     if method == "Target.createTarget":
@@ -380,8 +380,25 @@ while True:
                        "params": {}})
     elif method == "Page.getFrameTree":
         result = {"frameTree": {"frame": {"id": "F1"}}}
+        if cfg.get("iframe_at_frames") and not cfg.get("iframe_sent"):
+            # A frame of the page's attached just as the frame wait starts (once).
+            cfg["iframe_sent"] = True
+            events.append({"method": "Target.attachedToTarget", "sessionId": "S1", "params": {
+                "sessionId": "S2", "targetInfo": {"targetId": "I1", "type": "iframe"},
+                "waitingForDebugger": True}})
     elif method == "Page.createIsolatedWorld":
-        result = {"executionContextId": 7}
+        result = {"executionContextId": 8 if params.get("worldName") == "ream-frames" else 7}
+    elif method == "Runtime.evaluate" and params.get("expression") == cfg["frames_js"]:
+        # The frame wait (`rendercore._await_frames`): never answered, or refused.
+        if mode == "frames_stall":
+            continue
+        if mode == "frames_refused":
+            out({"id": msg["id"], "error": {"code": -32000, "message": "destroyed"},
+                 "sessionId": sid})
+            continue
+        if mode == "stall":
+            time.sleep(60)
+        result = {"result": {"type": "boolean", "value": True}}
     elif method == "Runtime.evaluate":
         if mode == "stall":
             time.sleep(60)
@@ -414,7 +431,13 @@ def fake(tmp_path):
         cfg_path = tmp_path / f"fake{n}.json"
         log = tmp_path / f"fake{n}.log"
         found = {"n": -1, "ph": 1500, "vw": 1280}
-        cfg = {"mode": mode, "log": str(log), "found": found, **config}
+        cfg = {
+            "mode": mode,
+            "log": str(log),
+            "found": found,
+            "frames_js": rendercore._FRAMES_JS,
+            **config,
+        }
         cfg_path.write_text(json.dumps(cfg))
         script = tmp_path / f"fake{n}.py"
         script.write_text(FAKE.replace("__CONFIG__", repr(str(cfg_path))))
@@ -571,9 +594,53 @@ def test_the_parts_are_found_in_a_world_of_their_own(fake):
     binary, read = fake(found={"n": 1, "ph": 900, "vw": 1280, "box": {}})
     rendercore.shoot(binary, PAGE, renderwire.shot_request(element="x"))
     lines = read()
-    evaluate = next(line for line in lines if line.get("method") == "Runtime.evaluate")
+    evaluates = [line for line in lines if line.get("method") == "Runtime.evaluate"]
+    frames = [
+        e for e in evaluates if e["params"]["expression"] == rendercore._FRAMES_JS
+    ]
+    evaluate = next(
+        e for e in evaluates if e["params"]["expression"] != rendercore._FRAMES_JS
+    )
     assert evaluate["params"]["contextId"] == 7
     assert evaluate["params"]["expression"].endswith('("x", null)')
+    # The frame wait ran first, once, in its own world, never the page's.
+    assert len(frames) == 1 and evaluates.index(frames[0]) < evaluates.index(evaluate)
+    assert frames[0]["params"]["contextId"] == 8
+    assert frames[0]["params"]["awaitPromise"] is True
+    worlds = [
+        line["params"]["worldName"]
+        for line in lines
+        if line.get("method") == "Page.createIsolatedWorld"
+    ]
+    assert worlds == ["ream-frames", "ream-shot"]
+
+
+@pytest.mark.parametrize("mode", ["frames_stall", "frames_refused"])
+def test_a_frame_wait_that_fails_still_takes_the_picture(fake, monkeypatch, mode):
+    """The frame wait is best effort: unanswered within its bound, or refused (a
+    page that navigates destroys the world), the picture is taken all the same."""
+    monkeypatch.setattr(rendercore, "FRAMES_REAL_SECONDS", 0.3)
+    binary, read = fake(mode)
+    started = time.monotonic()
+    shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
+    assert shot.outcome == "shot", shot
+    assert time.monotonic() - started < 10
+    assert "Page.captureScreenshot" in methods(read())
+
+
+def test_a_checked_commands_error_during_the_frame_wait_still_fails_the_shot(fake):
+    """Only the frame wait's own refusals are let go: a frame of the page that
+    attaches as the wait starts and cannot be taken offline fails the shot, its
+    error read inside the wait."""
+    binary, read = fake(
+        iframe_at_frames=True,
+        refuse=["Network.emulateNetworkConditions"],
+        refuse_in=["S2"],
+    )
+    assert rendercore.shoot(binary, PAGE, renderwire.shot_request()).outcome == "failed"
+    lines = read()
+    assert "Network.emulateNetworkConditions" in methods(lines, "S2")
+    assert "Page.captureScreenshot" not in methods(lines)
 
 
 @pytest.mark.parametrize(
@@ -601,6 +668,22 @@ def test_a_tall_page_is_cut_and_says_so(fake):
     binary, _ = fake(found={"n": -1, "ph": 12345, "vw": 1280})
     shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
     assert (shot.height, shot.page_height, shot.truncated) == (8000, 12345, True)
+
+
+def test_a_window_high_page_is_shot_one_window_high_without_growing_it(fake):
+    """16 Nov 2026: a page that declares `<meta name="ream-frame" content="viewport">`
+    sizes itself from the window, so a taller clip with `captureBeyondViewport` would
+    resize the window and the page with it. It is shot as its frame shows it."""
+    binary, read = fake(found={"n": -1, "ph": 2400, "vw": 1280, "vp": True})
+    shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
+    assert shot.outcome == "shot", shot
+    assert (shot.width, shot.height, shot.page_height) == (1280, 800, 2400)
+    assert shot.truncated is True
+    capture = next(
+        line for line in read() if line.get("method") == "Page.captureScreenshot"
+    )
+    assert capture["params"]["clip"]["height"] == 800
+    assert capture["params"]["captureBeyondViewport"] is False
 
 
 @pytest.mark.parametrize(
@@ -907,6 +990,28 @@ def test_the_theme_is_the_pages_own_dark_or_light():
 def test_a_real_selector_that_picks_no_one_part(request_, outcome, matches):
     shot = rendercore.shoot(rendercore.browser_path(), real_page(), request_)
     assert (shot.outcome, shot.matches) == (outcome, matches)
+
+
+@needs_browser
+@pytest.mark.parametrize("value", ["viewport", " VIEWPORT ", "\tViewport\n"])
+def test_a_real_window_high_page_is_shot_one_window_high(value):
+    """The page makes its body three windows high from `innerHeight`, as the page
+    that fed the frame back did: the picture is one window and says more is below,
+    and the window it measured was never grown to take the rest. The value is read
+    as the shim reads it, without case or surrounding white space (`pageframe`)."""
+    page = (
+        f'<!doctype html><html><head><meta name="ream-frame" content="{value}">'
+        "<style>body{margin:0;background:#00f}</style></head><body>"
+        '<script>document.body.style.height=(innerHeight*3)+"px"</script>'
+        "</body></html>"
+    )
+    shot = rendercore.shoot(rendercore.browser_path(), page, renderwire.shot_request())
+    assert shot.outcome == "shot", shot
+    viewport = renderwire.SHOT_VIEWPORTS[1280]
+    assert (shot.width, shot.height) == (1280, viewport)
+    assert shot.page_height == viewport * 3
+    assert shot.truncated is True
+    renderwire.validate_png(shot.png, shot.width, shot.height)
 
 
 @needs_browser

@@ -467,7 +467,7 @@ reach and behave exactly as before.
 
 | Consent box | OAuth scope | Tools it allows |
 |---|---|---|
-| Read pages, comments and questions | `ream:read` | `whoami`, `list_pages`, `read_page`, `get_template`, `comments`, `questions`, `whats_new`; every resource and prompt |
+| Read pages, comments and questions | `ream:read` | `whoami`, `list_pages`, `read_page`, `get_template`, `comments`, `questions`, `whats_new`, `wait_for_answer`; every resource and prompt |
 | Publish, comment and ask | `ream:write` | `publish_page`, `update_page`, `organise_page`, `delete_page`, `comment`, `ask`, `close_question` |
 | Pass on your answers | `ream:relay` | `record_answer` |
 
@@ -498,6 +498,7 @@ over HTTP; secret scanning, size limits and events are therefore the same. Annot
 | `record_answer` | pass on an answer the person gave in the chat | `POST /decisions/{id}/record` |
 | `close_question` | withdraw a question it asked | `POST /decisions/{id}/close` |
 | `whats_new` | answers, comments and changes since it last looked | `GET /events` |
+| `wait_for_answer` | `whats_new` that holds until something lands, at most 50 s (added 16 Nov 2026, `docs/mcp.md`) | `GET /events?wait=` |
 
 `whats_new` keeps its cursor on the server (`mcp_app.events_seen`; for a key, a small per-key row),
 because a chat does not remember one: it is the stand-in for a nudge, which Claude.ai cannot

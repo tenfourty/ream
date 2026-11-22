@@ -170,7 +170,7 @@ alter table decision add column if not exists acknowledged_by text;
 -- never reset, which is what lets `?since=<seq>` be a cursor an agent keeps
 -- rather than a timestamp two events could tie on. This table is read from
 -- ANYWHERE with a key (`GET /api/v1/events`); the push to the operator's inbox
--- (`nudge.py`) is only an optimisation layered on top -- if it never fires,
+-- (a doorbell plug-in) is only an optimisation layered on top -- if it never fires,
 -- `?since=` still delivers everything.
 --
 -- All three `kind`s the design names are enumerated in the CHECK below even

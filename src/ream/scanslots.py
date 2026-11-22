@@ -1,9 +1,12 @@
 """How many scans of a large page one server process runs at once.
 
-Reading a large page (the publish checks, the render findings, the readers of its markup
-for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds
-(`renderfind.SCAN_SECONDS`). One request thread each, a handful of them at once add up,
-and the service is one process under one memory limit. So a scan of a page over
+Reading a large page (the secret scan, the publish checks, the render findings, the readers
+of its markup for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds of the
+thread's CPU time (`renderfind.SCAN_SECONDS`; a scan that waits is stopped by the wall-time
+backstop, `htmlbound.WALL_FACTOR` times that, so ten seconds). That is per budget: the
+publish checks (`api.page_warnings`) hold one slot across two budgets (the shared
+`renderfind.Budget` and `forms`'), so up to about twice that. One request thread each, a
+handful of them at once add up, and the service is one process under one memory limit. So a scan of a page over
 `SMALL_PAGE` characters takes a slot first: `REAM_SCAN_SLOTS` of them (default 4, read at
 every scan through `settings.current()`). When all are taken it waits up to
 `WAIT_SECONDS`, then raises `ScanBusy`, never waiting for good. What a caller does with
@@ -12,14 +15,26 @@ every scan through `settings.current()`). When all are taken it waits up to
 * the publish checks (`api.page_warnings`) answer the warnings that say they did not run;
 * the render findings (`thumbs.scan_for_findings`) leave the page unread, which `assess`
   turns into the verdict `unchecked`;
+* the comment listings (`comments._pin_states`) leave the page unread, and its pins come
+  back with no state, as for a page too large to search: the listing still answers;
+* the state told in the reply to a comment written (`comments.with_state`) is the same
+  read: the comment is saved and answered 201, its pin state unknown, and a retry with
+  the same idempotency key replays that answer;
 * the readers that a request needs the answer of (forms on publish and update, sections,
-  the text and the headings behind a comment or a pin) let it go up: the two apps answer
-  503 with `Retry-After` (`app._refuse_busy_scans`), and an MCP tool answers an error.
+  the text and the headings that a comment's quote or a pin is checked against before it
+  is saved) let it go up: the two apps answer 503 with `Retry-After`
+  (`app._refuse_busy_scans`), and an MCP tool answers an error;
+* the secret scan (`scan.scan`, through `store._check_secrets`) is one of those: a body it
+  could not scan (no slot in time, or the scan itself ran past `scan.SCAN_WALL_SECONDS` of
+  wall clock, `scan.ScanTimeout`) is never stored, the request answers 503 as above, and it is not counted
+  as a scanner failure. On an update it waits after the page's owner is checked, with that
+  request's database connection open (no transaction, no lock held).
 
 A thread that already holds a slot takes no second one, so a scan made of smaller scans
 (the publish checks read forms inside theirs) never waits on itself. A slot is held only
-across work that waits on nothing else, never across a database or network call, so it is
-always given back within the scan's own time. Standard library and `settings` only: the
+across work that waits on nothing else, never across a database or network call. Where the
+work runs under a budget, the slot is given back within that budget's bound: its limit in CPU
+time, and at the latest the wall-time backstop. Standard library and `settings` only: the
 command-line tools import the readers that call it.
 """
 
@@ -38,6 +53,7 @@ SMALL_PAGE = 256 * 1024
 WAIT_SECONDS = 5.0
 RETRY_AFTER_SECONDS = 5
 BUSY = "the server is busy reading other pages: try again in a few seconds"
+TIMED_OUT = "the page took too long to scan: try again shortly"
 
 
 class ScanBusy(Exception):
@@ -45,8 +61,8 @@ class ScanBusy(Exception):
 
     retry_after = RETRY_AFTER_SECONDS
 
-    def __init__(self) -> None:
-        super().__init__(BUSY)
+    def __init__(self, message: str = BUSY) -> None:
+        super().__init__(message)
 
 
 class _Mine(threading.local):

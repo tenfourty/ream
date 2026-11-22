@@ -49,7 +49,7 @@ import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
-from ream import devtools, renderfind, renderwire, settings
+from ream import devtools, pageframe, renderfind, renderwire, settings
 from ream.renderwire import Report
 
 # The logger keeps the name it had in thumbs.py, so the log reads as before.
@@ -277,6 +277,12 @@ def _isolation_flags() -> list[str]:
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-features=NetworkService,NetworkServiceInProcess",
+        # HTML-in-Canvas (`<canvas layoutsubtree>`, `ctx.drawElementImage`): behind a
+        # flag in Chromium 147-156 (chrome://flags/#canvas-draw-element), on by default
+        # from 157. Without it such a page's canvas is blank in the picture. Passing it
+        # where it is already on does nothing, and a build that does not know the name
+        # ignores it. tests/test_canvas_html.py
+        "--enable-blink-features=CanvasDrawElement",
         *_NO_REACH_FLAGS,
     ]
 
@@ -467,6 +473,13 @@ SHOT_SLOT_WAIT_SECONDS = 5
 # a render's (`_load`); and at most this much real time is given to it.
 SHOT_SETTLE_VIRTUAL_MS = 3000
 SHOT_SETTLE_REAL_SECONDS = 6.0
+# After the settle, at most this much real time waits for the page's next two
+# frames before the picture (`_await_frames`); about 33 ms at 60 frames a second.
+FRAMES_REAL_SECONDS = 2.0
+_FRAMES_JS = (
+    "new Promise(function(done){requestAnimationFrame(function(){"
+    "requestAnimationFrame(function(){done(true)})})})"
+)
 # The longest message read from the browser: the picture's answer, base64, with room.
 SHOT_MESSAGE_MAX_BYTES = renderwire.SHOT_PNG_BASE64_MAX_CHARS + 64 * 1024
 # The browser reads its commands on fd 3 and writes on fd 4. A child cannot be
@@ -480,27 +493,33 @@ _PIPE_SHIM = 'exec 3<&0 4>&1 </dev/null >/dev/null && exec "$0" "$@"'
 # so a page cannot change how its parts are found. The whole page's size, and the
 # box of the element (by id) or the section (by its heading's folded words, to the
 # next heading of the same rank or higher, as the pin script's `peers` reads one).
+# `vp`: the page declares a window-high frame (`pageframe`), as the shim reads it.
 _RESOLVE_JS = r"""(function(el, sec){
 var d=document,de=d.documentElement,b=d.body,i,n=0,hit=null,hs,lv,end=null,h,r,t,top,bot;
 scrollTo(0,0);
 var ph=Math.max(de.scrollHeight,b?b.scrollHeight:0,de.clientHeight);
 var vw=de.clientWidth||innerWidth;
+var fm=d.querySelector(__FRAME_META__),vp=!!fm&&String(fm.getAttribute("content")||"").trim().toLowerCase()===__VIEWPORT__;
 function box(r){return{x:r.left+scrollX,y:r.top+scrollY,w:r.width,h:r.height}}
 if(el!==null){var l=d.querySelectorAll('[id="'+CSS.escape(el)+'"]');
-  if(l.length!==1)return{n:l.length,ph:ph,vw:vw};
-  return{n:1,ph:ph,vw:vw,box:box(l[0].getBoundingClientRect())}}
+  if(l.length!==1)return{n:l.length,ph:ph,vw:vw,vp:vp};
+  return{n:1,ph:ph,vw:vw,vp:vp,box:box(l[0].getBoundingClientRect())}}
 if(sec!==null){hs=d.querySelectorAll("h1,h2,h3,h4,h5,h6");
   for(i=0;i<hs.length;i++){t=(hs[i].textContent||"").replace(/__SPACE__+/g," ").trim().toLowerCase();
     if(t===sec){n++;hit=hs[i]}}
-  if(n!==1)return{n:n,ph:ph,vw:vw};
+  if(n!==1)return{n:n,ph:ph,vw:vw,vp:vp};
   lv=+String(hit.nodeName).charAt(1);
   for(i=0;i<hs.length;i++){h=hs[i];
     if(h!==hit&&!hit.contains(h)&&(hit.compareDocumentPosition(h)&4)&&+String(h.nodeName).charAt(1)<=lv){end=h;break}}
   r=hit.getBoundingClientRect();top=r.top+scrollY;
   bot=end?end.getBoundingClientRect().top+scrollY:ph;
-  return{n:1,ph:ph,vw:vw,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
-return{n:-1,ph:ph,vw:vw}})"""
-_RESOLVE_JS = _RESOLVE_JS.replace("__SPACE__", renderwire.SHOT_SPACE_CLASS)
+  return{n:1,ph:ph,vw:vw,vp:vp,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
+return{n:-1,ph:ph,vw:vw,vp:vp}})"""
+_RESOLVE_JS = (
+    _RESOLVE_JS.replace("__SPACE__", renderwire.SHOT_SPACE_CLASS)
+    .replace("__FRAME_META__", json.dumps(f'meta[name="{pageframe.META_NAME}" i]'))
+    .replace("__VIEWPORT__", json.dumps(pageframe.VIEWPORT))
+)
 
 
 class _Watch:
@@ -544,6 +563,13 @@ def _shot_box(found: dict, request) -> tuple[int, int, int, int, bool] | str:
     n = found.get("n")
     if request.element is None and request.section is None:
         x, y, w, h = 0.0, 0.0, float(request.width), float(found["ph"])
+        if found.get("vp") is True:
+            # A page that asked for a window-high frame is shot as that frame shows
+            # it: one window high. A taller clip would resize its window, which is
+            # what such a page sizes itself from (`pageframe`). Below is cut, and
+            # `truncated` says so when there is more.
+            viewport = renderwire.SHOT_VIEWPORTS[request.width]
+            return (0, 0, int(request.width), viewport, h > viewport)
     elif n == 0:
         return "no_match"
     elif n != 1:
@@ -685,6 +711,61 @@ def _load(pipe: devtools.Pipe, session: str, page_url: str) -> None:
     )
     settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
     pipe.wait_for("Emulation.virtualTimeBudgetExpired", session, until=settle)
+    _await_frames(pipe, session)
+
+
+def _await_frames(pipe: devtools.Pipe, session: str) -> None:
+    """Hold the picture until the page has rendered two more frames, within
+    FRAMES_REAL_SECONDS of real time. The settle's virtual time runs on as fast as
+    the page is idle (3 s of it passed in under 10 ms of real time, measured on
+    Chromium 147), but frames come in real time: without this the picture can be
+    asked for before the frame that runs the page's pending rendering work, a
+    canvas's `paint` event (HTML-in-Canvas) among it. The second animation frame
+    starts only once the first frame's rendering is done. Asked in a world of its
+    own, so the page cannot answer for it.
+
+    Best effort: past the bound, or when the browser refuses one of these
+    commands (a page that navigates away destroys the world), the page is pictured
+    as it stands, as before. Only the pipe's own failures go on up: its deadline,
+    a message it cannot take, and a checked command's error (`_Offline`'s)."""
+    until = min(pipe.deadline, time.monotonic() + FRAMES_REAL_SECONDS)
+    try:
+        tree = pipe.call_until("Page.getFrameTree", session=session, until=until)
+        if tree is None:
+            log.info("picture taken without waiting for frames: no frame tree in time")
+            return
+        made = pipe.call_until(
+            "Page.createIsolatedWorld",
+            {
+                "frameId": tree["frameTree"]["frame"]["id"],
+                "worldName": "ream-frames",
+                "grantUniveralAccess": False,
+            },
+            session,
+            until=until,
+        )
+        if made is None:
+            log.info("picture taken without waiting for frames: no world in time")
+            return
+        answered = pipe.call_until(
+            "Runtime.evaluate",
+            {
+                "expression": _FRAMES_JS,
+                "contextId": made["executionContextId"],
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session,
+            until=until,
+        )
+    except devtools.Refused:
+        log.info("picture taken without waiting for frames: the browser refused")
+        return
+    except (KeyError, TypeError):
+        log.info("picture taken without waiting for frames: an answer had no id")
+        return
+    if answered is None:
+        log.info("picture taken without waiting for frames: none within the bound")
 
 
 def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
@@ -739,13 +820,18 @@ def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
             matches = min(int(n), renderwire.SHOT_MATCHES_MAX)
         return renderwire.Shot(box, matches=matches)
     x, y, width, height, truncated = box
+    # A window-high page's whole picture is the window: never let the browser grow
+    # the window to take it (`_shot_box`).
+    window_only = (
+        found.get("vp") is True and request.element is None and request.section is None
+    )
     try:
         taken = pipe.call(
             "Page.captureScreenshot",
             {
                 "format": "png",
                 "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
-                "captureBeyondViewport": True,
+                "captureBeyondViewport": not window_only,
                 "fromSurface": True,
             },
             session,

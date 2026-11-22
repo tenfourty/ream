@@ -5,12 +5,12 @@
 # a fresh copy of the same base image: uv and pip never exist in the image a
 # pod actually runs.
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS build
 
 # The pinned uv release itself, copied from astral's own image rather than
 # installed via pip/curl -- no interpreter needed to fetch it, and the pin
 # means the exact uv version is a `FROM` line, not a moving `latest`.
-COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.9@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff /uv /uvx /bin/
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy \
@@ -57,7 +57,7 @@ RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%
  && [ "$(ls /app/dist/ream-*-py3-none-any.whl | wc -l)" = 1 ] \
  && ls /app/dist
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 # The headless browser that draws a page's thumbnail for the gallery wall
 # (homelab-ij8.22). By default the browser runs inside the service; a deployment
@@ -78,9 +78,9 @@ FROM python:3.12-slim-bookworm
 # twenty-odd system libraries it needs, and the package keeps getting security
 # updates. `ream.thumbs` finds it on PATH, so nothing has to name the path.
 #
-# fonts-dejavu-core is not optional. The pages deliberately use no web fonts —
-# they ask for the reader's own sans, serif and mono — so a container with no
-# fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
+# fonts-dejavu-core is not optional. The shipped pages ask for the reader's own
+# sans, serif and mono (fonts from other sites are blocked; a page may embed its own as data:
+# URLs), so a container with no fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
 # A thumbnail will therefore not be letter-for-letter what Jeremy sees in his
 # own browser, which is inherent to rendering anywhere but on his machine.
 # The chromium layer is the slowest step (~2 min) and the biggest push (~70 s),

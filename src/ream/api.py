@@ -45,6 +45,7 @@ from ream import (
     connect,
     csp,
     decisions,
+    embeddedfonts,
     events,
     folders,
     formanswer,
@@ -783,12 +784,52 @@ _CHECKS_BUSY = (
 
 
 def _checks_not_run_busy() -> list[dict]:
-    """The two warnings a page gets when every scan slot stayed taken: the ones a page
-    too large for the checks gets (`csp.check`, `traps.check`), with the reason this time."""
+    """The three warnings a page gets when every scan slot stayed taken: the ones a page
+    too large for the checks gets (`csp.check`, `traps.check`, `embeddedfonts.check`),
+    with the reason this time."""
     return [
         csp.CspWarning(shape=shape, line=1, hint=_CHECKS_BUSY).__dict__
-        for shape in ("csp_checks_not_run", "trap_checks_not_run")
+        for shape in (
+            "csp_checks_not_run",
+            "trap_checks_not_run",
+            embeddedfonts.NOT_RUN_SHAPE,
+        )
     ]
+
+
+# Reading a large page in parts (GET .../body and .../versions/{n} with offset and limit;
+# MCP read_page). Counted in characters (Unicode code points) of the stored text, so a
+# cut never splits a character. The route returns the whole body unless asked for a
+# part; read_page returns at most READ_PART_DEFAULT characters unless given a limit.
+READ_PART_MAX = store.MAX_BODY_BYTES
+READ_PART_DEFAULT = 50_000
+
+
+class PastTheEnd(Exception):
+    """An offset beyond the end of the page's text."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__(f"offset is past the end of the page (its size is {size})")
+        self.size = size
+
+
+def body_part(body: str, offset: int = 0, limit: int | None = None) -> dict:
+    """`body` from `offset`, at most `limit` characters (None: to the end), with the
+    page's whole `size`, where the next part starts (`next_offset`, None at the end)
+    and `partial`: true unless this is the whole page. A part is never a body to update
+    the page with (its `revision` is the whole page's). An offset equal to the size is
+    an empty last part; past it, `PastTheEnd`."""
+    size = len(body)
+    if offset > size:
+        raise PastTheEnd(size)
+    end = size if limit is None else min(size, offset + limit)
+    return {
+        "body": body[offset:end],
+        "offset": offset,
+        "size": size,
+        "next_offset": end if end < size else None,
+        "partial": offset > 0 or end < size,
+    }
 
 
 def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
@@ -809,6 +850,7 @@ def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
                 csp.as_json(body, budget)
                 + traps.as_json(body, budget)
                 + forms.warnings(body)
+                + embeddedfonts.check(body, budget)
             )
     except scanslots.ScanBusy:
         out = _checks_not_run_busy()
@@ -1080,6 +1122,8 @@ def update_page_section(
         partchanges.in_background(db, published.id, published.version)
     return _saying_who_reads(
         {
+            # The page's id, so a reader (and the MCP fence) knows which page page_url is.
+            "id": published.id,
             "page_revision": published.revision,
             "section_revision": result.section_revision,
             "version": published.version,
@@ -1883,6 +1927,14 @@ def agent_router(
     SESSION_MAX = _SESSION_MAX
     session = declared_session
 
+    def _part_or_422(body: str, offset: int, limit: int | None) -> dict:
+        try:
+            return body_part(body, offset, limit)
+        except PastTheEnd as exc:
+            raise HTTPException(
+                422, {"field": "offset", "detail": str(exc), "size": exc.size}
+            ) from None
+
     def _warnings_for(artifact_id: str, body: str) -> list[dict]:
         return page_warnings(db, artifact_id, body)
 
@@ -2212,7 +2264,12 @@ def agent_router(
             raise HTTPException(404, "no such page") from exc
 
     @router.get("/artifacts/{artifact_id}/body")
-    def read_body(artifact_id: str, agent: str = Depends(caller)):
+    def read_body(
+        artifact_id: str,
+        agent: str = Depends(caller),
+        offset: int = Query(0, ge=0),
+        limit: int | None = Query(None, ge=1, le=READ_PART_MAX),
+    ):
         """The publisher reads back what it published.
 
         The rendered page is unreachable to its own author by design (framed
@@ -2220,14 +2277,17 @@ def agent_router(
         an agent has: it proves what is stored, not what a browser makes of
         it. `warnings` repeats the CSP advisory for the stored body, so a page
         published before that check existed still reports its own problems.
+        `offset` and `limit` read a large page in parts (`body_part`).
         """
         try:
             stored = store.get_body(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
+        part = _part_or_422(stored.body, offset, limit)
         report = store.render_report(db, artifact_id)
         return {
             **stored.__dict__,
+            **part,
             "warnings": _warnings_for(artifact_id, stored.body),
             # What the service's own render made of the live version (runcove-5t3oj.56).
             "render_verdict": report["verdict"],
@@ -2341,7 +2401,11 @@ def agent_router(
         nowhere. Owner-scoped: another agent's page, open to agents or not, answers
         exactly as a page that is not there. The picture's facts ride in headers:
         `x-ream-shot-version`, `-width`, `-height`, `-truncated` (cut to the tallest
-        picture) and `-page-height`. Refusals are JSON (`shots.py`)."""
+        picture; for a page declaring `<meta name="ream-frame" content="viewport">`,
+        cut to one window, as its frame shows it) and `-page-height`. An `element` or
+        `section` of such a page is taken by letting the browser grow its window to
+        the part, and the page sizes itself from that window: the part may not look
+        as it does in the frame. Refusals are JSON (`shots.py`)."""
         try:
             n, request = shots.request_from(
                 artifact_id, version, element, section, width, theme
@@ -2428,7 +2492,13 @@ def agent_router(
         return out
 
     @router.get("/artifacts/{artifact_id}/versions/{n}")
-    def read_version_body(artifact_id: str, n: int, agent: str = Depends(caller)):
+    def read_version_body(
+        artifact_id: str,
+        n: int,
+        agent: str = Depends(caller),
+        offset: int = Query(0, ge=0),
+        limit: int | None = Query(None, ge=1, le=READ_PART_MAX),
+    ):
         """One version's stored body (homelab-50ze).
 
         Rolling back is this plus an ordinary update: fetch the old bytes,
@@ -2442,6 +2512,7 @@ def agent_router(
             raise HTTPException(404, "no such artifact or version") from exc
         return {
             **stored.__dict__,
+            **_part_or_422(stored.body, offset, limit),
             "warnings": _warnings_for(artifact_id, stored.body),
         }
 
@@ -3696,8 +3767,8 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
-        # The mechanism a nudge is only ever an optimisation on top of (see
-        # nudge.py's own docstring): an agent anywhere with a key -- not just one
+        # The mechanism a nudge is only ever an optimisation on top of (the
+        # doorbell, a plug-in's after-commit sink since step 9d): an agent anywhere with a key -- not just one
         # a nudge can reach -- keeps its own cursor and polls this with
         # since=<last seq it saw> to learn everything that happened while it
         # was away, in a fixed order that can never skip or repeat a row.

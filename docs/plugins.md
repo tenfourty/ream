@@ -8,8 +8,10 @@ Status, 10 Nov 2026: the loader and the whole interface are built and on `main` 
 `docs/agent/specs/2026-11-04-core-and-plugins-design.md`), and the house's plug-in repo
 (`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
 core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
-have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`)
-and the `slack` answer source are still inside the core; the GitGuardian second opinion
+have left the core for the house's `tracker-pages` plug-in (9a); so has the doorbell (9d: the core's
+own `nudge` sink and its `NUDGE_*` settings are deleted, the house's after-commit sink `doorbell`
+rings, see Sinks below); the house `partner` sink and the `slack` answer source are still inside the
+core; the GitGuardian second opinion
 has left it (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
 second opinion, see Scanner below), and so has Mailgun (9b: the core's own sender is deleted, the
 house's mail backend sends all mail, see Mail backend below). Write
@@ -72,10 +74,11 @@ error names the plug-in and, for an exception, only its **type**, never its text
 
 ## API versioning
 
-`ream.plugin_api.API_VERSION` is `(1, 4)`; `api.version` is the same tuple (1.1 added the
+`ream.plugin_api.API_VERSION` is `(1, 5)`; `api.version` is the same tuple (1.1 added the
 optional `timeout` of `api.scanner`; 1.2 added `api.sink(..., stage=)`, `api.schema`,
 `api.on_start` and `api.on_stop`; 1.3 added `api.read_side`; 1.4 added its `delivered`
-argument, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
+argument; 1.5 lets one plug-in register the `slack` answer source and mount a route on the partner
+inbound host, see the bridge section below; all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
 `REQUIRES_API = "1"` as module data of the module that holds `register`; the core compares the
 major number and refuses a mismatch (the server stops; a tool skips or exits as above). A plug-in
 that declares nothing is not checked. Minor releases only add registrations or optional
@@ -144,10 +147,17 @@ stay pending; `artifacts-admin outbox` shows counts by sink, and reinstalling dr
 **`delivery="after_commit"`**: `deliver(event)` is called once on the request thread's side,
 after the commit, best effort. A raise is logged (type only) and counted; it never reaches the
 caller and the action is already done. Use it for fire-and-forget nudges.
-**The doorbell (step 9d):** core's built-in `nudge` sink rings the doorbell itself. A plug-in that
-registers an after-commit sink named `doorbell` takes that over: checked at each delivery, core's
-sink stands down (it logs once at INFO and rings nothing) while a sink of that name is registered,
-so the two never both ring. Without one, core rings as before.
+**The doorbell (step 9d):** the core carries none. A plug-in that wants to push to an inbox when the
+owner answers or comments registers an after-commit sink (the house's is named `doorbell`) for
+`decision_answered`, `comment_added`, `thread_resolved`, `thread_reopened` and `question_asked`.
+The event carries what a ring needs: `event.id` is the journal row's seq, `event.agent` the page's
+agent, `event.note` his words, and `data` has `title`, `letter` and `recommended` on an answer and
+`nudge_note` where the ring must carry other words than the journal row (`comment_added` and
+`question_asked` set it empty: the journal has his words, a ring never did). The core reads no `NUDGE_*` setting; if
+`REAM_NUDGE_URL`, `_AGENT`, `_TOKEN` or `_TIMEOUT` (or the `ARTIFACTS_` forms) are still set and no
+sink named `doorbell` is registered once the plug-ins and webhook sinks load, start-up logs one
+warning naming the variables (never a value) that the doorbell is OFF; it warns and does not
+refuse. Every event still reaches every agent through the journal (`GET /api/v1/events`).
 
 **The circuit breaker** is per sink and automatic. Five failures running (a raise or a timeout),
 from at least two different events (so one poison event cannot open the breaker of a healthy
@@ -241,7 +251,7 @@ least one), once per plug-in, keyword only:
 
 | Argument | Called as | Returns |
 |---|---|---|
-| `open_copies` | `fn(db, limit, waiting_on_him=True)` | list of `ream.partner_in.Copy`; `waiting_on_him=False` asks only for those he has already answered here (pending) |
+| `open_copies` | `fn(db, limit, waiting_on_him=True)` | list of `ream.readside.Copy` (`ream.partner_in.Copy` still works); `waiting_on_him=False` asks only for those he has already answered here (pending) |
 | `settled_copies` | `fn(db, since, limit)` | copies answered since `since` |
 | `answer` | `fn(db, qid, letter=, note=)` | the `Copy` after he answers it in the gallery; `store.NotFound` for one that is not yours. `qid` is `Copy.qid`: a `qd:` source with the prefix stripped, any other source whole |
 | `enabled` | `fn()` | whether your bridge runs here (feeds `bridge.enabled` in the listening state) |
@@ -249,11 +259,11 @@ least one), once per plug-in, keyword only:
 | `delivered` (1.4) | `fn(db, decision_ids)` | `{id: bool}` for each of these questions (home here) your outbox holds an `asked` for: `True` once it went out. The listening state's "sent to the partner" reads it beside core's own outbox, any `True` wins; a wrong shape or a raise is counted and ignored |
 
 ```python
-from ream import partner_in, store
+from ream import readside, store
 
 def register(api):
     def open_copies(db, limit, waiting_on_him=True):
-        return my_rows(db, limit, pending=not waiting_on_him)   # -> [partner_in.Copy(...)]
+        return my_rows(db, limit, pending=not waiting_on_him)   # -> [readside.Copy(...)]
 
     def answer(db, qid, *, letter, note=""):
         row = my_row(db, qid)
@@ -275,13 +285,13 @@ are, and appear only for a key with the read-all-decisions grant and `scope=all`
 before: the agent routes' "not yours is no such" scoping is unchanged. `answer` may raise the
 store's own refusals (`BodyTooLarge`, `InvalidText`, `SecretFound`, `ScanFailed`) and
 `decisions.InvalidAnswer`, which the gallery answers as it does for core's copies; any other
-raise (or a result that is not a `Copy`) is counted and the answer is refused with 503 ("Answer not saved",
+raise (or a result that is not a `readside.Copy`) is counted and the answer is refused with 503 ("Answer not saved",
 naming the plug-in), never a 404: an outage must not read as "no such question". The
 copies are ranked and rendered by core, so a plug-in cannot supply markup. When core does not hold the question it checks the note's size and for a secret once,
 before the first plug-in's `answer` is called, so `answer` only ever gets a note that passed.
 `store.NotFound` from one plug-in moves on to the next.
 
-### Taking over core's partner bridge (step 9e-3, until 9e-4)
+### Taking over core's partner bridge (steps 9e-3 and 9e-4, until the deletion)
 
 Who **sends** to the partner is a **database fact**: the `service_meta` key
 `partner_bridge_owner`. While it is unset, core's outbound bridge (`ream.partner`, the built-in
@@ -289,9 +299,13 @@ Who **sends** to the partner is a **database fact**: the `service_meta` key
 stands down in **every** process that reads the database (it checks the key in the very statement
 that takes each row, so a claim landing mid-pass stops the pass before its next row). Core's
 **stage** stands down only where the owner's stage for that event's kind is loaded: in a process
-without it (a command-line tool such as `artifacts-admin purge-deleted`, whose plug-in API
-registers no sink, or a server with another `REAM_PLUGINS`) core goes on writing the event to its
-own outbox, and the owner's sender moves it with `hand_over` on its next pass. So each event has
+without it (a command-line tool or a server started with a `REAM_PLUGINS` that does not select the
+owner; `artifacts-admin purge-deleted` loads the selected plug-ins since step 9e-4, most other
+commands load none) core goes on writing the event to its own outbox, and the owner's sender moves
+it with `hand_over` on its next pass. Once the owner also holds inbound, core's stage refuses
+instead (see below): it reads the inbound holder with the switch row share-locked, as every inbound
+writer does, so a claim waits for a stage in flight and no row is added to core's outbox after the
+claim commits; the rows already there your sender still drains with `hand_over`. So each event has
 exactly one writer and none is lost. The check is by owner (the plug-in name recorded on each
 sink `api.sink` registers), never by a sink's name. Each stand-down logs once at INFO; a server
 process where the key names a plug-in whose bridge stage is not loaded logs a WARNING once, at
@@ -303,7 +317,7 @@ start and when it first meets it (`partner.status` reports `bridge_owner` and
 | `bridge_owner(conn)` | who holds the bridge: your plug-in's name, or `None` while core does. Your stage stages only when it is your name, so before the claim core stages and you do not, after it the reverse, exactly one writer in the same transaction. While one event is handed to its stages, the owner is read **once** and every `bridge_owner(conn)` call on the connection your stage was given (core's stage, yours, the `BridgeStageFailed` check) gets that same answer, so a claim or release committing mid-dispatch cannot leave the event with no writer or two. Call it with that connection; a connection of your own reads afresh |
 | `claim_bridge(conn, owner)` | take the bridge, in the **same transaction as your first `hand_over`**. `owner` must be **your plug-in's own entry-point name**: core's stage stands down only where a stage sink of that name's plug-in is loaded, and `BridgeStageFailed` fires only for it. The same owner again is a no-op; another is refused (`BridgeHeld`), also when two processes claim at once |
 | `core_outbox_clear(column)` | a WHERE fragment, true when core's outbox has no undelivered row for the question `column` names (`"o.decision_id"`). **Your claim statement must carry it**: `held` is a snapshot, and on Postgres a staging transaction not yet committed can add a row to core's outbox after it, so without the re-check you could send version n+1 before core's n reaches you |
-| `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). Core keeps the counter until 9e-4, so the versions run on unbroken across the switch and back |
+| `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). **`decision.partner_version` is the one counter of record and this is the only way to take a number from it, before and after you hold inbound**: keep no counter of your own (not a table, not a copy made at the claim). The versions then run on unbroken across each switch and back, a release has no counter to carry, and core's stage guard, which reads that column to know a question was announced, stays exact |
 | `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; the lease is checked under the row lock, and a question not wholly locked is left in core; `.held` names the questions core still has rows for (leased, locked elsewhere, or past `limit`): send none of a held question's rows that pass |
 | `release_bridge(conn, owner, rows)` | the undo, in one transaction: your undelivered rows go back to core's outbox (duplicates skipped) and the key is cleared, so there is never a moment with two senders or none. Expose it as a command the operator runs **before** removing the plug-in (core cannot call it once the plug-in is gone) |
 
@@ -333,6 +347,61 @@ hub refuses one over 5 minutes old); an `event_id` is kept across retries and ne
 hub drops a repeat for a day); one question's versions go out in order from one sender only (the
 hub drops a lower one after a higher), with a parked row holding the later ones; a 503's
 `Retry-After` is honoured (core's own sender does not do this; yours must).
+
+#### The inbound half (step 9e-4, API 1.5)
+
+What the partner sends **to** the service (a press in Slack on a page's question, a question asked
+in Slack that appears in his inbox) has its own switch, a second `service_meta` key,
+`partner_inbound_owner`. An absent row means core; nothing seeds it and no schema step adds it.
+Take outbound first: the claim is refused unless you already hold `partner_bridge_owner`. Every
+helper below is in `ream.partner`, runs in your open transaction, and goes with that module at
+the deletion.
+
+| Helper | Use |
+|---|---|
+| `inbound_owner(conn)` | who holds inbound: `"core"` or a plug-in's name. A plain read for routing and for a first look; a writer takes the lock below |
+| `lock_inbound(conn, share=False)` | the holder, with the switch row locked to the end of your transaction. **Call it first in every transaction that writes your inbound tables and write only if it returns your name**; `share=True` lets other writers through and holds off only a claim or release |
+| `claim_inbound(conn, owner)` | take inbound, in the same transaction as `hand_over_inbound` and your inserts. Refused (`BridgeHeld`) unless `owner` holds the outbound bridge or when another plug-in holds inbound; the same owner again is a no-op |
+| `hand_over_inbound(conn)` | returns and deletes every row of core's `partner_question`, `partner_version_seen` and `partner_event_seen`, as `InboundHandover(rows)`; insert them into your own tables before you commit, so a row is in one table set only (a row left in core would shadow your copy on the read side). No version counter is handed over: go on calling `next_version`. Refused while core holds inbound |
+| `release_inbound(conn, owner, read_rows)` | the undo, run **before** `release_bridge`: your rows go back and inbound returns to core. `read_rows(conn)` is **a function** that returns your rows in `hand_over_inbound`'s shape (and deletes them from your tables); the helper calls it only after it has locked the switch row, when every writer of yours has committed or is waiting, so no row written meanwhile is left behind. Do not read them beforehand and close over the result. It locks the switch row first and no decision row, so it cannot deadlock with an answer in flight. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot bring your rows back |
+
+With `REAM_INTERNAL_PORT` set, the internal listener serves the partner host only at `POST /partner/v1/events`
+(core's endpoint, or your route in its place while you hold inbound, through the same dispatch as on port 8000). A
+route of yours at any other path on that host is reachable on port 8000 only; keep an inbound route at that one path.
+
+From the claim's commit, core's endpoint (`POST /partner/v1/events`) answers **503 with
+`Retry-After`** (after the signature check) and records nothing; the hub retries, so the event
+reaches your route, which owns its own dedupe. His answer on a partner-home copy is "not mine" in
+core, so the read side's `answer` is called. Core's own stage refuses (`InboundHeld`) to write core's
+outbox where a row would be written, in a process where your stage is not loaded: the
+action is rolled back whole rather than send nothing. The caller is told plainly, never with a
+traceback: **503 with `Retry-After: 30`** and a `detail` naming your plug-in on the gallery and
+`/api/v1` (a page for a person answering in the gallery), a tool error over MCP, one line and a
+non-zero exit from `artifacts-admin`, and `stood_down` at the partner endpoint. "Would be written"
+is read from `decision.partner_version`, which is why your versions must come from `next_version`:
+a question you announced under a number of your own would look never-announced there, and its
+`withdrawn` or `answered` from such a process would be dropped in silence.
+
+**The partner host's own rules hold for your route too.** Before either core's endpoint or your
+route sees a request on that host, the router refuses one that carries a proxy header
+(`partner_in.PROXY_HEADERS`: 404) and one whose `Content-Length` is over 64 KiB or not a number
+(400). A body sent with no declared length is yours to cap as you read it. Run
+`artifacts-admin purge-deleted` with your plug-in selected: it now loads the plug-ins
+`REAM_PLUGINS` names (not on `--dry-run`), so the withdrawals it emits reach your stage.
+
+**API 1.5.** (1) `api.answer_source("slack", ...)` is allowed for **one** plug-in (a second is
+refused, naming the first) and never with `relay=True`: `slack` means the press was verified, so
+an agent can never record it. Core stores and labels `slack` with no plug-in loaded. (2)
+`decisions.answer(..., source="slack", recorded_by=...)`: an inbound source (any but `page`) must
+name `recorded_by`, and a `page` answer must not; core refuses either with `InvalidSource`. (3) A
+press in Slack never replaces his own tap on the page: `decisions.answer` raises
+`decisions.TapStands`, which your route should treat as handled (core records it as
+`tap_stands` and answers 2xx, so the hub stops retrying). (4) `Copy` is `ream.readside.Copy`.
+(5) `api.router(router, host)` may take the partner inbound host
+(`REAM_PARTNER_INBOUND_HOST`). Requests to that host reach your route **only while
+`partner_inbound_owner` names your plug-in**, read on each request; otherwise core's endpoint
+answers, and a key that cannot be read is a 503 with `Retry-After`. Check the signature and the
+sender yourself, as for any router.
 
 ### Webhook sinks without a plug-in
 
@@ -402,8 +471,9 @@ def record(conn, decision, answer):    # answer: ream.decisions.Answer
 a value that may be stored as a decision's `answer_source`, and how the gallery words it.
 
 - `name`: lower-case letters, digits and hyphens, starting with a letter, at most 32 characters.
-  `page`, `terminal`, `telegram`, `in-person` and `other` (the core's) are refused, as is
-  `slack` (reserved). Registering the same name again by the same call is harmless.
+  `page`, `terminal`, `telegram`, `in-person` and `other` (the core's) are refused. `slack`
+  (API 1.5) may be registered by one plug-in only and never with `relay=True`; see the bridge
+  section. Registering the same name again by the same call is harmless.
 - `label`, `verified_label`, `route_label`: 1 to 40 characters each. A stored row whose source
   is not registered (the plug-in is absent) still reads, and the gallery shows "Answered via
   <value>, not on the page".
@@ -602,8 +672,9 @@ def register(api):
 `TypeError`). It is mounted in its own app (no docs, no schema, a 422 that reports where a field
 went wrong and never what was sent) and served **only** when the request's Host equals `host`.
 `host` is a plain dotted name (a non-ASCII one is IDNA-encoded first). It may not be the
-gallery, the API host, the partner inbound host or the content domain (or under it), nor
-another plug-in's; any of these stops start-up.
+gallery, the API host or the content domain (or under it), nor another plug-in's; any of these
+stops start-up. The partner inbound host is allowed since API 1.5, and served to the plug-in only
+while it holds the bridge's inbound half (see the bridge section).
 
 The core applies **no authentication and no body-size cap**: the route must check its own caller
 and bound what it reads. Every response carries `x-content-type-options: nosniff`. WebSockets
@@ -629,7 +700,7 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
   rather than half (`commit` in a stage cannot be contained and is forbidden: what the action
   wrote before it stays); a start or stop hook failure never stops the server, and a stop hook gets
   2 seconds.
-- A `read_side` call that raises, or returns a copy that is not a `partner_in.Copy`, a count that
+- A `read_side` call that raises, or returns a copy that is not a `readside.Copy`, a count that
   is not a non-negative int or a status that is not a dict, is logged by type, counted
   (`<plug-in>:read_side`) and treated as nothing contributed: the page still renders.
 - A plug-in may add its own tables (`api.schema`, 1.2) but may not change core tables or SQL, supply gallery pages or JavaScript, or

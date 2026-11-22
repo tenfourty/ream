@@ -1,22 +1,27 @@
 """Only so many scans of a large page run at once in one server process, and when they
 are all taken a request waits a short while, then answers as each path was designed to:
-the publish checks and the render findings say they did not run, a reader a request
-needs answers 503 with `Retry-After`. A slot is always given back."""
+the publish checks and the render findings say they did not run, a comment listing
+leaves its pins' states unknown, a reader a request needs answers 503 with
+`Retry-After`. A slot is always given back."""
 
 import base64
 import contextlib
+import logging
 import threading
 import time
+import types
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ream import (
     anchors,
+    comments,
     envnames,
     forms,
     keys,
     renderfind,
+    scan,
     scanslots,
     sections,
     settings,
@@ -32,7 +37,9 @@ BIG = scanslots.SMALL_PAGE + 1
 FILLER = "<p>filler</p>" * 25_000  # more than SMALL_PAGE characters
 FORM = '<form data-artifact-form="f"><label>Why <input type="text" name="why"></label></form>'
 PAGE = HEAD + FILLER + '<div id="x">hi</div>' + TAIL
-FORM_PAGE = HEAD + FILLER + FORM + TAIL
+# Few tokens, so the form reading is quick even on a loaded machine: one long text node
+# over SMALL_PAGE, not tens of thousands of elements for the parser to count.
+FORM_PAGE = HEAD + "<p>" + "x" * BIG + "</p>" + FORM + TAIL
 # A tag with more attributes than the parser reads: raised from inside the slot.
 BUSY_TAG = '<form data-artifact-form="f" x="1" ' + "a " * 5000 + ">"
 UNREADABLE = HEAD + FILLER + BUSY_TAG + TAIL
@@ -248,12 +255,15 @@ def publish(api, auth, body):
 
 
 def test_the_publish_checks_say_they_did_not_run_and_the_page_is_published(
-    api, auth, db
+    api, auth, db, monkeypatch
 ):
+    # The secret scan is a gate and refuses a busy publish (tests below); here it runs
+    # without a slot, so what is shown is the checks after it.
+    monkeypatch.setattr(scan, "scan", scan._scan)
     clear = publish(api, auth, PAGE)
     assert clear.status_code == 201
     assert {w["shape"] for w in clear.json()["warnings"]}.isdisjoint(
-        {"csp_checks_not_run", "trap_checks_not_run"}
+        {"csp_checks_not_run", "trap_checks_not_run", "embedded_fonts_not_run"}
     )
     with taken():
         busy = publish(api, auth, PAGE)
@@ -261,9 +271,10 @@ def test_the_publish_checks_say_they_did_not_run_and_the_page_is_published(
     warnings = busy.json()["warnings"]
     assert sorted(w["shape"] for w in warnings) == [
         "csp_checks_not_run",
+        "embedded_fonts_not_run",
         "trap_checks_not_run",
     ], (
-        "the two warnings a page too large for the checks gets, and nothing that reads as clean"
+        "the three warnings a page too large for the checks gets, and nothing that reads as clean"
     )
     assert all("busy" in w["hint"] for w in warnings)
     assert len(store.list_for_agent(db, "seat")) == 2
@@ -278,17 +289,185 @@ def test_a_small_page_is_checked_though_every_slot_is_taken(api, auth, full):
     assert "remote_script" in shapes and "csp_checks_not_run" not in shapes
 
 
-def test_a_form_page_is_a_503_with_retry_after_and_stores_nothing(api, auth, db):
+def test_a_form_page_is_a_503_with_retry_after_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    # The forms' own wait: the secret scan before it runs without a slot here.
+    monkeypatch.setattr(scan, "scan", scan._scan)
     with taken():
         busy = publish(api, auth, FORM_PAGE)
     assert busy.status_code == 503
     assert busy.headers["retry-after"] == "5"
     assert busy.json() == {"detail": scanslots.BUSY}
     assert store.list_for_agent(db, "seat") == []
-    assert publish(api, auth, FORM_PAGE).status_code == 201, "and once a slot is free"
+    again = publish(api, auth, FORM_PAGE)
+    assert again.status_code == 201, f"and once a slot is free: {again.text[:300]}"
 
 
-def test_the_mcp_tool_says_so_and_stores_nothing(db):
+def test_the_secret_scan_waits_then_gives_up_on_a_large_body(full):
+    started = time.monotonic()
+    with pytest.raises(scanslots.ScanBusy):
+        scan.scan(PAGE)
+    assert 0.04 <= time.monotonic() - started < 5
+    assert scanslots.in_use() == SLOTS, "a refused wait takes nothing"
+    small = HEAD + "<p>42 issues open</p>" + TAIL
+    assert scan.scan(small) == [], "a small body is scanned though every slot is taken"
+
+
+def test_a_secret_scan_that_runs_past_its_time_bound_is_refused_not_clean(monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)  # already spent
+    with pytest.raises(scanslots.ScanBusy) as raised:
+        scan.scan(PAGE)
+    assert isinstance(raised.value, scan.ScanTimeout)
+    assert scanslots.in_use() == 0, "the slot was given back"
+    small = HEAD + "<p>42 issues open</p>" + TAIL
+    with pytest.raises(
+        scan.ScanTimeout
+    ):  # a small body has no slot, but the same bound
+        scan.scan(small)
+
+
+def test_the_time_bound_is_also_checked_inside_one_shape(monkeypatch):
+    """One shape with many matches on a body: the bound passes at the check before the
+    shape, then runs out partway through its matches, so it is the check at each match
+    that raises. Dropping `deadline` from `_shape_lines` makes this scan finish instead."""
+    shape = next(item for item in scan.SHAPES if item[0] == "password_assignment")
+    monkeypatch.setattr(scan, "SHAPES", [shape])
+    body = "<p>" + "DB_PASSWORD=hunter2fake " * 100 + "</p>"
+    assert [f.shape for f in scan._scan(body)] == ["password_assignment"]
+
+    calls = []
+
+    def clock() -> float:  # one tick per read: 1.0, 2.0, ...
+        calls.append(None)
+        return float(len(calls))
+
+    monkeypatch.setattr(scan, "time", types.SimpleNamespace(monotonic=clock))
+    with pytest.raises(scan.ScanTimeout):
+        scan._scan(body, deadline=10.5)
+    assert len(calls) == 11, (
+        "read once before the shape, then once per match, then stopped"
+    )
+
+
+def test_a_scan_that_timed_out_does_not_say_the_server_is_busy(monkeypatch):
+    monkeypatch.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+    with pytest.raises(scan.ScanTimeout) as raised:
+        scan.scan(PAGE)
+    assert str(raised.value) == scanslots.TIMED_OUT
+    assert "server" not in scanslots.TIMED_OUT
+    assert raised.value.retry_after == scanslots.RETRY_AFTER_SECONDS
+
+
+def test_a_publish_whose_secret_scan_ran_out_of_time_is_a_503_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    with monkeypatch.context() as m:
+        m.setattr(scan, "SCAN_WALL_SECONDS", -1.0)
+        busy = publish(api, auth, PAGE)
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert store.list_for_agent(db, "seat") == []
+    assert publish(api, auth, PAGE).status_code == 201, (
+        "and a retry inside the bound is scanned"
+    )
+
+
+def test_the_secret_scan_waits_for_a_slot_and_gets_it_when_one_is_given_back(
+    monkeypatch,
+):
+    monkeypatch.setattr(scanslots, "WAIT_SECONDS", 10)
+    asked: list[int | None] = []
+    real = scanslots.slot
+
+    @contextlib.contextmanager
+    def slot(size=None, wait=None):
+        asked.append(size)
+        with real(size, wait):
+            yield
+
+    # Every slot held by other threads, given back after a moment: the scan waits for
+    # one and then runs under it.
+    release = threading.Event()
+    held = threading.Semaphore(0)
+
+    def hold() -> None:
+        with real(BIG, wait=10):
+            held.release()
+            release.wait(10)
+
+    others = [threading.Thread(target=hold) for _ in range(SLOTS)]
+    for thread in others:
+        thread.start()
+    for _ in others:
+        assert held.acquire(timeout=10)
+    monkeypatch.setattr(scanslots, "slot", slot)
+    timer = threading.Timer(0.2, release.set)
+    timer.start()
+    started = time.monotonic()
+    assert scan.scan(PAGE) == []
+    waited = time.monotonic() - started
+    for thread in others:
+        thread.join(10)
+    timer.join()
+    assert 0.1 <= waited < 5, "the scan waited for a slot to be given back"
+    assert asked == [len(PAGE)]
+
+
+def test_a_publish_the_secret_scan_could_not_read_is_a_503_and_stores_nothing(
+    api, auth, db, caplog, monkeypatch
+):
+    caplog.set_level(logging.INFO, logger="ream.refusals")
+    with taken():
+        busy = publish(api, auth, PAGE)
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert busy.json() == {"detail": scanslots.BUSY}
+    assert store.list_for_agent(db, "seat") == []
+    assert "scan_failed" not in caplog.text, "a busy server is not a scanner defect"
+    again = publish(api, auth, PAGE)
+    assert again.status_code == 201, f"and once a slot is free: {again.text[:300]}"
+
+    def broken(_text):
+        raise RuntimeError("a scanner defect")
+
+    monkeypatch.setattr(scan, "scan", broken)
+    publish(api, auth, PAGE)
+    assert "scan_failed" in caplog.text, "the log above was captured: a defect is in it"
+
+
+def test_an_update_the_secret_scan_could_not_read_is_a_503_and_changes_nothing(
+    api, auth, db
+):
+    first = publish(api, auth, PAGE)
+    assert first.status_code == 201
+    page, revision = first.json()["id"], first.json()["revision"]
+    changed = PAGE.replace("hi</div>", "hello</div>")
+
+    def update():
+        return api.patch(
+            f"/api/v1/pages/{page}",
+            json={"body": changed, "expected_revision": revision},
+            headers=auth,
+        )
+
+    with taken():
+        busy = update()
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert store.get_body(db, "seat", page).body == PAGE
+    assert update().status_code == 200
+
+
+def test_a_preview_the_secret_scan_could_not_read_is_a_503(api, auth):
+    with taken():
+        busy = api.post("/api/v1/preview", json={"body": PAGE}, headers=auth)
+    assert busy.status_code == 503
+    assert busy.headers["retry-after"] == "5"
+    assert busy.json() == {"detail": scanslots.BUSY}
+
+
+def test_the_mcp_tool_says_so_and_stores_nothing(db, monkeypatch):
     host = "artifacts.tenfourty.site"
     token, _ = keys.mint(db, agent="mcp-seat")
 
@@ -314,6 +493,13 @@ def test_the_mcp_tool_says_so_and_stores_nothing(db):
 
     with settings.override(mcp_public_url=f"https://{host}"):
         client = TestClient(create_app(db), follow_redirects=False)
+        with taken():
+            unscanned = call(PAGE)  # the secret scan's wait
+        assert unscanned["isError"] is True
+        assert unscanned["content"][0]["text"] == scanslots.BUSY
+        assert store.list_for_agent(db, "mcp-seat") == []
+        # The forms' own wait: the secret scan before it runs without a slot here.
+        monkeypatch.setattr(scan, "scan", scan._scan)
         with taken():
             busy = call(FORM_PAGE)
         assert busy["isError"] is True
@@ -362,6 +548,8 @@ def test_the_render_findings_are_read_when_a_slot_is_free():
 def test_a_preview_says_unchecked_when_the_findings_could_not_be_read(
     api, auth, monkeypatch
 ):
+    # The secret scan runs without a slot here: a busy one refuses the preview (above).
+    monkeypatch.setattr(scan, "scan", scan._scan)
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
     report = (png, [])
     monkeypatch.setattr(thumbs, "available", lambda: True)
@@ -408,3 +596,185 @@ def test_the_background_render_stores_unchecked_when_the_findings_could_not_be_r
 
 
 _original_render_in_background = thumbs.render_in_background
+
+
+# --- the comment listings ------------------------------------------------------------
+
+PIN_QUOTE = "Cost per seat is flat across plans"
+# A page over SMALL_PAGE with a pin on a heading in it: both its words and its headings
+# are scanned for the pin's state, each under a slot.
+PINNED_PAGE = (
+    HEAD + '<h2 id="costs">Costs</h2><p>' + PIN_QUOTE + ".</p>" + FILLER + TAIL
+)
+PIN_ANCHOR = {
+    "kind": "range",
+    "path": "body>p:nth-of-type(1)",
+    "start": 0,
+    "end": len(PIN_QUOTE),
+    "heading": "Costs",
+    "heading_id": "costs",
+}
+
+
+@pytest.fixture()
+def pinned(db):
+    """A large page with one pinned comment on it, its words not kept from the write."""
+    assert len(PINNED_PAGE) > scanslots.SMALL_PAGE
+    page = store.publish(db, "seat", "Costs", PINNED_PAGE)
+    comment = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why flat?",
+        quote=PIN_QUOTE,
+        anchor=PIN_ANCHOR,
+    )
+    comments._VISIBLE_CACHE.clear()
+    yield page, comment
+    comments._VISIBLE_CACHE.clear()
+
+
+def _listings(db, page):
+    return {
+        "page": lambda: comments.list_for_artifact(db, page.id),
+        "agent": lambda: comments.list_for_agent(db, "seat"),
+        "wall": lambda: [c for g in comments.across_pages(db) for c in g.rows],
+    }
+
+
+@pytest.mark.parametrize("listing", ["page", "agent", "wall"])
+def test_a_listing_holds_no_connection_while_it_waits_for_a_slot(
+    db, pinned, monkeypatch, listing
+):
+    page, _ = pinned
+    open_now, waited = [0], []
+    connect = db.connect
+
+    @contextlib.contextmanager
+    def counted():
+        with connect() as conn:
+            open_now[0] += 1
+            try:
+                yield conn
+            finally:
+                open_now[0] -= 1
+
+    real = scanslots.slot
+
+    @contextlib.contextmanager
+    def slot(size=None, wait=None):
+        if size is not None and size > scanslots.SMALL_PAGE:
+            waited.append(open_now[0])  # connections open as a slot is asked for
+        with real(size, wait):
+            yield
+
+    monkeypatch.setattr(db, "connect", counted)
+    monkeypatch.setattr(scanslots, "slot", slot)
+    rows = _listings(db, page)[listing]()
+    assert waited, "the listing scanned the page under a slot"
+    assert waited == [0] * len(waited), (
+        "a connection was open while a slot was asked for"
+    )
+    assert [r.anchor_state for r in rows] == ["current"]
+
+
+@pytest.mark.parametrize("listing", ["page", "agent", "wall"])
+def test_a_listing_answers_when_every_slot_is_taken_its_pins_unknown(
+    db, pinned, listing
+):
+    page, comment = pinned
+    read = _listings(db, page)[listing]
+    with taken():
+        busy = read()
+    assert [r.id for r in busy] == [comment.id], "the comment is still listed"
+    assert (busy[0].quote_state, busy[0].anchor_state, busy[0].anchor_note) == ("",) * 3
+    assert busy[0].anchor_current == ""
+    # Nothing unread was kept: with a slot free the same listing tells the state.
+    assert [r.anchor_state for r in read()] == ["current"]
+
+
+def test_a_listing_keeps_the_words_it_had_and_leaves_only_the_unread_html_unknown(
+    db, pinned
+):
+    page, _ = pinned
+    assert comments.list_for_artifact(db, page.id)[0].anchor_state == "current"
+    with taken():  # the page's words are kept from that listing; its headings are not
+        (row,) = comments.list_for_artifact(db, page.id)
+    assert row.quote_state != "", "the kept words still tell the quote"
+    assert (row.anchor_state, row.anchor_note, row.anchor_current) == ("", "", "")
+
+
+def test_the_comment_routes_answer_200_when_every_slot_is_taken(api, auth, pinned):
+    page, _ = pinned
+    with taken():
+        per_page = api.get(f"/api/v1/pages/{page.id}/comments", headers=auth)
+        every = api.get("/api/v1/comments", headers=auth)
+    for got in (per_page, every):
+        assert got.status_code == 200, got.text[:300]
+        (row,) = got.json()
+        assert row["anchor_state"] == "" and row["quote_state"] == ""
+    again = api.get(f"/api/v1/pages/{page.id}/comments", headers=auth)
+    assert again.json()[0]["anchor_state"] == "current"
+
+
+def test_a_reply_on_a_pin_is_written_with_its_state_unknown_when_every_slot_is_taken(
+    api, auth, pinned
+):
+    page, root = pinned
+    url = f"/api/v1/pages/{page.id}/comments"
+    reply = {"body": "Flat since the pricing change.", "thread_root": root.id}
+    headers = {**auth, "Idempotency-Key": "reply-1"}
+    with taken():
+        made = api.post(url, json=reply, headers=headers)
+    assert made.status_code == 201, made.text[:300]
+    assert made.json()["quote_state"] == "" and made.json()["anchor_state"] == ""
+    # The reply is stored once, and a retry of the same key replays the reply as it
+    # was answered; a later listing, with a slot free, tells the real state.
+    again = api.post(url, json=reply, headers=headers)
+    assert again.status_code == 201 and again.json() == made.json()
+    listed = api.get(url, headers=auth).json()
+    assert [c["id"] for c in listed].count(made.json()["id"]) == 1
+    assert {c["anchor_state"] for c in listed} == {"current"}
+
+
+def test_after_one_refused_slot_a_listing_leaves_the_other_large_pages_unread(
+    db, pinned, monkeypatch
+):
+    first, _ = pinned
+    second = store.publish(db, "seat", "Costs again", PINNED_PAGE)
+    comments.add(
+        db,
+        artifact_id=second.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why flat?",
+        quote=PIN_QUOTE,
+        anchor=PIN_ANCHOR,
+    )
+    comments._VISIBLE_CACHE.clear()
+    asked = []
+    real = scanslots.slot
+
+    @contextlib.contextmanager
+    def counted(size=None, wait=None):
+        if size is not None and size > scanslots.SMALL_PAGE:
+            asked.append(size)
+        with real(size, wait):
+            yield
+
+    monkeypatch.setattr(scanslots, "slot", counted)
+    with taken():
+        asked.clear()  # the holders asked too
+        busy = comments.list_for_agent(db, "seat")
+    assert len(busy) == 2 and {r.artifact_id for r in busy} == {first.id, second.id}
+    assert len(asked) == 1, "one refused wait, then the rest were not tried"
+    for row in busy:
+        assert (row.quote_state, row.anchor_state) == ("", ""), "empty, never stale"
+        assert (row.anchor_note, row.anchor_current) == ("", "")
+    asked.clear()
+    states = {
+        r.artifact_id: r.anchor_state for r in comments.list_for_agent(db, "seat")
+    }
+    assert states == {first.id: "current", second.id: "current"}
+    assert asked, "and with a slot free each page was read"

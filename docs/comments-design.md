@@ -92,7 +92,11 @@ HTML once (a `PageIndex`: headings, the regions of every id its pins name, and
 each region's words), however many pins it carries, and reads at most 200
 distinct pins per page against that HTML (`comments.HTML_PINS_MAX`); pins past
 the cap come back with `anchor_state` "" (unknown), as for a page with more
-than 400 headings. A heading with characters a terminal cannot show (joiners,
+than 400 headings. So do the pins of a page the listing could not read because
+every scan slot stayed taken (`scanslots.py`): the listing still answers 200, with
+`anchor_state` "" on those pins (and `quote_state` "" too, unless the page's words
+were already read), and the next listing tells the
+real state, nothing unread having been kept. A heading with characters a terminal cannot show (joiners,
 soft hyphens, private-use, unassigned code points) is stored with them dropped,
 not refused. An element id is at most 128 characters, as `sections` addresses.
 **Element pins (29 Oct 2026, slice 2).** A fifth anchor kind, `element`, pins a

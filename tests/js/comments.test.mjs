@@ -59,11 +59,12 @@ function clock() {
              now = end; } };
 }
 const TPLS = new Map();
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true, commentsDefault = null } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true, commentsDefault = null, frameAttr = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
   const iframe = { src: "https://abc.tenfourty.com/p/x/", contentWindow: frameWin,
+                   getAttribute: (k) => (k === "data-frame" ? frameAttr : null),
                    addEventListener: (t, fn) => ((frameOn[t] ||= []).push(fn)),
                    getBoundingClientRect: () => ({ top: 100, left: 20, width: 800, height: 3000 }) };
   // The page embeds its open marks as JSON (null: the page has no such block),
@@ -890,6 +891,34 @@ const placed = (rects, extra = {}) => ({ type: "artifact-marks-placed", placed: 
   g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : sel.startsWith("a,") ? {} : null) });
   ok(g.framePosts.length === 0, "a press on a link, field or button in the thread is left to it"); }
 
+// A WINDOW-HIGH FRAME (16 Nov 2026: a page declares <meta name="ream-frame" content="viewport">,
+// gallery.js sets data-frame="viewport" on the frame). It scrolls itself, as in full
+// screen, so the pill goes by where the frame shows the words (vt/vl), in page
+// coordinates because this page scrolls too; there are no pin badges; and jumping to a
+// comment only brings the frame up under the bar.
+{ const g = build({ frameAttr: "viewport" });
+  g.send({ ...SEL, rect: { ...SEL.rect, top: 900, vt: 30, vl: 10 } });
+  ok(g.bar.hidden === false && g.bar.style.position === "" && g.bar.style.top === "145px" && g.bar.style.left === "15px",
+     "a window-high frame puts the pill by where the frame shows the words, in page coordinates: " + g.bar.style.top + " " + g.bar.style.left);
+}
+{ const g = build({ frameAttr: "content" });
+  g.send({ ...SEL, rect: { ...SEL.rect, top: 900, vt: 30, vl: 10 } });
+  ok(g.bar.style.top === "1015px", "(control) any other data-frame is the ordinary frame, placed by page offsets: " + g.bar.style.top); }
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")], frameAttr: "viewport" });
+  g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }]));
+  ok(badgesOf(g).length === 0, "no pin badges on a window-high frame, where page offsets would point at nothing"); }
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")], frameAttr: "viewport" });
+  g.extra[".bar.bleed"] = { getBoundingClientRect: () => ({ height: 48 }) };
+  const t = g.tlist.children[0];
+  g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : null) });
+  g.send({ type: "artifact-mark-at", id: "e1", rect: { top: 900, left: 10, width: 100, height: 20 } });
+  ok(g.scrolls.length === 1 && g.scrolls[0].top === 50 + 100 - 48, "jumping to a comment only brings the window-high frame under the bar: " + JSON.stringify(g.scrolls)); }
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")], frameAttr: "viewport" });
+  const t = g.tlist.children[0];
+  g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : null) });
+  g.send({ type: "artifact-mark-at", id: "e1", rect: { top: 900, left: 10, width: 100, height: 20 } });
+  ok(g.scrolls.length === 1 && g.scrolls[0].top === 150, "with no bar to measure it goes to the frame's own top: " + JSON.stringify(g.scrolls)); }
+
 // Back and Forward on the card: the open comments in page order (the frame's `order`), settled ones
 // skipped, greyed at the ends, a step closes the card, scrolls there and opens the next card.
 const ORDER = { type: "artifact-marks-placed", placed: ["h1", "m2", "m9", "m1"], unplaced: [], order: ["h1", "m2", "m9", "m1"] };
@@ -952,6 +981,21 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
   g.press({}); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
   g.clk.advance(300); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
   ok(g.card().length === 0, "a press elsewhere during a step cancels the card that was coming"); }
+
+{ // A window-high frame scrolls itself where this page cannot follow it, so a step opens no card
+  // there, as in full screen: the frame shows the words, and this page only brings it under the bar.
+  const g = build({ marks: HMARKS, threads: hthreads(), frameAttr: "viewport" });
+  g.send(STATE); g.send(ORDER);
+  const c = cardFor(g, "m2");
+  ok(c && navOf(c).next, "(setup) a hover card with arrows opens on a window-high frame");
+  navOf(c).next.on.click({});
+  const before = g.framePosts.length;
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 400, left: 5, width: 50, height: 10 } });
+  ok(g.scrolls.length === 1 && g.scrolls[0].top === 150, "a step on a window-high frame brings the frame up: " + JSON.stringify(g.scrolls));
+  g.clk.advance(300);
+  ok(g.framePosts.length === before, "and never asks again where the mark is once settled");
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
+  ok(g.card().length === 0, "and opens no card there, whatever the frame answers later"); }
 
 // THE PANEL IN PAGE ORDER: whole-page comments first, then the placed threads top to bottom, then the unplaced.
 { const whole = threadLi("w1");

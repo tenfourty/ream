@@ -12,7 +12,7 @@
   the empty HTML comment in the eyebrow and in the chips.
 
   Rules this page already obeys, so you don't have to remember them:
-    · no forms, no external fetches, no web fonts — the page CSP forbids them
+    · no forms, no external fetches, no fonts from other sites (the page CSP blocks them; fonts may be embedded as data: URLs)
     · the Gallery link is target="_blank" (the frame's sandbox blocks same-tab)
     · no date is typed anywhere; the service stamps it when it serves the page
     · no page-id placeholder, because the id does not exist until you publish

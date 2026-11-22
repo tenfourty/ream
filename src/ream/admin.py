@@ -192,11 +192,15 @@ def cmd_partner_bridge(args: argparse.Namespace) -> None:
     db = _open_db()
     with db.connect() as conn:
         owner = partner.bridge_owner(conn)
+        inbound = partner.inbound_owner(conn)
+    held_in = "core" if inbound == partner.CORE else f"plug-in {inbound!r}"
     if owner is None:
         print("partner bridge: held by core")
+        print(f"inbound half: held by {held_in}")
         return
     waiting = partner.status(db)["depth"]
     print(f"partner bridge: held by plug-in {owner!r}")
+    print(f"inbound half: held by {held_in}")
     print(f"undelivered in core's outbox: {waiting}")
     if not args.release:
         return
@@ -208,6 +212,15 @@ def cmd_partner_bridge(args: argparse.Namespace) -> None:
     with db.connect() as conn, conn.transaction():
         try:
             partner.release_bridge(conn, owner, [])
+        except partner.InboundHeld as exc:
+            # Step 9e-4: the inbound half's rows live in that plug-in's tables, and
+            # this command cannot bring them back.
+            raise SystemExit(
+                f"plug-in {exc.owner!r} still holds the bridge's inbound half: its"
+                " questions and its record of events seen are in its own tables, which"
+                " this command cannot move back. Put the plug-in back and run its own"
+                " release command; nothing was changed"
+            ) from None
         except partner.BridgeHeld:
             raise SystemExit(
                 "the bridge changed hands meanwhile: run it again"
@@ -760,6 +773,17 @@ def cmd_purge_deleted(args) -> None:
             print(f"would destroy {row.id}\t{row.agent}\t{row.title}")
         print(f"{len(due)} due")
         return
+    # A purge withdraws each open question on the pages it destroys, which is a partner
+    # event. While a plug-in holds the bridge that event is its stage's to write (step
+    # 9e-4: core's own stage refuses once the plug-in holds the inbound half too), so the
+    # plug-ins REAM_PLUGINS selects register here as they do at server start. Not on
+    # --dry-run, which writes nothing.
+    from ream import plugin_api
+
+    try:
+        plugin_api.load()
+    except plugin_api.PluginError as exc:
+        raise SystemExit(str(exc)) from None
     gone = store.purge_expired(database)
     for artifact_id in gone:
         print(f"destroyed {artifact_id}")
@@ -783,7 +807,21 @@ def cmd_pack_versions(_args) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception as exc:
+        # Core's partner stage refused (step 9e-4) and the command's transaction rolled
+        # back: one line, not a traceback. `partner` is not imported here: it pulls in
+        # the database driver, and `new-key` must run where only the client is installed
+        # (tests/test_admin_no_db.py). Only a command that loaded it can raise this.
+        partner = sys.modules.get("ream.partner")
+        if partner is None or not isinstance(exc, partner.InboundHeld):
+            raise
+        raise SystemExit(
+            f"refused, nothing was changed: this would send the partner an event, and"
+            f" plug-in {exc.owner!r} holds the bridge but is not loaded here. Run it"
+            f" again with REAM_PLUGINS selecting {exc.owner}"
+        ) from None
 
 
 if __name__ == "__main__":

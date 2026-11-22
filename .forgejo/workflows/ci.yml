@@ -30,7 +30,10 @@ jobs:
     runs-on: docker-light
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
-    timeout-minutes: 20
+    # 40, not 20: the guard selftests alone take ~12 min on a 2-CPU slot, and on
+    # 19 Nov 2026 four runs were cut off at 20 min mid-suite (reported by the
+    # runner as "context deadline exceeded", not as a timeout).
+    timeout-minutes: 40
     # Only in the public repo, NAMED (not "anything but the sec repo"): a copy of this file anywhere
     # else has its jobs skipped (the private repo runs sec.yml instead). A job whose `if:` is false
     # is never dispatched. Every job in this file carries this gate;
@@ -38,7 +41,7 @@ jobs:
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           # No password literal anywhere: trust auth is fine for a service container
           # that exists only for the length of this job, on a network nothing else
@@ -61,9 +64,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
@@ -104,11 +108,13 @@ jobs:
           # This service container exists only for this job, so the tests may
           # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
           REAM_TEST_PG_THROWAWAY: "1"
-        # -n auto (one worker per core the runner gives this job), capped at 5:
-        # more workers only queue behind each other and the Postgres service
+        # -n auto, capped at 2: the runner slot gives this job 2 CPUs and 1.5 GB
+        # while xdist counts the whole machine's cores, and more workers only
+        # queue behind each other and the Postgres service, and past the slot's
+        # memory cap get killed (19 Nov 2026: -9 kills at 5 workers)
         # (the deployment repo's CI-builders doc); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   test-sqlite:
     # docker-light, not docker: this job needs no docker-in-docker, only its
@@ -126,12 +132,13 @@ jobs:
     # 11 Nov 2026 every step passed but the SQLite suite was cut off at 99% by the 20.
     # 45, not 30: test_shots_offline.py adds ~10 min to the browser step (run 60677,
     # 16 Nov 2026: the step took 17:42, then the SQLite suite was cut off at 80%).
-    timeout-minutes: 45
+    # 60, not 45: a passing run took 41 min on 19 Nov 2026.
+    timeout-minutes: 60
     # Public repo only, named (see `test`); skipped in the private copy.
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           # No password literal anywhere: trust auth is fine for a service container
           # that exists only for the length of this job, on a network nothing else
@@ -154,9 +161,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
@@ -192,7 +200,7 @@ jobs:
           tests/test_thumbs.py tests/test_thumbnail_wall.py
           tests/test_render_findings_browser.py tests/test_renderd.py
           tests/test_shots.py tests/test_shots_offline.py
-          tests/test_render_workers_held.py
+          tests/test_render_workers_held.py tests/test_canvas_html.py
 
       # The timing comparisons (tests marked `scaling`), serially: they skip in the
       # parallel runs, where other workers share the 2 CPUs and make the 8x page look
@@ -210,7 +218,7 @@ jobs:
         env:
           REAM_TEST_DB: sqlite
           REAM_BROWSER: /nonexistent/browser
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
   # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
@@ -220,12 +228,13 @@ jobs:
   # The browser tests stay in `test-sqlite`: they test the page, not plug-in loading.
   core-bare:
     runs-on: docker-light
-    timeout-minutes: 25
+    # 45, not 25: both suites at two workers ran past 25 min on 19 Nov 2026.
+    timeout-minutes: 45
     # Public repo only, named (see `test`); skipped in the private copy.
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
     env:
@@ -244,9 +253,10 @@ jobs:
           echo "postgres never became reachable on port 5432" >&2
           exit 1
 
+      # A pinned uv release, checked against a sha256 written in the guard script.
       - name: install uv
         run: |
-          curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - run: uv sync --frozen --all-extras
@@ -273,12 +283,12 @@ jobs:
         env:
           PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
           REAM_TEST_PG_THROWAWAY: "1"
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
       - name: core suite on SQLite
         env:
           REAM_TEST_DB: sqlite
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   # No `needs:` -- the image builds while the tests run. An image whose tests fail
   # is only ever pushed to the internal registry; `deploy` below waits for both.
@@ -293,7 +303,7 @@ jobs:
     if: "github.repository == 'runcove/artifacts' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       dind:
-        image: docker:28-dind
+        image: docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
         # No --dns here: act puts services on a user-defined network, where --dns only sets
         # the embedded resolver's forwarder -- the dind still sees `nameserver 127.0.0.11`,
         # its inner dockerd discards that loopback entry and gives ITS containers Google's

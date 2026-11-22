@@ -21,6 +21,34 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-17c",
+        'A page that sizes itself from the window (a full-window canvas or WebGL scene, a 100vh stage, position: fixed controls) can now say so with <meta name="ream-frame" content="viewport"> in its head. Before, its frame grew with the page until it was about 100000px tall. Declared, the frame is the window\'s height, the page scrolls inside it, decision slots stay above it, and ream screenshot of the whole page is one window high (truncated says when more is below). Pages that do not declare it are sized as before.',
+    ),
+    (
+        "2026-11-17b",
+        "The `canvas` template now draws with WebGL2: the card's picture is taken on the canvas's paint event and a small shader draws it under a light that follows the pointer, with a 2D path where WebGL2 is missing and the plain HTML wherever neither runs (most browsers, your read_page and Ream's own picture of a page). It detects both generations of the API by name, tells the browser where the card is drawn so clicks and selection land on the words, draws only when something changed, and falls back on a dark frame, a lost context or a throw; the reader gets a See it without effects button. The skill's new section HTML-in-Canvas pages says how, with the snippets.",
+    ),
+    (
+        "2026-11-17",
+        "New template `canvas` (GET /api/v1/templates/canvas, or get_template over MCP): a starter for HTML-in-Canvas, live HTML drawn into a canvas where the reader's browser has it (Chrome 157: a canvas with layoutsubtree, each drawn child marked drawable, drawElementImage in the canvas's paint event). It checks for the API first and leaves the HTML readable as an ordinary page where it is missing or drawing fails, which is most browsers and your own read_page. The skill's rules say how.",
+    ),
+    (
+        "2026-11-16d",
+        'A lettered question can now show a preview of each option: give an option a `preview` (plain text, up to 1,000 bytes and 15 lines, such as a snippet of code or markup) and it is shown beside that option on the page and in the inbox, as text, never rendered; reading the question back returns it. Only the gallery shows previews: a person answering in Slack sees the labels alone, so make each label clear without its preview. API: {"letter", "label", "preview"} in options on POST /api/v1/pages/ID/decisions; MCP: the same in ask\'s options; ream ask (artifacts-decide ask) --preview a=TEXT, which your tool updates itself to learn. A large page can now be read in parts: read_page over MCP returns at most 50,000 characters unless you give limit, and says the page\'s whole size, the next_offset to read from (null at the end) and partial (true when the body is not the whole page); GET /api/v1/pages/ID/body and /versions/N take ?offset=&limit= and answer the same fields (whole, as before, with neither). Never send a part to update_page as the whole page: read every part first.',
+    ),
+    (
+        "2026-11-16c",
+        "Over MCP, a new tool wait_for_answer waits for the person's answer or comment on your pages, so an MCP session needs no `ream wait` process beside it. It holds up to `seconds` (default 45, at most 50) and answers the events whats_new would (the same cursor); when nothing came it answers timed_out true, which is not an error: call it again. While it waits, your page shows a session listening. It keeps one place per key, so sessions sharing one key share it: those keep `ream wait`. ask and comment now say so in their `next`. Nothing to install.",
+    ),
+    (
+        "2026-11-16b",
+        "Over MCP, Ream's tools now say when NOT to use each one and which tool to use instead, in shorter descriptions; ask says to write a question that stands alone, because the person may see only the question (inbox or notification), never the page or your chat. publish_page, update_page, delete_page, ask and comment (to comment or delete) end their answer with `next`: Ream's own sentence saying what to do next. Ream's own values are no longer fenced: a page's url and page_url (exactly the address Ream makes for its id), its comments setting (on, off) and a comment anchor's kind come back bare; text an agent wrote (titles, bodies, comments, questions, session labels) is still fenced. Nothing to install.",
+    ),
+    (
+        "2026-11-16",
+        "A page may now embed its own fonts as data: URLs in @font-face (inside the page size limit; fonts from other sites and background workers stay blocked). Publishing warns `embedded_fonts` with how many and how large, because a custom font can make the text a person sees differ from your source text. Ream's own picture of a page (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.",
+    ),
+    (
         "2026-11-15",
         "You can now see one of your own pages as a reader sees it: new verb ream screenshot PAGE-ID --out shot.png [--version N] [--element ID | --section HEADING] [--width 1280|390] [--theme light|dark] saves a PNG and prints `shot.png 1280x3421 v7`, and warns when a tall page was cut (name an element or a section to see the rest). The same is GET /api/v1/pages/ID/screenshot, and screenshot_page over MCP, which answers the picture as an image. Only your own pages; the picture is taken when you ask and kept nowhere. A busy browser is waited out for you; a renderer that is unavailable is not retried. Your tool updates itself to learn the verb.",
     ),

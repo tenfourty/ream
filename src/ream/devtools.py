@@ -74,6 +74,12 @@ class CommandFailed(DevToolsError):
     not an answer."""
 
 
+class Refused(CommandFailed):
+    """The browser answered the very command being called with an error. Not
+    raised for another command's error met meanwhile (a checked `send`'s), which
+    stays a plain CommandFailed."""
+
+
 class Pipe:
     """The caller's end: `to_browser` is written (the browser's fd 3), and
     `from_browser` read (its fd 4). The descriptors stay the caller's to close."""
@@ -208,6 +214,24 @@ class Pipe:
         while len(kept) > EVENTS_KEPT:
             self._kept_bytes -= kept.pop(0)[0]
 
+    def _message_by(self, until: float | None) -> dict | None:
+        """The next whole message, or None if `until` (monotonic) passes first;
+        Timeout still at the pipe's own deadline."""
+        if until is None:
+            return self._message()
+        if time.monotonic() >= until:
+            return None
+        saved = self.deadline
+        self.deadline = min(saved, until)
+        try:
+            return self._message()
+        except Timeout:
+            if saved > until:
+                return None
+            raise
+        finally:
+            self.deadline = saved
+
     def _answered(self, message: dict) -> None:
         """An answer nothing is waiting for: fail if it is a checked one's error."""
         ident = message.get("id")
@@ -221,10 +245,36 @@ class Pipe:
     ) -> dict:
         """Send one command and return its result; CommandFailed if it was
         answered with an error. Events read meanwhile are kept (`wait_for`)."""
+        result = self._call(method, params, session, None)
+        assert result is not None  # noqa: S101 -- with no `until`, only an answer returns
+        return result
+
+    def call_until(
+        self,
+        method: str,
+        params: dict | None = None,
+        session: str | None = None,
+        *,
+        until: float,
+    ) -> dict | None:
+        """`call`, but None if `until` (monotonic, no later than the pipe's
+        deadline) passes before the answer comes. A late answer is read and
+        dropped later, as any answer no call is waiting for."""
+        return self._call(method, params, session, until)
+
+    def _call(
+        self,
+        method: str,
+        params: dict | None,
+        session: str | None,
+        until: float | None,
+    ) -> dict | None:
         want = self.send(method, params, session)
         while True:
             try:
-                message = self._message()
+                message = self._message_by(until)
+                if message is None:
+                    return None
             except MessageTooBig as exc:
                 if exc.ident == want:
                     raise AnswerTooBig(str(exc), want) from None
@@ -236,7 +286,7 @@ class Pipe:
                 self._answered(message)
                 continue
             if "error" in message or not isinstance(message.get("result"), dict):
-                raise CommandFailed(f"the browser refused {method}")
+                raise Refused(f"the browser refused {method}")
             return message["result"]
 
     def seen(self, method: str, session: str | None = None) -> bool:
@@ -260,19 +310,9 @@ class Pipe:
                 size, params = kept.pop(0)
                 self._kept_bytes -= size
                 return params
-            if until is not None and time.monotonic() >= until:
+            message = self._message_by(until)
+            if message is None:
                 return None
-            saved = self.deadline
-            if until is not None:
-                self.deadline = min(saved, until)
-            try:
-                message = self._message()
-            except Timeout:
-                if until is not None and saved > until:
-                    return None
-                raise
-            finally:
-                self.deadline = saved
             if "id" not in message:
                 self._keep(message)
             else:

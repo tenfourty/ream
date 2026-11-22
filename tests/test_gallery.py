@@ -544,7 +544,7 @@ def test_gallery_js_stops_the_frame_scrolling_once_it_holds_the_whole_page(db):
     fullscreen, where the frame still needs its own scrollbar."""
     text = TestClient(create_gallery_app(db)).get("/gallery.js").text
     assert (
-        'setAttribute("scrolling",sized&&fits&&!wide&&!document.fullscreenElement?"no":"auto")'
+        'setAttribute("scrolling",sized&&fits&&!wide&&!vp&&!document.fullscreenElement?"no":"auto")'
         in text
     )
     assert "wide=data.wide===true" in text

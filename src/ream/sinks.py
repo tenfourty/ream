@@ -15,10 +15,11 @@ A sink names the kinds it wants and how it is delivered:
   its own sender still drains, so rows written before this module existed keep
   delivering untouched.
 - `delivery="after_commit"`: `deliver(event)` is called once, best effort, after
-  the commit, and never raises into the caller (the nudge).
+  the commit, and never raises into the caller (a doorbell: since step 9d the
+  house plug-in's `doorbell`; core carries none of its own).
 
-Nothing here loads a plug-in (slice 7). The two sinks below are the code that
-was already in core, registered the way a plug-in later will be.
+Nothing here loads a plug-in (slice 7). The one sink below (the partner bridge) is
+code that was already in core, registered the way a plug-in's is.
 """
 
 from __future__ import annotations
@@ -94,9 +95,6 @@ class Sink:
 _lock = threading.RLock()
 _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
-# The plug-in sink that takes over core's doorbell (step 9d); logged once per process.
-DOORBELL_PLUGIN_SINK = "doorbell"
-_doorbell_stood_down_logged = False
 # Core's `partner` stage sink stands down while the plug-in that holds the bridge (step
 # 9e-3, `partner.claim_bridge`, read in the staging transaction) has its stage for the
 # event's kind registered in this process. Logged once.
@@ -329,7 +327,7 @@ def register(sink: Sink) -> None:
 
 
 def _ensure_builtins() -> None:
-    """Register the two in-core sinks. All under the lock, and the flag is set
+    """Register the in-core sink. All under the lock, and the flag is set
     last: a concurrent `emit` either waits here or sees the full registry, never
     an empty one."""
     global _builtins_loaded
@@ -703,39 +701,16 @@ def stop(timeout: float = 5.0) -> None:
             _stop = None
 
 
-# --- the two sinks core already had -----------------------------------------------
+# --- the sink core already had ------------------------------------------------------
+# Core's own doorbell sink `nudge` went in step 9d (second half): the doorbell is the house
+# plug-in's after-commit sink `doorbell`. What core still owes it is the event itself: the
+# journal row's seq as `event.id`, `title`, `letter` and `recommended` in `data`, and
+# `nudge_note` in `data` where the ring must carry other words than the journal row
+# (comment_added and question_asked: the journal has his words, the ring never did).
 
 
 def _builtin_sinks() -> list[Sink]:
-    from ream import events, nudge, partner
-
-    def deliver_nudge(event: Event) -> None:
-        # Step 9d: the house plug-in's after-commit sink `doorbell` rings instead, so the
-        # two never both ring. Checked at delivery (the plug-ins load after core's sinks);
-        # `registered()` takes the RLock itself, so nothing here holds it.
-        global _doorbell_stood_down_logged
-        if any(s.name == DOORBELL_PLUGIN_SINK for s in registered()):
-            if not _doorbell_stood_down_logged:
-                _doorbell_stood_down_logged = True
-                _log.info(
-                    "core doorbell stands down: a plug-in sink named doorbell is registered"
-                )
-            return
-        data = event.data
-        nudge.emit(
-            kind=event.kind,
-            artifact_id=event.artifact_id,
-            title=data.get("title", ""),
-            agent=event.agent,
-            summary=event.summary,
-            event_id=event.id or "",
-            # The journal row and the nudge usually carry the same note; a producer
-            # whose journal row has words the nudge never did (comment_added) says
-            # so with `nudge_note`.
-            note=data.get("nudge_note", event.note),
-            letter=data.get("letter"),
-            recommended=data.get("recommended"),
-        )
+    from ream import events, partner
 
     def stage_partner(conn: Connection, event: Event) -> None:
         # Step 9e-3: core stands down only when the plug-in that holds the bridge (a
@@ -755,6 +730,25 @@ def _builtin_sinks() -> list[Sink]:
             return
         if owner is not None and not bridge_stage_of(owner):
             partner.note_owner_absent(owner)
+        # Step 9e-4: once a plug-in holds the inbound half too, core's outbox is closed
+        # to new rows. A process without that plug-in's stage (a command-line tool
+        # started with another REAM_PLUGINS) refuses the action rather than add one.
+        # The holder is read with the switch's row share-locked to the end of this
+        # transaction, as every inbound writer reads it: a claim waits for this write
+        # to commit, so no row lands in core's outbox after the claim (what was there
+        # before it, the holder's sender still drains with `hand_over`). Lock order:
+        # a claim or release holds that row and never a decision row, so the counter
+        # bump below cannot deadlock with one.
+        # Only where a row would be written: an unconfigured bridge, or a
+        # question never announced, passes as before. "Announced" is the counter
+        # column, which the plug-in bumps too (`partner.next_version` is the only
+        # counter), so a question first announced after the claim is refused as well.
+        # The refusal reaches a caller as 503 with Retry-After (`app`), a tool error
+        # (`mcp`) or one line and a non-zero exit (`admin`), never a traceback.
+        if partner.would_enqueue(conn, event.ref_id or "", event.kind):
+            holder = partner.lock_inbound(conn, share=True)
+            if holder != partner.CORE:
+                raise partner.InboundHeld(holder)
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.
         at = event.data.get("at")
@@ -767,11 +761,5 @@ def _builtin_sinks() -> list[Sink]:
         )
 
     return [
-        Sink(
-            "nudge",
-            tuple(nudge._ALERTNAMES),
-            deliver=deliver_nudge,
-            delivery="after_commit",
-        ),
         Sink("partner", events.BRIDGE_KINDS, stage=stage_partner, label="quarterdeck"),
     ]

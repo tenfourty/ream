@@ -329,6 +329,22 @@ def test_a_render_under_the_ceiling_is_left_alone(fake, tmp_path):
     assert (tmp_path / "work" / "shot.png").read_bytes().startswith(b"\x89PNG")
 
 
+@pytest.mark.parametrize("mode", ["frames_stall", "frames_refused"])
+def test_a_frame_wait_that_fails_still_leaves_the_picture(
+    fake, tmp_path, monkeypatch, mode
+):
+    """A render never loses a picture to the frame wait (`rendercore._await_frames`):
+    unanswered within its bound, or refused, the picture is taken as before."""
+    monkeypatch.setattr(rendercore, "FRAMES_REAL_SECONDS", 0.3)
+    binary, read = fake(mode)
+    started = time.monotonic()
+    done = _render_with(binary, tmp_path)
+    assert done.returncode == 0
+    assert time.monotonic() - started < 10
+    assert (tmp_path / "work" / "shot.png").read_bytes().startswith(b"\x89PNG")
+    assert any(line.get("method") == "Page.captureScreenshot" for line in read())
+
+
 def test_an_over_long_event_during_the_capture_leaves_no_picture(
     fake, tmp_path, monkeypatch
 ):

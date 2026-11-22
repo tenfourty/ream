@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from ream import (
     clientlevel,
@@ -11,6 +12,7 @@ from ream import (
     forms,
     hosts,
     onboarding,
+    partner,
     partner_in,
     plugin_api,
     ratelimit,
@@ -46,6 +48,22 @@ def _refuse_failed_answer_hooks(app: FastAPI) -> None:
         return JSONResponse(
             status_code=503,
             content={"detail": decisions.answer_hook_failed_detail(exc.plugin)},
+        )
+
+
+def _refuse_held_inbound(app: FastAPI) -> None:
+    """Core's partner stage refused (`partner.InboundHeld`, step 9e-4): a plug-in holds
+    the bridge's inbound half and its stage is not loaded in this process, so the action
+    that would have sent the partner an event was rolled back whole. 503 with
+    `Retry-After`, whichever route met it, never a 500: the event is not lost, the
+    caller tries again."""
+
+    @app.exception_handler(partner.InboundHeld)
+    async def _on_inbound_held(_request: Request, exc: partner.InboundHeld):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": partner.inbound_held_detail(exc.owner)},
+            headers={"Retry-After": str(partner.INBOUND_HELD_RETRY_AFTER)},
         )
 
 
@@ -108,6 +126,7 @@ def create_gallery_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_held_inbound(app)
     _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
@@ -198,6 +217,7 @@ def create_api_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_held_inbound(app)
     _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
@@ -285,6 +305,99 @@ def _forward_to_gallery(scope) -> RedirectResponse:
     )
 
 
+def _plain(status: int, words: str, headers: dict | None = None):
+    return PlainTextResponse(
+        words,
+        status_code=status,
+        headers={"x-content-type-options": "nosniff", **(headers or {})},
+    )
+
+
+def create_partner_dispatch(db: Database, partner_inbound: partner_in.Inbound | None):
+    """The partner inbound endpoint, as the router serves it on the partner host: returns
+    `(partner_hosts, serve)`, where `partner_hosts()` is the set of Host names it answers to
+    and `await serve(scope, receive, send, host)` answers one request for such a host.
+    `create_app` serves it on port 8000 and `internal_port` on the internal port, from this
+    one piece of code, so the two can never differ."""
+    # The partner's endpoint, when the inbound bridge is configured: its own app on
+    # its own host, which is the service's name INSIDE the cluster. Nothing else
+    # serves it (see partner_in.create_partner_app).
+    partner_app = (
+        partner_in.create_partner_app(db, partner_inbound)
+        if partner_inbound is not None
+        else None
+    )
+
+    def _partner_hosts() -> set[str]:
+        # The host core's endpoint was built for, and the one the settings name now (the
+        # same value `plugin_api.router` lets a plug-in mount on).
+        named = hosts.normalise(settings.current().partner_inbound_host)
+        return {
+            h
+            for h in (partner_inbound.host if partner_inbound else None, named)
+            if h is not None
+        }
+
+    def _inbound_holder() -> str:
+        with db.connect() as conn:
+            return partner.inbound_owner(conn)
+
+    def _partner_host_refusal(scope) -> JSONResponse | None:
+        # The answers core's own endpoint gives (`partner_in.create_partner_app`).
+        if scope["type"] != "http":
+            return None
+        seen = {
+            name.decode("latin-1").lower(): value for name, value in scope["headers"]
+        }
+        if any(h in seen for h in partner_in.PROXY_HEADERS):
+            logging.getLogger(__name__).warning(
+                "partner host: refused, the request arrived through a proxy"
+            )
+            return JSONResponse({"error": "not found"}, status_code=404)
+        declared = seen.get("content-length")
+        if declared is not None:
+            length = declared.decode("latin-1")
+            if not length.isdigit() or int(length) > partner_in.MAX_BODY:
+                return JSONResponse({"error": "too_large"}, status_code=400)
+        return None
+
+    async def serve(scope, receive, send, host):
+        # This branch alone decides for the partner inbound host. A plug-in's route
+        # there (API 1.5, step 9e-4) is served only while the database names that
+        # plug-in as the inbound half's holder, read per request and off the event
+        # loop; otherwise core's own endpoint answers (503 once it has stood down).
+        # What holds for the host holds whoever serves it, so it is checked here,
+        # before either: nothing that came through a proxy, and no body declared
+        # over the cap (a body with no declared length is the route's to cap as it
+        # reads, as core's does).
+        refusal = _partner_host_refusal(scope)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+            return
+        chosen = partner_app
+        mounted = plugin_api.router_for(host)
+        if mounted is not None:
+            try:
+                holder = await run_in_threadpool(_inbound_holder)
+            except Exception as exc:  # noqa: BLE001 -- retryable; the type only
+                logging.getLogger(__name__).warning(
+                    "partner host: the inbound holder could not be read: %s",
+                    type(exc).__name__,
+                )
+                await _plain(503, "unavailable", {"Retry-After": "30"})(
+                    scope, receive, send
+                )
+                return
+            if holder == mounted[0]:
+                chosen = mounted[1]
+        if chosen is None:
+            await _plain(404, "not found")(scope, receive, send)
+            return
+        await chosen(scope, receive, send)
+
+    return _partner_hosts, serve
+
+
 def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
     """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
     agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
@@ -300,14 +413,7 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
     limiter = ratelimit.FailedAuthLimiter()
     gallery, content = create_gallery_app(db, limiter), create_content_app(db)
     api = create_api_app(db, limiter)
-    # The partner's endpoint, when the inbound bridge is configured: its own app on
-    # its own host, which is the service's name INSIDE the cluster. Nothing else
-    # serves it (see partner_in.create_partner_app).
-    partner_app = (
-        partner_in.create_partner_app(db, partner_inbound)
-        if partner_inbound is not None
-        else None
-    )
+    partner_hosts, serve_partner = create_partner_dispatch(db, partner_inbound)
 
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -327,8 +433,10 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             else:
                 await _forward_to_gallery(scope)(scope, receive, send)
                 return
-        elif partner_app is not None and host == partner_inbound.host:
-            chosen = partner_app
+        elif host is not None and host in partner_hosts():
+            # This branch alone decides for the partner inbound host (`create_partner_dispatch`).
+            await serve_partner(scope, receive, send, host)
+            return
         elif hosts.artifact_id(host) is not None:
             chosen = content
         elif host in (plugin_hosts := plugin_api.routers()):
@@ -336,12 +444,7 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             # take any host above, and comes after them so it can never shadow one.
             chosen = plugin_hosts[host]
         else:
-            response = PlainTextResponse(
-                "not found",
-                status_code=404,
-                headers={"x-content-type-options": "nosniff"},
-            )
-            await response(scope, receive, send)
+            await _plain(404, "not found")(scope, receive, send)
             return
         await chosen(scope, receive, send)
 

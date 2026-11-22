@@ -6,15 +6,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import decisions, events, nudge, store
+from ream import decisions, events, store
 from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys.</p>"
-
-
-@pytest.fixture(autouse=True)
-def _quiet(monkeypatch):
-    monkeypatch.setattr(nudge, "emit", lambda **kw: None)
 
 
 @pytest.fixture()

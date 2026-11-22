@@ -24,7 +24,7 @@ Python test tags another way, so they keep their own.
 Memory is not the only cost: a page of 8 MiB of tags of 4000 attributes each, or of
 end tags, took `forms`, `sections`, `text` and `anchors` 3 to 20 seconds with every tag
 read as it is. So each of those four gives its parser a `Budget` as its `meter`
-(`PARSE_SECONDS`, made per call, started at its first token), which `BoundedParser`
+(`PARSE_SECONDS` of the thread's CPU time, made per call, started at its first token), which `BoundedParser`
 asks about every token it steps over and about each long tag, and `TooComplex` is
 raised when it is spent.
 
@@ -50,10 +50,16 @@ class TooComplex(Exception):
     on it, or (for a reader with a budget, `renderfind.Budget` or `Budget`) the time is spent."""
 
 
-# What reading one page may cost, in time: memory is bounded by the tag rules below,
-# and this bounds the rest (a page of 8 MiB of tags of 4000 attributes each, or of
-# end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
+# What reading one page may cost, in CPU time of the reading thread (not wall time, so a
+# loaded machine does not refuse a page that is fine): memory is bounded by the tag
+# rules below, and this bounds the rest (a page of 8 MiB of tags of 4000 attributes
+# each, or of end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
 PARSE_SECONDS = 2.0
+# The backstop: CPU time does not run while the thread waits, so a reading that is
+# stuck waiting would never spend its budget. A budget (this one and `renderfind`'s) is
+# also spent when this many times its limit has passed in wall time, from the moment its
+# CPU clock starts, checked where the CPU clock is.
+WALL_FACTOR = 5
 
 
 class _Budget(Protocol):
@@ -61,8 +67,11 @@ class _Budget(Protocol):
 
 
 class Budget:
-    """The time one reading of a page may take. It starts at its first use, so the
-    time a request waited for a scan slot is not spent. `check()` raises TooComplex
+    """The CPU time one reading of a page may take, counted in the reading thread
+    (`time.thread_time`), so time spent waiting, or descheduled on a loaded machine,
+    is not spent: use it only in the thread that reads. It starts at its first use,
+    so the time a request waited for a scan slot is not spent either. Wall time is
+    only a backstop: it is spent too when `WALL_FACTOR` times its limit has passed. `check()` raises TooComplex
     when time is up and is cheap to call between tags; `step()` is for each token, and
     reads the clock only now and then. (`renderfind.Budget`, shared by the readings of
     a request and started when it is made, is its own: its readers count their own
@@ -71,16 +80,19 @@ class Budget:
     def __init__(self, seconds: float = PARSE_SECONDS) -> None:
         self._seconds = seconds
         self._deadline: float | None = None
+        self._wall_deadline = 0.0
         self._steps = 0
         self.spent = False
 
     def check(self) -> None:
         if self.spent:
             raise TooComplex
-        now = time.monotonic()
+        now = time.thread_time()
+        wall = time.monotonic()
         if self._deadline is None:
             self._deadline = now + self._seconds
-        if now >= self._deadline:
+            self._wall_deadline = wall + self._seconds * WALL_FACTOR
+        if now >= self._deadline or wall >= self._wall_deadline:
             self.spent = True
             raise TooComplex
 
@@ -133,15 +145,19 @@ def unescape(text: str) -> str:
         raise TooComplex from exc
 
 
-def _came_from_unescape(exc: BaseException) -> bool:
-    """Whether `exc` was raised under `html.unescape`, which the parser calls on text and
-    on attribute values when `convert_charrefs` is on. It reads a decimal reference
-    (`&#` and digits) with `int()`, which refuses more digits than
-    `sys.get_int_max_str_digits()` (4300) with a ValueError. The traceback says where it
-    came from, so a ValueError from a subclass's own handler is not taken for it."""
+def is_digit_limit(exc: BaseException, under=None) -> bool:
+    """Whether `exc` is the ValueError `int()` raises for a decimal reference of more
+    digits than `sys.get_int_max_str_digits()` (4300): the one rule for "a page the
+    parser cannot read", here and in `sections`. With `under` (a code object), also
+    that it was raised beneath that code, found from the traceback, so a ValueError
+    from a subclass's own handler is not taken for it."""
+    if not isinstance(exc, ValueError) or "integer string conversion" not in str(exc):
+        return False
+    if under is None:
+        return True
     tb = exc.__traceback__
     while tb is not None:
-        if tb.tb_frame.f_code is _UNESCAPE_CODE:
+        if tb.tb_frame.f_code is under:
             return True
         tb = tb.tb_next
     return False
@@ -215,7 +231,7 @@ class BoundedParser(HTMLParser):
         try:
             super().goahead(end)
         except ValueError as exc:
-            if not _came_from_unescape(exc):
+            if not is_digit_limit(exc, under=_UNESCAPE_CODE):
                 raise
             raise TooComplex from exc
 

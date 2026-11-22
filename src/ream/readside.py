@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
-from ream import decisions, partner, partner_in, settings, store
+from ream import decisions, partner, settings, store
 from ream.db import Database
 
 _log = logging.getLogger(__name__)
@@ -33,6 +33,47 @@ class AnswerFailed(Exception):
     def __init__(self, plugin: str) -> None:
         super().__init__(f"plug-in {plugin!r} read-side answer failed")
         self.plugin = plugin
+
+
+@dataclass(frozen=True)
+class Copy:
+    """A question whose home is the partner. Carries the attributes
+    `inbox.key` reads from a decision (id, created_at, needed_by, urgency,
+    topic), so one order serves both."""
+
+    source: str
+    version: int
+    asking_office: str
+    title: str
+    options: list
+    recommended: str | None
+    context: str
+    link: str | None
+    topic: dict | None
+    depends_on: list
+    replaces: str | None
+    replaced_by: str | None
+    urgency: str
+    blocked_on: str | None
+    needed_by: str | None
+    for_offices: list
+    state: str
+    answer: str | None
+    answer_note: str
+    answered_by: str | None
+    answered_at: str | None
+    pending_answer: str | None
+    pending_note: str
+    pending_at: str | None
+    created_at: datetime
+
+    @property
+    def id(self) -> str:
+        return self.source
+
+    @property
+    def qid(self) -> str:
+        return self.source.removeprefix(partner.FOREIGN_PREFIX)
 
 
 @dataclass(frozen=True)
@@ -110,7 +151,7 @@ def _sound(i) -> bool:
     """Whether a plug-in's value is shaped as the readers need it, so one wrong field
     cannot break a sort or a render."""
     return (
-        isinstance(i, partner_in.Copy)
+        isinstance(i, Copy)
         and isinstance(i.source, str)
         and bool(i.source)
         and isinstance(i.created_at, datetime)
@@ -127,8 +168,8 @@ def _sound(i) -> bool:
     )
 
 
-def _copies(c: Contributor, got) -> list[partner_in.Copy]:
-    """Only well-shaped `partner_in.Copy` values pass (`_sound`), with `created_at` made
+def _copies(c: Contributor, got) -> list[Copy]:
+    """Only well-shaped `Copy` values pass (`_sound`), with `created_at` made
     aware (naive means UTC, as `inbox.moment` reads it); anything else is dropped and the
     contributor counted once."""
     if got is None:
@@ -144,7 +185,7 @@ def _copies(c: Contributor, got) -> list[partner_in.Copy]:
     return good
 
 
-def _merge(core: list, extra: list[partner_in.Copy]) -> list:
+def _merge(core: list, extra: list[Copy]) -> list:
     """Core's copies first; a plug-in's copy whose source core already holds is dropped
     (and one plug-in's repeat of another's), so a source appears once."""
     seen = {c.source for c in core}
@@ -158,10 +199,13 @@ def _merge(core: list, extra: list[partner_in.Copy]) -> list:
 
 def open_copies(
     db: Database, limit: int = 500, *, waiting_on_him: bool = True
-) -> list[partner_in.Copy]:
+) -> list[Copy]:
     """Open copies, oldest first, from core and every contributor."""
+
+    from ream import partner_in  # here, not at the top: partner_in imports this module
+
     core = partner_in.open_copies(db, limit, waiting_on_him=waiting_on_him)
-    extra: list[partner_in.Copy] = []
+    extra: list[Copy] = []
     for c in contributors():
         extra += _copies(
             c, _call(c, c.open_copies, db, limit, waiting_on_him=waiting_on_him)
@@ -173,12 +217,13 @@ def open_copies(
     return merged[:limit]
 
 
-def settled_copies(
-    db: Database, since: datetime, limit: int = 50
-) -> list[partner_in.Copy]:
+def settled_copies(db: Database, since: datetime, limit: int = 50) -> list[Copy]:
     """Copies answered since `since`, the latest answer first."""
+
+    from ream import partner_in  # here, not at the top: partner_in imports this module
+
     core = partner_in.settled_copies(db, since, limit)
-    extra: list[partner_in.Copy] = []
+    extra: list[Copy] = []
     for c in contributors():
         extra += _copies(c, _call(c, c.settled_copies, db, since, limit))
     if not extra:
@@ -192,8 +237,11 @@ def count_waiting(db: Database, limit: int = 500) -> int:
     """How many open copies wait on him, counted the way the list is built: core's count,
     plus each plug-in copy from `open_copies(waiting_on_him=True)` whose source core and
     earlier plug-ins do not already hold, so the badge and the list never disagree."""
+
+    from ream import partner_in  # here, not at the top: partner_in imports this module
+
     total = partner_in.count_waiting(db)
-    extra: list[partner_in.Copy] = []
+    extra: list[Copy] = []
     for c in contributors():
         extra += _copies(c, _call(c, c.open_copies, db, limit, waiting_on_him=True))
     if not extra:
@@ -206,14 +254,15 @@ def count_waiting(db: Database, limit: int = 500) -> int:
     return total
 
 
-def answer_here(
-    db: Database, qid: str, *, letter: str, note: str = ""
-) -> partner_in.Copy:
+def answer_here(db: Database, qid: str, *, letter: str, note: str = "") -> Copy:
     """He answers a copy in the gallery. Core's own copies first; a question core does
     not hold goes to each contributor in turn, which raises `store.NotFound` for one that is
     not its own. `decisions.InvalidAnswer` and the store's refusals pass through from
     whoever owns the question; any other fault in a contributor (or a result that is not a `Copy`) is counted and
     raises `AnswerFailed`, which the gallery answers 503: an outage never reads as 404."""
+
+    from ream import partner_in  # here, not at the top: partner_in imports this module
+
     try:
         return partner_in.answer_here(db, qid, letter=letter, note=note)
     except store.NotFound:
@@ -242,7 +291,7 @@ def answer_here(
         except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
             _fail(c.plugin, type(exc).__name__)
             raise AnswerFailed(c.plugin) from None
-        if isinstance(got, partner_in.Copy):
+        if isinstance(got, Copy):
             return got
         _fail(c.plugin, "BadCopy")
         raise AnswerFailed(c.plugin)

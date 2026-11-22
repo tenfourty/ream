@@ -4,7 +4,7 @@
 # for them: until now every rule in AGENTS.md here was prose, and each one had
 # already failed to stop somebody who had read it. What is enforced now:
 #
-#   pre-commit         ggshield on the staged diff; no credential on an argv;
+#   pre-commit         ggshield on the staged change; no credential on an argv;
 #                      ruff; shellcheck
 #   prepare-commit-msg no --amend/-c/-C/--fixup/--squash, and never on a
 #                      commit that is already on a remote
@@ -38,15 +38,22 @@
 # one that matches everything. Without it, a non-matching job prints
 # "(skip) no matching staged files", which is the line you are looking for.
 
+# No git-lfs hooks from lefthook (`skip_lfs`, a boolean in lefthook's schema). Left on, lefthook runs `git lfs
+# pre-push`, which would upload objects the secret scan never read: an LFS pointer's content sits in
+# .git/lfs/objects. The gate refuses a staged pointer too; this keeps the push from being the second way in.
+skip_lfs: true
+
 pre-commit:
   parallel: true
   commands:
     ggshield:
-      # Secret scan on the staged diff. The wrapper maps ggshield's exit code:
-      # 0 clean allows; 1 (a secret) and anything else (not installed, no key,
-      # no network, quota) refuse, unless GGSHIELD_SKIP=1, which allows and
-      # says loudly that NOTHING was scanned.
-      # Measured rc behaviour and the fabricated-token trap are in its header.
+      # Secret scan on the staged change. The wrapper allows only a scan whose
+      # report shows it finished clean (ggshield-judge.py reads the report;
+      # exit 0 alone is not enough); a secret and anything else (not installed,
+      # no key, no network, quota, an incomplete report) refuse, unless
+      # GGSHIELD_SKIP=1, which allows and says loudly that NOTHING was scanned,
+      # and is itself refused where CI, FORGEJO_ACTIONS or GITHUB_ACTIONS is set.
+      # What is scanned and the fabricated-token trap are in its header.
       run: 'scripts/guards/ggshield-gate.sh'
     secret-on-cmdline:
       # Refuses a credential handed to a process as an argument, where every

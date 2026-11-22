@@ -69,13 +69,6 @@ def test_ordinary_text_is_untouched():
     assert text.sanitize(plain) == plain
 
 
-def test_the_nudge_path_uses_the_same_function():
-    """It used to own the only copy, which is how the feed went uncleaned."""
-    from ream import nudge
-
-    assert nudge._sanitize is text.sanitize
-
-
 # ------------------------------------------------- through the event boundary
 
 

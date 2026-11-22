@@ -8,7 +8,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import comments, decisions, frame_pass, nudge, pagediff, review, store
+from ream import comments, decisions, frame_pass, pagediff, review, store
 from ream.app import create_gallery_app
 from ream.content import create_content_app
 
@@ -29,8 +29,7 @@ FRAMED = {"sec-fetch-dest": "iframe"}
 
 
 @pytest.fixture(autouse=True)
-def _quiet(monkeypatch):
-    monkeypatch.setattr(nudge, "emit", lambda **kw: None)
+def _quiet():
     pagediff._CACHE.clear()
 
 

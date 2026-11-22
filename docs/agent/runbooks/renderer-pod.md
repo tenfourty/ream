@@ -5,6 +5,13 @@ browser runs inside the service's own process. A deployment can instead run it a
 for resource isolation: the browser's memory and CPU are then the renderer's, not the service's. The
 choice and the options that lost are in `docs/decisions.md` (13 Nov 2026).
 
+The browser, in the service's process or in renderd, is started with the same fixed flags
+(`rendercore._isolation_flags`). One of them, `--enable-blink-features=CanvasDrawElement`, turns on
+HTML-in-Canvas (`<canvas layoutsubtree>` with `drawElementImage`), which Chromium 147-156 ships behind a
+flag and 157 on by default, so a page that draws with it shows its canvas in the wall's thumbnails and in
+agents' screenshots instead of a blank. It is harmless where the feature is already on.
+`tests/test_canvas_html.py` proves it against the image's own chromium.
+
 ## What the service does with it
 
 Set `REAM_RENDERER_URL=http://<host>:<port>` on the service. It must be `http://` with an explicit port

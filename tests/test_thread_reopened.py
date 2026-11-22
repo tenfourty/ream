@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from ream import comments, decide, events, keys, nudge, store
+from ream import comments, decide, events, keys, store
 from ream import db as dbmod
 from ream.app import create_gallery_app
 from ream.db import Database
@@ -76,18 +76,13 @@ def test_a_reply_id_names_the_root_in_the_event(db, page):
     assert events.list_for_agent(db, "ops-seat")[-1].ref_id == root.id
 
 
-def test_the_event_is_pushed_after_the_row_is_durable(db, page, monkeypatch):
+def test_the_event_is_pushed_after_the_row_is_durable(db, page, rings):
     root = _settled(db, page)
-    seen = []
-    monkeypatch.setattr(nudge, "emit", lambda **kw: seen.append(kw))
+    already = len(rings)  # the comment that set the thread up rang too
     comments.reopen(db, root.id, agent=None, by="jeremy")
-    (sent,) = seen
+    (sent,) = rings[already:]
     assert sent["kind"] == "thread_reopened" and sent["agent"] == "ops-seat"
     assert sent["event_id"] == str(events.list_for_agent(db, "ops-seat")[-1].seq)
-
-
-def test_the_nudge_has_its_own_line():
-    assert nudge._ALERTNAMES["thread_reopened"] == "Jeremy reopened a thread"
 
 
 def test_reopening_an_open_thread_says_nothing(db, page):

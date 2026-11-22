@@ -11,6 +11,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import scalecheck
 from fastapi import HTTPException
 
 from ream import anchors, api, forms, htmlbound, sections, store, text
@@ -25,6 +26,8 @@ BOUND = TEST_SECONDS * 2 + 1
 
 @pytest.fixture()
 def tight_budget(monkeypatch):
+    # The CPU limit is what these tests prove: no slow runner may trip the backstop.
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)
     for module in (forms, sections, text, anchors):
         monkeypatch.setattr(module, "Budget", lambda: htmlbound.Budget(TEST_SECONDS))
 
@@ -68,12 +71,12 @@ READS = {
 
 def _run(read, page):
     """(seconds, what the read gave or raised)."""
-    began = time.perf_counter()
+    began = time.thread_time()
     try:
         gave = read(page)
     except Exception as exc:  # noqa: BLE001 - which one is the test's to say
         gave = exc
-    return time.perf_counter() - began, gave
+    return time.thread_time() - began, gave
 
 
 @pytest.mark.parametrize("shape", sorted(PAGES))
@@ -151,12 +154,12 @@ def test_each_reader_stops_when_its_budget_is_spent(
     short_budgets, name, read, chars, gives_up
 ):
     page = _ordinary(chars)
-    began = time.perf_counter()
+    began = time.thread_time()
     try:
         gave = read(page)
     except Exception as exc:  # noqa: BLE001
         gave = exc
-    took = time.perf_counter() - began
+    took = time.thread_time() - began
     assert took < 2.0, f"{name} went on for {took:.1f} s"
     if isinstance(gives_up, tuple):
         assert gave == gives_up
@@ -172,11 +175,14 @@ def test_a_reader_with_time_left_reads_an_ordinary_page_to_the_end():
     assert forms.parse(page).forms == []
 
 
-def test_a_budget_starts_when_it_is_first_used_and_is_spent_for_good():
+def test_a_budget_starts_when_it_is_first_used_and_is_spent_for_good(monkeypatch):
+    monkeypatch.setattr(
+        htmlbound, "WALL_FACTOR", 1000
+    )  # the sleep is not what is tested
     budget = htmlbound.Budget(0.05)
     time.sleep(0.1)  # made, then waited for a scan slot: not spent
     budget.check()
-    time.sleep(0.1)
+    scalecheck.burn(0.1)
     with pytest.raises(htmlbound.TooComplex):
         budget.check()
     with pytest.raises(htmlbound.TooComplex):
@@ -219,10 +225,10 @@ def test_an_element_anchor_on_a_page_it_cannot_read_in_time_is_a_refusal(tight_b
     saved = store.get_body
     store.get_body = lambda *a, **k: live  # type: ignore[assignment]
     try:
-        began = time.perf_counter()
+        began = time.thread_time()
         with pytest.raises(HTTPException) as refused:
             api._element_anchor(None, "aid", {"kind": "element", "id": "x"}, "agent")
-        took = time.perf_counter() - began
+        took = time.thread_time() - began
     finally:
         store.get_body = saved  # type: ignore[assignment]
     assert refused.value.status_code == 422
@@ -240,7 +246,7 @@ def test_the_page_index_gives_up_on_a_page_it_cannot_locate_ids_in_in_time(
     page = _end_tags(HUGE)
     for ids in ({"x"}, set()):
         index = anchors.PageIndex(page, ids)
-        began = time.perf_counter()
+        began = time.thread_time()
         with pytest.raises(htmlbound.TooComplex):
             index.id_span("x")
-        assert time.perf_counter() - began < BOUND
+        assert time.thread_time() - began < BOUND

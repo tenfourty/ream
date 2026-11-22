@@ -45,6 +45,7 @@ from ream import (
     mcp_apps,
     mcp_clients,
     onboarding,
+    partner,
     ratelimit,
     reach,
     scanslots,
@@ -143,6 +144,10 @@ class ToolOutput:
     # Pictures of page content, as `(mime type, bytes)`: each goes back as an image block
     # after the text, with `image_label` (who wrote what it shows) just before it.
     images: tuple[tuple[str, bytes], ...] = ()
+    # What to do next instead of the tool's `next_step`, when the answer itself decides
+    # it: still one of Ream's own fixed sentences, never an agent's text. `_call_tool`
+    # refuses any not declared for the tool (`Tool.next_alternatives`).
+    next: str | None = None
 
 
 class ToolError(Exception):
@@ -243,6 +248,13 @@ class Tool:
     # How its result is fenced; None: a result that holds no text an agent wrote, said
     # on purpose at registration (`tool(fences=None)`).
     fences: Fences | None = None
+    # What to do next, as Ream's own fixed sentence: `_call_tool` adds it to a successful
+    # structured answer as `next`, after the fence, so it is never fenced and never an
+    # agent's text. A callable picks one from the arguments (or None for no hint).
+    next_step: str | Callable[[dict[str, Any]], str | None] | None = None
+    # The other fixed sentences a handler may put in `ToolOutput.next` instead of
+    # `next_step`. Any other `next` is refused, so stored text can never reach it unfenced.
+    next_alternatives: tuple[str, ...] = ()
 
     def listing(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -282,11 +294,15 @@ def tool(
     title: str | None = None,
     output_schema: dict[str, Any] | None = None,
     fences: Fences | None,
+    next_step: str | Callable[[dict[str, Any]], str | None] | None = None,
+    next_alternatives: tuple[str, ...] = (),
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every hint is given explicitly: a client reads a missing
     `destructiveHint` as true and a missing `openWorldHint` as true. `fences` has no
     default either: a tool says how its result is fenced, or that it holds no text an
-    agent wrote (None)."""
+    agent wrote (None). `next_step` is the hint its answer ends with (`Tool.next_step`);
+    `next_alternatives` the other fixed sentences its handler may answer with
+    (`Tool.next_alternatives`)."""
 
     def register(handler: Handler) -> Handler:
         if name in TOOLS:
@@ -311,6 +327,8 @@ def tool(
             title=title,
             output_schema=output_schema,
             fences=fences,
+            next_step=next_step,
+            next_alternatives=next_alternatives,
         )
         return handler
 
@@ -453,7 +471,8 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
     description=(
         "Who this connection is in Ream: the agent it acts as, its key's id, whether that "
         "key rotates, its grants, the session label it declared, and the permissions it "
-        "holds here (ream:read, ream:write, ream:relay)."
+        "holds here (ream:read, ream:write, ream:relay). Not for a page or who published "
+        "it: use list_pages or read_page."
     ),
     read_only=True,
     destructive=False,
@@ -675,6 +694,10 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
         return _tool_error(str(exc))
     except scanslots.ScanBusy as exc:  # every scan slot stayed taken: say so, try again
         return _tool_error(str(exc))
+    except partner.InboundHeld as exc:
+        # Core's partner stage refused and the action rolled back (step 9e-4): the
+        # same words the HTTP routes give with their 503.
+        return _tool_error(partner.inbound_held_detail(exc.owner))
     except HTTPException as exc:
         # The route's own refusal, word for word: its text, or its structured detail
         # (a secret's field, shape and line, never what matched) as JSON.
@@ -700,6 +723,18 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
                     output.written_by or call.agent,
                 ),
             )
+    hint = found.next_step(arguments) if callable(found.next_step) else found.next_step
+    if output.next is not None:
+        if output.next != hint and output.next not in found.next_alternatives:
+            raise RuntimeError(
+                f"MCP tool {name!r}: its handler answered a next it did not declare"
+            )
+        hint = output.next
+    if hint is not None and output.structured is not None:
+        if "next" in output.structured:
+            raise RuntimeError(f"MCP tool {name!r}: its answer already has a next")
+        # Ream's own sentence, added after the fence: never an agent's text.
+        output = replace(output, structured={**output.structured, "next": hint})
     # The text block is the fenced structure itself, so the two always say the same.
     shown = (
         output.text

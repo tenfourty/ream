@@ -31,6 +31,7 @@ from ream import (
     pagediff,
     partdiff,
     renderfind,
+    scan,
     sections,
     text,
 )
@@ -672,6 +673,11 @@ def _visible_read(page):
 
 
 OTHER_READS = {"BoundedParser": _bounded_read, "text._Visible": _visible_read}
+# The secret scan reads every body published, whatever its markup, and is held to the
+# same time rule on each of these pages (it is not a parser, so not to the memory one).
+# Timed without its scan slot, as the parsers above are read without one: a read the
+# timing stops part way must not leave a slot taken for the reads after it.
+TIMED_READS = {**OTHER_READS, "scan.scan": scan._scan}
 
 
 def _other_page(shape: str, chars: int) -> str:
@@ -688,11 +694,11 @@ def _copies(read: str, shape: str) -> int:
 
 
 @pytest.mark.parametrize("shape", sorted(OTHER))
-@pytest.mark.parametrize("read", sorted(OTHER_READS))
+@pytest.mark.parametrize("read", sorted(TIMED_READS))
 @pytest.mark.scaling
 def test_the_time_of_every_other_long_match_grows_with_the_page(read, shape):
     first, unit, last = OTHER[shape]
-    scalecheck.assert_linear(OTHER_READS[read], first, unit, last)
+    scalecheck.assert_linear(TIMED_READS[read], first, unit, last)
 
 
 @pytest.mark.parametrize("chars", [MIB, 8 * MIB], ids=["1 MiB", "8 MiB"])
@@ -948,3 +954,50 @@ def test_the_absolute_position_starts_again_after_a_reset():
     parser.reset()
     parser.feed("<i>x")
     assert seen == [("b", 3), ("i", 0)]
+
+
+BUDGETS = [htmlbound.Budget, renderfind.Budget]
+
+
+@pytest.mark.parametrize("make", BUDGETS)
+def test_a_budget_counts_the_cpu_time_of_its_thread_not_the_wall_time(
+    make, monkeypatch
+):
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)  # the backstop is tested below
+    budget = make(0.05)
+    budget.check()  # started
+    time.sleep(0.3)  # six times the limit of wall time, no CPU
+    budget.check()
+    for _ in range(128):
+        budget.step()
+    assert not budget.spent
+    scalecheck.burn(0.1)  # twice the limit of this thread's CPU time
+    with pytest.raises(htmlbound.TooComplex):
+        budget.check()
+    assert budget.spent
+
+
+@pytest.mark.parametrize("make", BUDGETS)
+def test_another_threads_cpu_is_not_spent_from_a_budget(make, monkeypatch):
+    """`time.thread_time`, not `time.process_time`: a thread that burns more CPU than the
+    limit while the budget's own thread waits leaves the budget alone."""
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)
+    budget = make(0.1)
+    budget.check()
+    other = threading.Thread(target=scalecheck.burn, args=(0.3,))
+    other.start()
+    other.join()
+    budget.check()
+    assert not budget.spent
+
+
+@pytest.mark.parametrize("make", BUDGETS)
+def test_a_budget_is_spent_by_wall_time_past_the_backstop(make):
+    """A thread stuck waiting uses no CPU: five times the limit of wall time spends it."""
+    assert htmlbound.WALL_FACTOR == 5
+    budget = make(0.05)
+    budget.check()
+    time.sleep(0.4)  # more than 5 x 0.05 s
+    with pytest.raises(htmlbound.TooComplex):
+        budget.check()
+    assert budget.spent

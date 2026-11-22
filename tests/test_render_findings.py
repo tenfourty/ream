@@ -503,6 +503,38 @@ def test_the_scaling_check_fails_a_read_that_grows_with_the_square(probe):
         scalecheck.assert_linear(quadratic.search, "", "<a ", start=4096, probe=probe)
 
 
+def test_a_first_timing_of_nothing_does_not_ask_for_fifty_thousand_reads(monkeypatch):
+    """The number of repeats comes from one timing of one read. When the clock gave
+    that one as nothing, three batches of 50 000 reads of 2 ms ran into the 300 s test
+    timeout; a batch now ends once it has lasted BATCH seconds."""
+    now = [0.0]
+    reads = []
+
+    def read(_text):
+        reads.append(1)
+        if len(reads) > 1:  # the clock misses the first read, and counts the rest
+            now[0] += 0.002
+
+    monkeypatch.setattr(scalecheck, "clock", lambda: now[0])
+    took = scalecheck.best(read, "x")
+    per_batch = round(scalecheck.BATCH / 0.002)
+    assert len(reads) <= 1 + scalecheck.RUNS * (per_batch + 1)
+    assert took == 0.0  # the shortest timing is still the one the clock gave
+
+
+def test_a_batch_of_repeats_is_as_many_as_the_first_timing_asks_for(monkeypatch):
+    now = [0.0]
+    reads = []
+
+    def read(_text):
+        reads.append(1)
+        now[0] += 0.001
+
+    monkeypatch.setattr(scalecheck, "clock", lambda: now[0])
+    assert scalecheck.best(read, "x") == pytest.approx(0.001)
+    assert len(reads) == 1 + scalecheck.RUNS * round(scalecheck.MIN_SMALL / 0.001)
+
+
 def test_pathological_pages_are_read_at_once_and_still_answered_sanely():
     gone = '<img src="gone.png">'
     for page, missing in (
@@ -603,7 +635,7 @@ def test_the_budget_reads_the_clock_every_few_tokens_and_stays_spent(monkeypatch
     now = [100.0]
 
     class Clock:
-        monotonic = staticmethod(lambda: now[0])
+        thread_time = monotonic = staticmethod(lambda: now[0])
 
     monkeypatch.setattr(renderfind, "time", Clock)
     budget = renderfind.Budget(1.0)

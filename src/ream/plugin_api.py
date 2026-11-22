@@ -74,6 +74,10 @@ _ROUTERS: dict[str, tuple[str, Callable]] = {}
 # (plug-in, fn), in registration order.
 _SCHEMA: list[tuple[str, str]] = []
 _STARTS: list[tuple[str, Callable]] = []
+# Answer sources only one plug-in may register (API 1.5), and which plug-in did: a
+# 'slack' answer means one party verified the press, so two may not both vouch for it.
+_SINGLE_SOURCES = ("slack",)
+_SINGLE_SOURCE_HOLDERS: dict[str, str] = {}
 _STOPS: list[tuple[str, Callable]] = []
 
 
@@ -382,8 +386,15 @@ class PluginAPI:
         verified_label: str | None = None,
         route_label: str | None = None,
     ) -> None:
-        """Declare a stored `answer_source` value and its wording (4.2, 2)."""
-        self._sources.add(name)
+        """Declare a stored `answer_source` value and its wording (4.2, 2). 'slack'
+        (API 1.5) may be registered by one plug-in only, and never with `relay=True`:
+        a second plug-in asking for it is refused (`PluginError`, naming it)."""
+        holder = _SINGLE_SOURCE_HOLDERS.get(name)
+        if name in _SINGLE_SOURCES and holder is not None and holder != self._plugin:
+            raise PluginError(
+                f"plug-in {self._plugin!r}: answer source {name!r} is already"
+                f" registered by plug-in {holder!r}"
+            )
         decisions.register_source(
             name,
             label,
@@ -391,6 +402,9 @@ class PluginAPI:
             verified_label=verified_label,
             route_label=route_label,
         )
+        if name in _SINGLE_SOURCES:
+            _SINGLE_SOURCE_HOLDERS[name] = self._plugin
+        self._sources.add(name)
 
     def on_answer(self, name: str, fn: Callable) -> None:
         """Register an answer hook (4.2, 3). `fn(conn, decision, answer)` runs inside the
@@ -546,8 +560,11 @@ class PluginAPI:
     def router(self, router, host: str) -> None:
         """Mount an inbound route on a dedicated host (4.2, routes). `router` is a FastAPI
         `APIRouter`; it is served only for requests whose Host is exactly `host`, never on
-        the gallery, API, partner or content hosts, which a plug-in may not take (nor one
-        another's): such a registration stops start-up. The route has no gallery or key
+        the gallery, API or content hosts, which a plug-in may not take (nor one
+        another's): such a registration stops start-up. Since API 1.5 it may be the partner
+        inbound host (`REAM_PARTNER_INBOUND_HOST`): requests there reach the plug-in only
+        while it holds the bridge's inbound half (`partner.claim_inbound`), and core's own
+        endpoint until then. The route has no gallery or key
         authentication: it checks its own caller. A fault inside it answers a bare 500,
         counted as `<plug-in>:router` and logged by exception type only. Every response
         carries `x-content-type-options: nosniff`. The core applies NO body-size cap and no
@@ -845,14 +862,22 @@ def routers() -> dict[str, Callable]:
     return {host: app for host, (_p, app) in _ROUTERS.items()}
 
 
+def router_for(host: str) -> tuple[str, Callable] | None:
+    """The plug-in that mounted a route on `host` and its ASGI app, or None. `create_app`
+    asks this for the partner inbound host (step 9e-4), which it serves from the plug-in
+    only while the database says that plug-in holds the inbound half."""
+    return _ROUTERS.get(host)
+
+
 def _reserved_host(host: str) -> str | None:
     """Why a plug-in may not serve `host`, or None. Read at call time, from the settings."""
     if hosts.is_gallery(host):
         return "the gallery host"
     if hosts.is_api(host):
         return "the API host"
-    if host == hosts.normalise(settings.current().partner_inbound_host):
-        return "the partner inbound host"
+    # The partner inbound host is NOT reserved (API 1.5, step 9e-4): one plug-in may mount
+    # its route there, and `app.create_app` sends that host to it only while the database
+    # names that plug-in as the inbound half's holder; until then core's own app answers.
     content = store.content_host()
     if host == content or host.endswith("." + content):
         return "the content domain"

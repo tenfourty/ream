@@ -611,33 +611,29 @@ def test_round_two_opens_on_green_insertions_and_hides_them_on_request(
     """Page review step 4: in round 2 the frame shows what changed since the
     version he sent back -- insertions green, deletions struck -- and the
     card's Hide changes link brings back the plain page."""
-    from ream import decisions, nudge
+    from ream import decisions
 
     origin, ident = served
-    nudge_emit, nudge.emit = nudge.emit, lambda **kw: None
-    try:
-        review = decisions.ask_review(db, agent="seat", artifact_id=ident)
-        comments.add(
-            db,
-            artifact_id=ident,
-            author_kind="human",
-            author="jeremy",
-            kind="comment",
-            anchor={"kind": "range", "path": "/p[1]", "start": 0, "end": 11},
-            quote="Paragraph 0",
-            body="say more",
-        )
-        decisions.answer(db, review.id, letter="c", note="", by="jeremy")
-        page = store.get_owned(db, "seat", ident)
-        store.patch(
-            db,
-            "seat",
-            ident,
-            PAGE.replace("Paragraph 0:", "Paragraph 0, now clearer:"),
-            page.revision,
-        )
-    finally:
-        nudge.emit = nudge_emit
+    review = decisions.ask_review(db, agent="seat", artifact_id=ident)
+    comments.add(
+        db,
+        artifact_id=ident,
+        author_kind="human",
+        author="jeremy",
+        kind="comment",
+        anchor={"kind": "range", "path": "/p[1]", "start": 0, "end": 11},
+        quote="Paragraph 0",
+        body="say more",
+    )
+    decisions.answer(db, review.id, letter="c", note="", by="jeremy")
+    page = store.get_owned(db, "seat", ident)
+    store.patch(
+        db,
+        "seat",
+        ident,
+        PAGE.replace("Paragraph 0:", "Paragraph 0, now clearer:"),
+        page.revision,
+    )
     ctx, pg, errors = _open_page(browser, origin, ident, 1400)
     try:
         assert "Round 2" in pg.text_content(".ask")
@@ -674,23 +670,19 @@ def test_a_mark_made_across_a_deletion_stores_the_live_words(browser, served, db
     """Page review step 4, review fix: selecting across struck-out old words
     in round 2's changes view stores the live page's words and offsets, so
     the mark paints on the plain page too."""
-    from ream import decisions, nudge
+    from ream import decisions
 
     origin, ident = served
-    nudge_emit, nudge.emit = nudge.emit, lambda **kw: None
-    try:
-        review = decisions.ask_review(db, agent="seat", artifact_id=ident)
-        decisions.answer(db, review.id, letter="c", note="", by="jeremy")
-        page = store.get_owned(db, "seat", ident)
-        store.patch(
-            db,
-            "seat",
-            ident,
-            PAGE.replace("Paragraph 0: a sentence", "Paragraph 0: one sentence"),
-            page.revision,
-        )
-    finally:
-        nudge.emit = nudge_emit
+    review = decisions.ask_review(db, agent="seat", artifact_id=ident)
+    decisions.answer(db, review.id, letter="c", note="", by="jeremy")
+    page = store.get_owned(db, "seat", ident)
+    store.patch(
+        db,
+        "seat",
+        ident,
+        PAGE.replace("Paragraph 0: a sentence", "Paragraph 0: one sentence"),
+        page.revision,
+    )
     ctx, pg, errors = _open_page(browser, origin, ident, 1400)
     try:
         frame = pg.frame_locator("#artifact-frame")
@@ -950,6 +942,62 @@ def test_a_narrow_window_puts_the_question_above_a_frame_that_fills_the_rest(
     assert not narrowed["askInSheet"]
     assert narrowed["askBottom"] <= narrowed["sheetTop"]
     assert held in ("", "0px"), "the frame still holds room open for the question"
+    assert errors == []
+
+
+def test_a_page_that_asks_for_a_window_high_frame_gets_one_and_never_grows_it(
+    browser, served, db
+):
+    """16 Nov 2026: a page that sizes itself from its window (here a body of three
+    window heights) fed its height back through the gallery until the frame reached the
+    cap. Declaring `<meta name="ream-frame" content="viewport">`, its frame stays the
+    window less the bar and the page scrolls inside it."""
+    origin, _ = served
+    page = store.publish(
+        db,
+        "seat",
+        "Stage",
+        '<!doctype html><html><head><title>S</title><meta name="ream-frame" '
+        'content="viewport"></head><body style="margin:0">'
+        "<script>function fit(){document.body.style.height=(innerHeight*3)+'px'}"
+        "fit();addEventListener('resize',fit)</script><p>Stage</p></body></html>",
+    )
+    ctx, pg, errors = _open_page(browser, origin, page.id, 1400, height=800)
+    try:
+        pg.wait_for_function(
+            """() => document.getElementById('artifact-frame')
+                       .getAttribute('data-frame') === 'viewport'""",
+            timeout=10000,
+        )
+        # Long enough for a growing frame to have grown several times over.
+        pg.wait_for_timeout(1500)
+        got = pg.evaluate(
+            """() => {
+              const f = document.getElementById('artifact-frame');
+              const bar = document.querySelector('.bar.bleed').getBoundingClientRect();
+              return {style: parseFloat(f.style.height), box: f.getBoundingClientRect().height,
+                      bar: bar.height, innerHeight, scrolling: f.getAttribute('scrolling')}
+            }"""
+        )
+        want = got["innerHeight"] - got["bar"]
+        assert abs(got["style"] - want) <= 1, got
+        assert abs(got["box"] - want) <= 1, got
+        assert got["scrolling"] == "auto", got
+        inside = pg.frames[1].evaluate(
+            "[innerHeight, document.documentElement.scrollHeight]"
+        )
+        assert abs(inside[0] - want) <= 1, inside
+        assert inside[1] >= inside[0] * 3 - 3, "the page keeps its own height inside"
+        # The window follows: shorter, and the frame follows it, still not growing.
+        pg.set_viewport_size({"width": 1400, "height": 600})
+        pg.wait_for_function(
+            "h => Math.abs(parseFloat(document.getElementById('artifact-frame')"
+            ".style.height) - h) <= 1",
+            arg=600 - got["bar"],
+            timeout=10000,
+        )
+    finally:
+        ctx.close()
     assert errors == []
 
 

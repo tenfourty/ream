@@ -27,6 +27,7 @@ request bytes (never re-serialised JSON):
     key_id not known ............. 401
     signature does not verify .... 401
     sent_at not within -60 s .. +5 min ... 401
+    a plug-in holds inbound ...... 503    (step 9e-4: retryable, `stood_down`)
     already applied / not newer .. 2xx (nothing changes)
     applied ...................... 2xx
 
@@ -53,7 +54,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from ream import db as dbmod
-from ream import decisions, hosts, partner, settings, store
+from ream import decisions, hosts, partner, plugin_api, readside, settings, store
 from ream.db import Connection, Database
 
 _log = logging.getLogger("ream.partner.inbound")
@@ -70,7 +71,8 @@ MAX_FUTURE = timedelta(seconds=60)
 # A request that came through a proxy or an ingress says so in these headers; a
 # call straight to the service name carries none of them. The route is refused
 # (404) when any is present, so an ingress added by mistake fails closed.
-_PROXY_HEADERS = (
+# `app.create_app` holds a plug-in's route on this host to the same refusal.
+PROXY_HEADERS = (
     "x-forwarded-for",
     "x-forwarded-host",
     "x-forwarded-proto",
@@ -350,6 +352,21 @@ def process(
         return 200, {"result": result}
     except _Refused as exc:
         return exc.status, {"error": exc.word}
+    except partner.InboundHeld:
+        # Core's stage refused inside `decisions.answer`: a plug-in claimed inbound after
+        # this request's first look. Retryable, and the next try is the plug-in's.
+        _log.warning("inbound event not applied: inbound is held by a plug-in")
+        return 503, {"error": STOOD_DOWN}
+    except plugin_api.BridgeStageFailed as exc:
+        # The stage of the plug-in that holds the bridge failed inside the answer, so
+        # the answer rolled back: retryable, as for a failed hook. Its name only.
+        _log.warning("inbound event not applied: plug-in %s stage failed", exc.plugin)
+        return 503, {"error": "not_yet"}
+    except decisions.AnswerHookFailed as exc:
+        # A plug-in's `on_answer` hook raised and the answer rolled back: the gallery
+        # answers 503 for this too. Its name only, never its error.
+        _log.warning("inbound event not applied: plug-in %s hook failed", exc.plugin)
+        return 503, {"error": "not_yet"}
     except dbmod.DataError:
         # A string no column can hold (a NUL, a lone surrogate): malformed.
         _log.warning("refused: malformed (a value no column can hold)")
@@ -365,6 +382,25 @@ def process(
 class _NotApplied(Exception):
     def __init__(self, result: str) -> None:
         self.result = result
+
+
+# The word a stood-down endpoint answers with its 503 (step 9e-4).
+STOOD_DOWN = "stood_down"
+
+
+def _core_holds(conn: Connection) -> bool:
+    """The gate every inbound writer passes first in its own transaction (step 9e-4):
+    whether core still holds the inbound half, with the switch's row share-locked until
+    the transaction ends, so a plug-in's claim waits for this write and this write never
+    lands after the claim moved core's rows away."""
+    return partner.lock_inbound(conn, share=True) == partner.CORE
+
+
+def _gate(conn: Connection) -> None:
+    """The endpoint's gate: a retryable 503 once a plug-in holds inbound. Nothing is
+    recorded here; the event is the plug-in's to apply and to remember."""
+    if not _core_holds(conn):
+        raise _Refused(503, STOOD_DOWN)
 
 
 def _mark(
@@ -425,6 +461,7 @@ def _record_only(
 ) -> str:
     """The event changes nothing: say so, once. Returns what to tell the sender."""
     with db.connect() as conn, conn.transaction():
+        _gate(conn)
         again = _mark(conn, event, outcome, now, detail, advance=advance)
     return again or "ignored"
 
@@ -433,6 +470,10 @@ def apply(db: Database, event: Event, now: datetime) -> str:
     """Apply one authenticated event. Returns 'applied', 'duplicate', 'stale' or
     'ignored' (understood and deliberately not acted on)."""
     with db.connect() as conn:
+        # A first look, no lock: once a plug-in holds inbound, core's tables are empty
+        # and say nothing about this event. Each writer below asks again under the lock.
+        if partner.inbound_owner(conn) != partner.CORE:
+            raise _Refused(503, STOOD_DOWN)
         if conn.execute(
             "select 1 from partner_event_seen where event_id = %s", (event.event_id,)
         ).fetchone():
@@ -510,6 +551,9 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
         return _record_only(db, event, "unchanged", now)
 
     def hook(conn: Connection) -> None:
+        # In the answer's own transaction, after it wrote the decision row: decision
+        # row, then the switch's row, the one lock order (`partner.lock_inbound`).
+        _gate(conn)
         again = _mark(conn, event, "applied", now, audit)
         if again is not None:
             raise _NotApplied(again)
@@ -532,6 +576,10 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
         # on its Slack copy is refused, and the refusal is recorded; the
         # partner is told 2xx so it stops retrying a press that can never apply.
         return _record_only(db, event, "held", now)
+    except decisions.TapStands:
+        # He already answered on the page: his tap stands and the press changes
+        # nothing. Recorded, and 2xx, so the partner stops retrying it.
+        return _record_only(db, event, "tap_stands", now)
     except (
         decisions.InvalidAnswer,
         decisions.AlreadyDecided,
@@ -665,6 +713,7 @@ def _apply_foreign(db: Database, event: Event, now: datetime) -> str:
         )
 
     with db.connect() as conn, conn.transaction():
+        _gate(conn)
         existing = conn.execute(
             "select 1 from partner_question where source = %s", (event.source,)
         ).fetchone()
@@ -774,45 +823,9 @@ _COLS = (
 )
 
 
-@dataclass(frozen=True)
-class Copy:
-    """A question whose home is the partner. Carries the attributes
-    `inbox.key` reads from a decision (id, created_at, needed_by, urgency,
-    topic), so one order serves both."""
-
-    source: str
-    version: int
-    asking_office: str
-    title: str
-    options: list
-    recommended: str | None
-    context: str
-    link: str | None
-    topic: dict | None
-    depends_on: list
-    replaces: str | None
-    replaced_by: str | None
-    urgency: str
-    blocked_on: str | None
-    needed_by: str | None
-    for_offices: list
-    state: str
-    answer: str | None
-    answer_note: str
-    answered_by: str | None
-    answered_at: str | None
-    pending_answer: str | None
-    pending_note: str
-    pending_at: str | None
-    created_at: datetime
-
-    @property
-    def id(self) -> str:
-        return self.source
-
-    @property
-    def qid(self) -> str:
-        return self.source.removeprefix(partner.FOREIGN_PREFIX)
+# Defined in `readside` (the read side's own type, so a plug-in builds one without
+# importing this module); the old name stays.
+Copy = readside.Copy
 
 
 def _iso(value) -> str | None:
@@ -907,6 +920,10 @@ def answer_here(db: Database, qid: str, *, letter: str, note: str = "") -> Copy:
     store._check_secrets(note, "note", agent=settings.owner_id(), artifact_id=None)
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
+        # Step 9e-4: once a plug-in holds inbound the copy is its own, and "not mine"
+        # is what sends `readside.answer_here` on to it.
+        if not _core_holds(conn):
+            raise store.NotFound()
         row = conn.execute(
             "select options from partner_question where source = %s and state = 'open'",
             (source,),
@@ -955,7 +972,7 @@ def create_partner_app(db: Database, inbound: Inbound) -> FastAPI:
     @app.post(PATH)
     async def receive(request: Request) -> JSONResponse:
         # Came through a proxy or an ingress: this route is not for that path.
-        if any(h in request.headers for h in _PROXY_HEADERS):
+        if any(h in request.headers for h in PROXY_HEADERS):
             _log.warning("refused: request arrived through a proxy")
             return JSONResponse({"error": "not found"}, status_code=404)
         declared = request.headers.get("content-length")

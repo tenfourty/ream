@@ -65,10 +65,10 @@ def test_kind_lists_are_distinct_and_the_partner_uses_the_bridge_list():
     assert "answered" in events.BRIDGE_KINDS
 
 
-def test_core_registers_the_nudge_and_the_partner_as_sinks():
+def test_core_registers_the_partner_and_no_doorbell_of_its_own():
+    # Step 9d: the doorbell is a plug-in's after-commit sink; core keeps only the partner.
+    assert [s.name for s in sinks._builtin_sinks()] == ["partner"]
     by_name = {s.name: s for s in sinks.registered()}
-    assert by_name["nudge"].delivery == "after_commit"
-    assert "decision_answered" in by_name["nudge"].kinds
     assert by_name["partner"].delivery == "outbox"
     assert by_name["partner"].stage is not None
     assert by_name["partner"].kinds == events.BRIDGE_KINDS
@@ -245,11 +245,7 @@ def test_event_from_json_ignores_fields_it_does_not_know():
     assert events.Event.from_json(json.dumps(raw)).data == {"a": 1}
 
 
-def test_the_nudge_sink_passes_the_fields_nudge_emit_takes(db, page, monkeypatch):
-    from ream import nudge
-
-    calls = []
-    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append((a, k)))
+def test_an_after_commit_sink_gets_the_fields_a_doorbell_reads(db, page, rings):
     out = _emit(
         db,
         _event(
@@ -258,38 +254,13 @@ def test_the_nudge_sink_passes_the_fields_nudge_emit_takes(db, page, monkeypatch
             data={"title": "Plan", "letter": "a", "recommended": "b"},
         ),
     )
+    assert rings == []  # nothing before the commit's `fire`
     out.fire()
-    ((args, kwargs),) = calls
-    assert args == () and kwargs["kind"] == "decision_answered"
+    (kwargs,) = rings
+    assert kwargs["kind"] == "decision_answered"
     assert kwargs["event_id"] == str(out.seq)
     assert kwargs["title"] == "Plan" and kwargs["note"] == "his words"
     assert kwargs["letter"] == "a" and kwargs["recommended"] == "b"
-
-
-def _nudge_calls(db, page, monkeypatch, *extra):
-    from ream import nudge
-
-    calls = []
-    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
-    with sinks.isolated(*sinks._builtin_sinks(), *extra):
-        _emit(db, _event(artifact_id=page.id, data={"title": "Plan"})).fire()
-    return calls
-
-
-def test_core_doorbell_stands_down_when_a_plugin_sink_named_doorbell_exists(
-    db, page, monkeypatch
-):
-    doorbell = Sink(
-        "doorbell",
-        ("decision_answered",),
-        deliver=lambda event: None,
-        delivery="after_commit",
-    )
-    assert _nudge_calls(db, page, monkeypatch, doorbell) == []
-
-
-def test_core_doorbell_rings_with_no_doorbell_sink(db, page, monkeypatch):
-    assert len(_nudge_calls(db, page, monkeypatch)) == 1
 
 
 @pytest.mark.usefixtures("fresh_schema")
@@ -502,13 +473,10 @@ def Event_ref(raw):
     return events.Event.from_json(raw).ref_id
 
 
-def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(
-    db, page, monkeypatch
-):
-    from ream import decisions, nudge
+def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(db, page, rings):
+    from ream import decisions
 
-    calls = []
-    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
+    calls = rings
     decision = _open_question(db, page, recommended="a")
     decisions.answer(
         db, decision.id, letter="b", note="not yet", by="jeremy", source="page"
@@ -525,12 +493,11 @@ def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(
 
 
 def test_a_comment_nudge_carries_no_note_though_the_journal_has_his_words(
-    db, page, monkeypatch
+    db, page, rings
 ):
-    from ream import comments, nudge
+    from ream import comments
 
-    calls = []
-    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
+    calls = rings
     comments.add(
         db, artifact_id=page.id, author_kind="human", author="jeremy", body="hello"
     )

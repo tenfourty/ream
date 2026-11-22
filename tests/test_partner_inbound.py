@@ -632,6 +632,29 @@ def test_a_page_answer_after_a_slack_one_replaces_it_as_a_page_answer(
     assert (row.answer, row.answer_source, row.recorded_by) == ("b", "page", None)
 
 
+def test_a_slack_press_after_his_page_tap_is_2xx_and_the_tap_stands(
+    db, bridge, client, partner_key, page
+):
+    q = ask(db, page)
+    decisions.answer(db, q.id, letter="a", note="mine", by="jeremy")
+    sent = len(_outbox(db))
+    event = make("answered", f"artifacts:{q.id}", 1, pressed("b"))
+    r = post(client, partner_key, event)
+    assert r.status_code == 200 and r.json() == {"result": "ignored"}
+    row = _row(db, q.id)
+    assert (row.answer, row.answer_note, row.answer_source, row.recorded_by) == (
+        "a",
+        "mine",
+        "page",
+        None,
+    )
+    assert _seen(db, event["event_id"])[0] == "tap_stands"
+    assert len(_outbox(db)) == sent  # nothing new is told to the partner
+    # Delivered again, it is a duplicate and still changes nothing.
+    assert post(client, partner_key, event).json() == {"result": "duplicate"}
+    assert _row(db, q.id).answer == "a"
+
+
 def test_an_unknown_decision_is_2xx_and_changes_nothing(
     db, bridge, client, partner_key, page
 ):

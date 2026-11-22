@@ -17,7 +17,6 @@ from ream import (
     formanswer,
     formrecord,
     keys,
-    nudge,
     store,
 )
 from ream.app import create_gallery_app
@@ -59,10 +58,9 @@ def client(db, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def nudges(monkeypatch):
-    sent = []
-    monkeypatch.setattr(nudge, "emit", lambda kind, **kw: sent.append((kind, kw)))
-    return sent
+def nudges(rings):
+    # The doorbell is a plug-in's after-commit sink (step 9d); `rings` stands in for it.
+    return rings
 
 
 @pytest.fixture()

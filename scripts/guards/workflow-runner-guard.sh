@@ -86,7 +86,7 @@
 #   scripts/guards/workflow-runner-guard.sh --dir <dir>           # another directory of Forgejo workflow files
 #   scripts/guards/workflow-runner-guard.sh --github-dir <dir>    # another directory of GitHub workflow files
 #   scripts/guards/workflow-runner-guard.sh --selftest
-# One more mode, for the test jobs of sec.yml: --install-uv <bin dir> puts the pinned uv there.
+# One more mode, for the test jobs of ci.yml and sec.yml: --install-uv <bin dir> puts the pinned uv there.
 # It runs from scripts/guards/run-selftests.sh (CI's `guard selftests` step in ci.yml AND sec.yml).
 # Run it before pushing a change to a workflow file.
 #
@@ -130,6 +130,13 @@ PYYAML_REQUIREMENT="pyyaml==6.0.3 \\
   --hash=sha256:41715c910c881bc081f1e8872880d3c650acf13dfa8214bad49ed4cede7c34ea \\
   --hash=sha256:8dc52c23056b9ddd46818a57b78404882310fb473d63f17b07d5c40421e47f8e"
 
+# verify_sha256 <file> <sum> — rc 0 only when <sum> is 64 hex digits and is the file's sha256.
+verify_sha256() {
+  case "$2" in *[!0-9a-f]* | "") return 1 ;; esac
+  [ "${#2}" -eq 64 ] || return 1
+  printf '%s  %s\n' "$2" "$1" | sha256sum -c --status -
+}
+
 # fetch_uv <dir> — download the pinned uv release for this machine into <dir>/uv (uv, uvx), checked
 # against the sha256 above. Sets UV_BIN. rc 0 ok, 3 cannot.
 fetch_uv() {
@@ -144,7 +151,7 @@ fetch_uv() {
     echo "$SELF: REFUSED — could not download uv $UV_VERSION" >&2
     return 3
   fi
-  if ! printf '%s  %s\n' "$sum" "$d/uv.tar.gz" | sha256sum -c --status -; then
+  if ! verify_sha256 "$d/uv.tar.gz" "$sum"; then
     echo "$SELF: REFUSED — the uv $UV_VERSION download does not match its pinned sha256" >&2
     return 3
   fi
@@ -152,8 +159,8 @@ fetch_uv() {
   UV_BIN="$d/uv/uv"
 }
 
-# install_uv <bin dir> — put the pinned uv and uvx into <bin dir> (the test jobs of sec.yml use it
-# in place of a piped installer).
+# install_uv <bin dir> — put the pinned uv and uvx into <bin dir> (the test jobs of ci.yml and
+# sec.yml use it in place of a piped installer).
 install_uv() {
   local t
   [ -n "${1:-}" ] || { echo "$USAGE" >&2; return 3; }
@@ -1770,6 +1777,36 @@ selftest() {
   mkdir -p "$a/intkey/x"
   printf 'runs:\n  env:\n    1: x\n' >"$a/intkey/x/action.yml"
   acase_ "actions: an int key in an action.yml" 1 "$a/intkey" "[rule: string keys]"
+
+  # The uv download check: the right sha256 passes; a wrong, short, upper-case or empty one, and a
+  # changed file, refuse; the pins written above are each 64 hex digits.
+  local u="$tmp/uvsum" good
+  mkdir -p "$u"
+  printf 'not a real tarball\n' >"$u/fake.tar.gz"
+  good=$(sha256sum "$u/fake.tar.gz" | cut -d' ' -f1)
+  usum_() { # usum_ <label> <want rc> <sum>
+    local rc
+    verify_sha256 "$u/fake.tar.gz" "$3"
+    rc=$?
+    if { [ "$2" -eq 0 ] && [ "$rc" -eq 0 ]; } || { [ "$2" -ne 0 ] && [ "$rc" -ne 0 ]; }; then
+      echo "ok   $1"
+    else
+      echo "FAIL $1 (rc=$rc)"
+      fail=1
+    fi
+  }
+  usum_ "uv download: the right sha256 passes" 0 "$good"
+  usum_ "uv download: a wrong sha256 refuses" 1 "$(printf '%064d' 0)"
+  usum_ "uv download: a short sha256 refuses" 1 "${good%??}"
+  usum_ "uv download: an upper-case sha256 refuses" 1 "$(printf '%s' "$good" | tr 'a-f' 'A-F')"
+  usum_ "uv download: an empty sha256 refuses" 1 ""
+  printf 'changed\n' >>"$u/fake.tar.gz"
+  usum_ "uv download: a changed file refuses" 1 "$good"
+  case "$UV_SHA256_X86_64$UV_SHA256_AARCH64" in
+    *[!0-9a-f]*) echo "FAIL uv pins are not lower-case hex"; fail=1 ;;
+    *) [ "${#UV_SHA256_X86_64}" -eq 64 ] && [ "${#UV_SHA256_AARCH64}" -eq 64 ] ||
+      { echo "FAIL uv pins are not 64 digits"; fail=1; } ;;
+  esac
 
   echo "----"
   if [ "$fail" -eq 0 ]; then
