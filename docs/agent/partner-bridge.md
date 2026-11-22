@@ -169,6 +169,20 @@ the route answers 404 when any proxy header is present (`X-Forwarded-*`, `Forwar
 service name never carries and an ingress or a tunnel adds; and the signature is checked
 whatever the path. It is not behind the agent key: the signature is the credential.
 
+### The internal port (`REAM_INTERNAL_PORT`)
+
+Port 8000 picks the app by `Host` alone, so anything in the cluster that can reach it and
+sends the gallery's `Host` is served the gallery. `REAM_INTERNAL_PORT` (also
+`ARTIFACTS_INTERNAL_PORT`; the deployment uses 8001; unset: no second listener) opens a second
+listener whose own app serves only `GET /healthz` (status only) and `POST /partner/v1/events`
+on the partner host, with the same proxy-header refusal, body cap and signature check as on 8000
+(the same code, `app.create_partner_dispatch`). Every other path, and every other `Host`, is a
+plain 404, so the gallery, API, content and `/mcp` do not exist there. The hub's URL then names
+the internal port and still carries the partner `Host` (`hosts.normalise` strips the port), and
+the pod's probes move to it; the network policy can then keep everything but the ingress off 8000.
+The listener runs on the main event loop and starts only after the app's start-up has finished,
+so its `/healthz` reflects the main server. `src/ream/internal_port.py` has the design.
+
 ## Verification, cheapest first
 
 On the exact request bytes, never re-serialised JSON:
