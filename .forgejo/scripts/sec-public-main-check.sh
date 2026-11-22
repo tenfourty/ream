@@ -25,11 +25,13 @@ gitr() {
   local lim="$1"
   shift
   if [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ]; then
-    timeout "$lim" env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
+    # Assignments before the command go in the environment of timeout and git; `env NAME=value`
+    # would put the header on env's own argv, readable in /proc by any process.
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
       GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'sec:%s' "$SEC_PUBLIC_READ_TOKEN" | base64 -w0)" \
-      GIT_TERMINAL_PROMPT=0 git "$@"
+      GIT_TERMINAL_PROMPT=0 timeout "$lim" git "$@"
   else
-    timeout "$lim" env GIT_TERMINAL_PROMPT=0 git "$@"
+    GIT_TERMINAL_PROMPT=0 timeout "$lim" git "$@"
   fi
 }
 
