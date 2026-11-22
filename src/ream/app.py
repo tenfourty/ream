@@ -305,21 +305,20 @@ def _forward_to_gallery(scope) -> RedirectResponse:
     )
 
 
-def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
-    """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
-    agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
-    checking identity itself. A request that reaches the gallery app having entered
-    through the content ingress therefore reaches it with no identity check at all -- so
-    anything that is not exactly the gallery host, and not exactly a well-formed artifact
-    host, gets a 404 from the router itself, never a guess at which app it "probably"
-    meant. `hosts.first_host_header` is reused rather than re-read here, so the router
-    and the content app can never disagree about what the Host header was.
-    """
-    # One failed-key count for both faces the agent API is served on, so a
-    # caller cannot double its allowance by switching hostnames.
-    limiter = ratelimit.FailedAuthLimiter()
-    gallery, content = create_gallery_app(db, limiter), create_content_app(db)
-    api = create_api_app(db, limiter)
+def _plain(status: int, words: str, headers: dict | None = None):
+    return PlainTextResponse(
+        words,
+        status_code=status,
+        headers={"x-content-type-options": "nosniff", **(headers or {})},
+    )
+
+
+def create_partner_dispatch(db: Database, partner_inbound: partner_in.Inbound | None):
+    """The partner inbound endpoint, as the router serves it on the partner host: returns
+    `(partner_hosts, serve)`, where `partner_hosts()` is the set of Host names it answers to
+    and `await serve(scope, receive, send, host)` answers one request for such a host.
+    `create_app` serves it on port 8000 and `internal_port` on the internal port, from this
+    one piece of code, so the two can never differ."""
     # The partner's endpoint, when the inbound bridge is configured: its own app on
     # its own host, which is the service's name INSIDE the cluster. Nothing else
     # serves it (see partner_in.create_partner_app).
@@ -343,13 +342,6 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
         with db.connect() as conn:
             return partner.inbound_owner(conn)
 
-    def _plain(status: int, words: str, headers: dict | None = None):
-        return PlainTextResponse(
-            words,
-            status_code=status,
-            headers={"x-content-type-options": "nosniff", **(headers or {})},
-        )
-
     def _partner_host_refusal(scope) -> JSONResponse | None:
         # The answers core's own endpoint gives (`partner_in.create_partner_app`).
         if scope["type"] != "http":
@@ -369,6 +361,60 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
                 return JSONResponse({"error": "too_large"}, status_code=400)
         return None
 
+    async def serve(scope, receive, send, host):
+        # This branch alone decides for the partner inbound host. A plug-in's route
+        # there (API 1.5, step 9e-4) is served only while the database names that
+        # plug-in as the inbound half's holder, read per request and off the event
+        # loop; otherwise core's own endpoint answers (503 once it has stood down).
+        # What holds for the host holds whoever serves it, so it is checked here,
+        # before either: nothing that came through a proxy, and no body declared
+        # over the cap (a body with no declared length is the route's to cap as it
+        # reads, as core's does).
+        refusal = _partner_host_refusal(scope)
+        if refusal is not None:
+            await refusal(scope, receive, send)
+            return
+        chosen = partner_app
+        mounted = plugin_api.router_for(host)
+        if mounted is not None:
+            try:
+                holder = await run_in_threadpool(_inbound_holder)
+            except Exception as exc:  # noqa: BLE001 -- retryable; the type only
+                logging.getLogger(__name__).warning(
+                    "partner host: the inbound holder could not be read: %s",
+                    type(exc).__name__,
+                )
+                await _plain(503, "unavailable", {"Retry-After": "30"})(
+                    scope, receive, send
+                )
+                return
+            if holder == mounted[0]:
+                chosen = mounted[1]
+        if chosen is None:
+            await _plain(404, "not found")(scope, receive, send)
+            return
+        await chosen(scope, receive, send)
+
+    return _partner_hosts, serve
+
+
+def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
+    """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
+    agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
+    checking identity itself. A request that reaches the gallery app having entered
+    through the content ingress therefore reaches it with no identity check at all -- so
+    anything that is not exactly the gallery host, and not exactly a well-formed artifact
+    host, gets a 404 from the router itself, never a guess at which app it "probably"
+    meant. `hosts.first_host_header` is reused rather than re-read here, so the router
+    and the content app can never disagree about what the Host header was.
+    """
+    # One failed-key count for both faces the agent API is served on, so a
+    # caller cannot double its allowance by switching hostnames.
+    limiter = ratelimit.FailedAuthLimiter()
+    gallery, content = create_gallery_app(db, limiter), create_content_app(db)
+    api = create_api_app(db, limiter)
+    partner_hosts, serve_partner = create_partner_dispatch(db, partner_inbound)
+
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
@@ -387,38 +433,10 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             else:
                 await _forward_to_gallery(scope)(scope, receive, send)
                 return
-        elif host is not None and host in _partner_hosts():
-            # This branch alone decides for the partner inbound host. A plug-in's route
-            # there (API 1.5, step 9e-4) is served only while the database names that
-            # plug-in as the inbound half's holder, read per request and off the event
-            # loop; otherwise core's own endpoint answers (503 once it has stood down).
-            # What holds for the host holds whoever serves it, so it is checked here,
-            # before either: nothing that came through a proxy, and no body declared
-            # over the cap (a body with no declared length is the route's to cap as it
-            # reads, as core's does).
-            refusal = _partner_host_refusal(scope)
-            if refusal is not None:
-                await refusal(scope, receive, send)
-                return
-            chosen = partner_app
-            mounted = plugin_api.router_for(host)
-            if mounted is not None:
-                try:
-                    holder = await run_in_threadpool(_inbound_holder)
-                except Exception as exc:  # noqa: BLE001 -- retryable; the type only
-                    logging.getLogger(__name__).warning(
-                        "partner host: the inbound holder could not be read: %s",
-                        type(exc).__name__,
-                    )
-                    await _plain(503, "unavailable", {"Retry-After": "30"})(
-                        scope, receive, send
-                    )
-                    return
-                if holder == mounted[0]:
-                    chosen = mounted[1]
-            if chosen is None:
-                await _plain(404, "not found")(scope, receive, send)
-                return
+        elif host is not None and host in partner_hosts():
+            # This branch alone decides for the partner inbound host (`create_partner_dispatch`).
+            await serve_partner(scope, receive, send, host)
+            return
         elif hosts.artifact_id(host) is not None:
             chosen = content
         elif host in (plugin_hosts := plugin_api.routers()):
