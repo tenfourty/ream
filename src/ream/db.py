@@ -1052,6 +1052,27 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # 10 Nov 2026: which parts a round changed (see schema.sql). Numbered 34: 32 is the
     # key-revocation lane's, 33 the render findings above (runcove-5t3oj.56, slice 2).
     34: ("alter table version add column part_changes jsonb",),
+    # 22 Nov 2026: view counts per page, day and kind, and per viewer (see schema.sql).
+    35: (
+        (
+            "create table page_view_day ("
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " day text not null,"
+            " kind text not null,"
+            " views integer not null default 0,"
+            " primary key (artifact_id, day, kind))"
+        ),
+        (
+            "create table page_viewer ("
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " kind text not null,"
+            " viewer text not null,"
+            " views integer not null default 0,"
+            " last_at timestamptz not null,"
+            " counted_at timestamptz not null,"
+            " primary key (artifact_id, kind, viewer))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

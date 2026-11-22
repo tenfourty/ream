@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-# core-lock-pr.sh <sha> <core-ref> -- after main's image job, open (or update) the one pull
+# core-lock-pr.sh <sha> <core-ref> [<renderer-ref>] -- after main's image job, open (or update) the one pull
 # request on runcove/ream-homelab that moves its `core.lock` to this core image, and ask the
 # forge to merge it by itself when ream-homelab's checks succeed (docs/decisions.md, 9 Nov 2026;
 # runbook docs/agent/runbooks/image-from-ream-homelab.md). ream-homelab then builds the deployed
 # image and opens the deployment's pin PR. Modelled on pin-pr.sh.
+#
+# With a third argument (the renderer image, <RENDERER_REPO>:<sha12>@sha256:<digest>, same sha12) the
+# same commit also writes `renderer.lock` (one line, same shape as core.lock; created if absent), so
+# one PR moves both. Without it nothing about renderer.lock changes. The stand-down rules read
+# core.lock only.
 #
 # CORE_LOCK_TOKEN (environment only, never an argument) belongs to an account that may push
 # branches to and open and merge PRs on ream-homelab. It is read by curl from stdin and by git
@@ -26,6 +31,8 @@ BASE_BRANCH="${LOCK_BASE_BRANCH:-main}"
 LOCK_FILE="${LOCK_FILE:-core.lock}"
 BRANCH="core-lock/next"
 IMAGE_REPO="git.tenfourty.site/runcove/artifacts-core"
+RENDERER_REPO="git.tenfourty.site/runcove/artifacts-renderer"
+RENDERER_LOCK_FILE="${RENDERER_LOCK_FILE:-renderer.lock}"
 
 say()     { printf 'core-lock-pr: %s\n' "$*"; }
 refuse()  { printf 'core-lock-pr: REFUSING: %s\n' "$*" >&2; exit 64; }
@@ -35,6 +42,12 @@ failed()  { printf 'core-lock-pr: FAILED: %s\n' "$*" >&2; exit 65; }
 is_core_ref() {
   case "$1" in *$'\n'*) return 1 ;; esac
   printf '%s' "$1" | grep -Eqx "${IMAGE_REPO//./\\.}:[0-9a-f]{12}@sha256:[0-9a-f]{64}"
+}
+
+# <renderer repo>:<sha12>@sha256:<64 hex>, whole string.
+is_renderer_ref() {
+  case "$1" in *$'\n'*) return 1 ;; esac
+  printf '%s' "$1" | grep -Eqx "${RENDERER_REPO//./\\.}:[0-9a-f]{12}@sha256:[0-9a-f]{64}"
 }
 
 # The sha12 in the lock file's one line; empty unless the file is exactly one valid ref.
@@ -124,11 +137,16 @@ verify_pr_head() { # <n> <pushed sha>
 }
 
 main() {
-  local sha="${1:-}" ref="${2:-}"
+  local sha="${1:-}" ref="${2:-}" rref="${3:-}"
   printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}' || refuse "'$sha' is not a full commit sha"
   is_core_ref "$ref" || refuse "'$ref' is not ${IMAGE_REPO}:<sha12>@sha256:<digest>"
   [ "$(printf '%s' "${ref#"${IMAGE_REPO}":}" | cut -c1-12)" = "${sha:0:12}" ] \
     || refuse "the image tag does not match commit ${sha:0:12}"
+  if [ -n "$rref" ]; then
+    is_renderer_ref "$rref" || refuse "'$rref' is not ${RENDERER_REPO}:<sha12>@sha256:<digest>"
+    [ "$(printf '%s' "${rref#"${RENDERER_REPO}":}" | cut -c1-12)" = "${sha:0:12}" ] \
+      || refuse "the renderer image tag does not match commit ${sha:0:12}"
+  fi
   [ -n "${CORE_LOCK_TOKEN:-}" ] \
     || refuse "CORE_LOCK_TOKEN is not set on this repo (docs/agent/runbooks/image-from-ream-homelab.md, step 1)"
 
@@ -158,10 +176,23 @@ main() {
   esac
 
   rewrite_lock "$file" "$ref" || refuse "the rewrite did not change $LOCK_FILE"
+  local paths=("$LOCK_FILE") rnote=""
+  if [ -n "$rref" ]; then
+    # Absent is fine (first time); present must be exactly one renderer ref, or it is left alone
+    # for a person. An unchanged file is fine too (a re-run of the same renderer image).
+    local rfile="$work/target/$RENDERER_LOCK_FILE"
+    if [ -f "$rfile" ]; then
+      { [ "$(grep -c . "$rfile")" -eq 1 ] && is_renderer_ref "$(grep . "$rfile")"; } \
+        || refuse "$RENDERER_LOCK_FILE in $TARGET is not exactly one ${RENDERER_REPO} ref"
+    fi
+    printf '%s\n' "$rref" > "$rfile"
+    git -C "$work/target" add -- "$RENDERER_LOCK_FILE" || failed "could not stage $RENDERER_LOCK_FILE"
+    paths+=("$RENDERER_LOCK_FILE") rnote=" It also writes $RENDERER_LOCK_FILE (the renderer image of the same commit)."
+  fi
   git -C "$work/target" -c user.name=artifacts-ci -c user.email=ci@git.tenfourty.site \
     commit --quiet -m "core: lock $sha12" \
-    -m "Moves core.lock from $cur to $sha12 (runcove/artifacts@$sha). Opened by artifacts CI; only the lock changes." \
-    -- "$LOCK_FILE" || failed "commit failed"
+    -m "Moves core.lock from $cur to $sha12 (runcove/artifacts@$sha). Opened by artifacts CI; only the lock changes.$rnote" \
+    -- "${paths[@]}" || failed "commit failed"
   # --force only ever touches this script's own core-lock/next branch.
   git -C "$work/target" push --quiet --force "$FORGE/$TARGET.git" "HEAD:refs/heads/$BRANCH" \
     || failed "push to $TARGET failed"
@@ -169,8 +200,8 @@ main() {
   local title="core: lock $sha12" body n code pushed
   pushed=$(git -C "$work/target" rev-parse HEAD)
   # shellcheck disable=SC2016  # the backticks are Markdown in the PR body
-  body=$(printf '{"title":"%s","head":"%s","base":"%s","body":"Moves `core.lock` from `%s` to `%s` ([runcove/artifacts@%s](%s/runcove/artifacts/commit/%s)). Opened by artifacts CI after the tests and core image passed; merges by itself when the checks on this repo succeed."}' \
-    "$title" "$BRANCH" "$BASE_BRANCH" "$cur" "$sha12" "$sha12" "$FORGE" "$sha")
+  body=$(printf '{"title":"%s","head":"%s","base":"%s","body":"Moves `core.lock` from `%s` to `%s` ([runcove/artifacts@%s](%s/runcove/artifacts/commit/%s)). Opened by artifacts CI after the tests and core image passed; merges by itself when the checks on this repo succeed.%s"}' \
+    "$title" "$BRANCH" "$BASE_BRANCH" "$cur" "$sha12" "$sha12" "$FORGE" "$sha" "$rnote")
   [ "$(forge GET "/repos/$TARGET/pulls?state=open&limit=50" "" "$work/open.json")" = 200 ] \
     || failed "could not list open PRs on $TARGET"
   n=$(open_pr_number "$work/open.json")
@@ -218,6 +249,14 @@ selftest() {
   refuses "a trailing line accepted"      is_core_ref "$IMAGE_REPO:0123456789ab@$dg
 extra"
   refuses "an upper-case tag accepted"    is_core_ref "$IMAGE_REPO:0123456789AB@$dg"
+
+  expect  "a good renderer ref refused"   is_renderer_ref "$RENDERER_REPO:0123456789ab@$dg"
+  refuses "the core image as renderer"    is_renderer_ref "$IMAGE_REPO:0123456789ab@$dg"
+  refuses "a renderer ref without digest" is_renderer_ref "$RENDERER_REPO:0123456789ab"
+  refuses "another repo as renderer"      is_renderer_ref "evil.example/artifacts-renderer:0123456789ab@$dg"
+  refuses "a renderer ref plus a line"    is_renderer_ref "$RENDERER_REPO:0123456789ab@$dg
+extra"
+  refuses "a renderer ref as core"        is_core_ref "$RENDERER_REPO:0123456789ab@$dg"
 
   printf '%s:ab9be7105a92@%s\n' "$IMAGE_REPO" "$dg" > "$t/core.lock"
   expect  "current sha12 not read"        [ "$(current_sha12 "$t/core.lock")" = "ab9be7105a92" ]

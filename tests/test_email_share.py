@@ -171,3 +171,22 @@ def test_a_bad_address_is_refused_in_words(db, gallery, page, outbox):
     )
     assert "look like an email address" in response.text.replace("&#39;", "'")
     assert outbox == []
+
+
+def test_checking_a_device_does_not_stamp_the_last_open_but_serving_the_page_does(
+    db, gallery, page, outbox
+):
+    """`device_ok` answers whether a device is confirmed and writes nothing (a confirm page
+    passes through it too); `last_opened_at` moves when the body is served
+    (`email_share.record_open`, runcove-5t3oj.158.1)."""
+    url = _share(gallery, page, outbox)
+    reader, path = _reader(db, url)
+    share = email_share.people(db, page.id)[0]
+    reader.post(path + "code")
+    code = re.search(r"\b(\d{6})\b", outbox[-1][2]).group(1)
+    reader.post(path + "verify", data={"code": code}, follow_redirects=False)
+    cookie = next(iter(reader.cookies.jar)).value
+    assert email_share.device_ok(db, share, cookie) is True
+    assert email_share.people(db, page.id)[0].last_opened_at is None
+    assert "the private plan" in reader.get(path).text
+    assert email_share.people(db, page.id)[0].last_opened_at is not None

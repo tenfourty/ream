@@ -7,7 +7,8 @@ name: sec
 #   privacy  proves the repo private with no push mirror, and the registry owner private; any
 #            doubt fails the run before a test, a build or a push
 #   tests    the same three jobs as ci.yml (copied from it: keep them in step)
-#   image    on main only: the core image and the deployed image (core + ream-homelab's plug-ins
+#   image    on main only: the core image (the `app` target: no browser, proved by running it) and
+#            the deployed image (core + ream-homelab's plug-ins
 #            at its main), both pushed under the private owner, each proven to exist and not
 #            pullable anonymously, and everything proven private once more after the last push;
 #            prints one SEC BUILT line for the pin, only then. It never opens a pin or lock PR.
@@ -78,6 +79,9 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec-unpriv "$SEC_REGISTRY_OWNER"
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=privacy bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test:
     runs-on: runcove-sec-unpriv
@@ -144,6 +148,9 @@ jobs:
       - name: sec-private-check selftest
         run: .forgejo/scripts/sec-private-check.sh --selftest
 
+      - name: sec-public-main-check selftest
+        run: .forgejo/scripts/sec-public-main-check.sh --selftest
+
       - name: tests
         env:
           # The browser tests run in `test-sqlite`. Name no browser here (an explicit
@@ -162,6 +169,9 @@ jobs:
         # (the deployment repo's CI-builders doc); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test-sqlite:
     runs-on: runcove-sec-unpriv
@@ -258,6 +268,9 @@ jobs:
           REAM_TEST_DB: sqlite
           REAM_BROWSER: /nonexistent/browser
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test-sqlite bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
   # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
@@ -329,6 +342,9 @@ jobs:
         env:
           REAM_TEST_DB: sqlite
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=core-bare bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   image:
     needs: [runner-guard, privacy, test, test-sqlite, core-bare]
@@ -348,23 +364,34 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0  # the ancestry check below needs the whole history
 
       # THE ORDER OF THE PROOFS, and why each sits where it does. Each one fails the job, and the
       # SEC BUILT line is printed by the last step only, so a failure anywhere means no pin:
       #   0. (job `privacy`)  repo and registry owner private: before any test or build
       #   1. below            the same again on this runner: settings may have changed while the
       #                       tests ran, and this is right before anything is pushed
-      #   2. core image       pushed, then proven to EXIST and hidden, straight after its push
+      #   2. core image       pushed, then proven to EXIST and hidden, straight after its push, then
+      #                       run, and proven to find no browser (it is the `app` target)
       #   3. deployed image   pushed, then proven to EXIST and hidden, straight after its push
       #   4. after the last push: repo and owner private AGAIN, and both images hidden AGAIN.
       #                       The repo or an image going public WHILE the pushes ran (they take
       #                       minutes) is caught here, and the last push is the last thing that
       #                       could have published anything.
       #   5. the SEC BUILT line, in the same step as 4, after its checks.
+      # And one proof that is about what is built, not where: public main of runcove/artifacts must be
+      # an ancestor of the commit built (the next step, run again in step 4's step), so a private copy
+      # that has not merged public main prints no SEC BUILT line: its image, pinned by hand, would
+      # roll production back (22 Nov 2026). It fails closed when public main cannot be read.
       - name: prove the repo and the registry owner private
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
+
+      - name: prove public main is in this commit
+        env:
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
+        run: .forgejo/scripts/sec-public-main-check.sh
 
       - name: docker cli
         run: |
@@ -398,8 +425,10 @@ jobs:
               *"manifest unknown"*|*"not found"*) ;;
               *) echo "$pulled" >&2; echo "could not tell whether $repo:$sha12 exists" >&2; exit 1 ;;
             esac
-            docker build --network host \
-              --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" -t "$repo:$sha12" .
+            # --target app: the image with NO browser, as in ci.yml (docs/decisions.md, 22 Nov
+            # 2026), so the deployed image built on it cannot render in the service's own process.
+            docker build --network host --target app \
+              --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" -t "$repo:$sha12" .
             docker push "$repo:$sha12"
           fi
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repo:$sha12" \
@@ -411,6 +440,53 @@ jobs:
         env:
           SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
+
+      # The browser-free core, proved by running the pushed image (the ref the build step output,
+      # pulled first; on a re-run, the tag's image) as ci.yml's `core image has no browser` does:
+      # it must find no browser. The positive control is the `full` target built here and NEVER
+      # pushed (this job builds no renderer): it must find one, so an empty result cannot pass
+      # for a proof, and its image id must differ from the core's (the core is the app target).
+      # Fails the job before the deployed image is built, so a browser in the core means no pin.
+      - name: core image has no browser
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          CORE_REF: ${{ steps.core.outputs.ref }}
+        run: |
+          set -euo pipefail
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "SEC_REGISTRY_TOKEN is not set on this repo" >&2; exit 1; }
+          case "$CORE_REF" in
+            "git.tenfourty.site/${SEC_REGISTRY_OWNER}/artifacts-core:"*@sha256:*) ;;
+            *) echo "unexpected core ref" >&2; exit 1 ;;
+          esac
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u "$SEC_REGISTRY_USER" --password-stdin
+          docker pull "$CORE_REF"
+          full="artifacts-full-check:${GITHUB_SHA:0:12}"
+          docker build --network host --target full \
+            --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
+            --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
+            -t "$full" .
+          core_id=$(docker image inspect --format '{{.Id}}' "$CORE_REF")
+          full_id=$(docker image inspect --format '{{.Id}}' "$full")
+          [ -n "$core_id" ] && [ -n "$full_id" ] || { echo "no image id" >&2; exit 1; }
+          [ "$core_id" != "$full_id" ] || { echo "the core image is the full image: it must be the app target" >&2; exit 1; }
+          check='
+          import shutil, sys
+          from ream import rendercore
+          found = [n for n in ("chromium", "chrome-headless-shell") if shutil.which(n)]
+          available = rendercore.available()
+          print(f"{sys.argv[1]}: available={available} found={found}")
+          if sys.argv[1] == "core":
+              ok, msg = available is False and found == [], "the core image carries a browser"
+          else:
+              ok, msg = available is True and bool(found), "the full image carries no browser"
+          if not ok:
+              print("FAIL: " + msg, file=sys.stderr)
+              sys.exit(1)
+          '
+          docker run --rm --entrypoint /app/.venv/bin/python "$CORE_REF" -c "$check" core
+          docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full
+          docker run --rm --entrypoint /usr/bin/tini "$CORE_REF" --version
 
       # The deployed image is ream-homelab's Dockerfile at its main, on this core. ream-homelab's own
       # CI cannot do it: it installs the core from the public repo by commit (this one is not there
@@ -460,9 +536,12 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
           SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
           DEPLOYED_REF: ${{ steps.deployed.outputs.ref }}
         run: |
           set -euo pipefail
+          # Public main again: it may have moved while the images built, and it is never skipped.
+          .forgejo/scripts/sec-public-main-check.sh
           .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
           .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
           .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts"

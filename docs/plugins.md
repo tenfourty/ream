@@ -4,19 +4,21 @@ A plug-in adds what is particular to one deployment (a chat bridge, a mail sende
 scanner, a house command) without touching the core. The core runs with none installed; a plug-in
 is installed beside it and found at start-up.
 
-Status, 10 Nov 2026: the loader and the whole interface are built and on `main` (steps 1 to 7 of
-`docs/agent/specs/2026-11-04-core-and-plugins-design.md`), and the house's plug-in repo
-(`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
-core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
-have left the core for the house's `tracker-pages` plug-in (9a); so has the doorbell (9d: the core's
-own `nudge` sink and its `NUDGE_*` settings are deleted, the house's after-commit sink `doorbell`
-rings, see Sinks below); the house `partner` sink and the `slack` answer source are still inside the
-core; the GitGuardian second opinion
-has left it (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
-second opinion, see Scanner below), and so has Mailgun (9b: the core's own sender is deleted, the
-house's mail backend sends all mail, see Mail backend below). Write
-against this guide for new code; do not expect the other house modules to have moved yet. The API is
-versioned (below), but only we use it: there is no promise to third parties yet.
+Status, 20 Nov 2026: the loader and the whole interface are built and on `main` (steps 1 to 7 of
+`docs/agent/specs/2026-11-04-core-and-plugins-design.md`; the API is at 1.5), and the house's
+plug-in repo (`ream-homelab`, step 8) builds the image that runs in production. **Step 9 (moving the
+house code out of the core) has moved four of the five pieces:** the tracker-page commands have
+left the core for the house's `tracker-pages` plug-in (9a); so have Mailgun (9b: the core's own
+sender is deleted, the house's mail backend sends all mail, see Mail backend below), the GitGuardian
+second opinion (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
+second opinion, see Scanner below) and the doorbell (9d: the core's own `nudge` sink and its
+`NUDGE_*` settings are deleted, the house's after-commit sink `doorbell` rings, see Sinks below).
+The quarterdeck bridge (9e) did not move the same way: the API had to grow to carry it (1.2 to
+1.5, below), and core's own bridge code (`ream.partner`, `ream.partner_in`, the built-in `partner`
+sink and the registration of the `slack` answer source) is **still in the core**, standing down
+while a plug-in holds the bridge. The house plug-in holds it in production (ream-homelab #71,
+18 Nov 2026); core's code is deleted (9e-4, C2) once the end-to-end proof of a Slack press is in. Write against this guide for new code. The
+API is versioned (below), but only we use it: there is no promise to third parties yet.
 
 ## What a plug-in is
 

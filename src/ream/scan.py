@@ -53,7 +53,7 @@ import time
 from dataclasses import dataclass
 from importlib import resources
 
-from ream import csp, scanslots
+from ream import csp, scanslots, settings
 
 
 @dataclass(frozen=True)
@@ -862,7 +862,7 @@ def _shape_lines(
     pattern: re.Pattern,
     needs_lowered: bool,
     views: list[tuple[str, str]],
-    deadline: float | None = None,
+    deadline: "_Deadline | None" = None,
 ) -> list[int]:
     """The distinct lines (up to `_MAX_LINES_PER_SHAPE`) where `pattern`
     matches something that isn't a placeholder, across both `(view,
@@ -906,21 +906,37 @@ def _shape_lines(
     return list(lines)
 
 
-# The most wall-clock time one secret scan may take, however large the page: the same ten
-# seconds as the other readers' backstop (`htmlbound.WALL_FACTOR` times
-# `renderfind.SCAN_SECONDS`). It is checked before each shape and at each match, so
-# one regex search already running is not cut short (each is linear in the page, which the
-# size cap bounds); a scan past it raises `ScanTimeout`.
-SCAN_WALL_SECONDS = 10.0
+# The most CPU time one secret scan may use, however large the page: counted on the scanning
+# thread's own clock (`time.thread_time()`), so scans that share the interpreter lock (the
+# scan slots run them as threads of one process) are not charged for each other's turns.
+# It is the same ten seconds as the other readers' backstop (`htmlbound.WALL_FACTOR` times
+# `renderfind.SCAN_SECONDS`). It is checked before each shape and at each match, so one regex
+# search already running is not cut short (each is linear in a page the size cap bounds); a
+# scan past it raises `ScanTimeout`.
+SCAN_CPU_SECONDS = 10.0
+# The wall-clock backstop: one scan may hold its slot for at most this many seconds per slot
+# (`REAM_SCAN_SLOTS` of them, read at the scan), counted from taking the slot. A scan whose
+# every turn at the lock is a share of the other slots' work finishes in about that many
+# times its own CPU time, so the backstop is never reached by a legitimate page.
+# THIS IS A SLOT-HOLD LIMIT, NOT A PER-SCAN WALL BOUND: a scan may now take far longer than
+# ten seconds of wall time. That is acceptable only because a scan that can take a slot (a
+# value over `scanslots.SMALL_PAGE`) is reachable only with a revocable credential. Today
+# that is a page body alone, sent with a Ream key on /api/v1, or with a key or an owner-only
+# app token on /mcp, or by the owner's own gallery session; every other scanned field is
+# capped far below `SMALL_PAGE` (64 KiB or less) before its scan. `tests/test_scan_call_sites.py`
+# holds that: a new place that starts a scan fails it until it is classified. If a
+# slot-taking scan ever becomes reachable without such a credential, this must drop back
+# to a per-scan wall bound (`SCAN_CPU_SECONDS` of wall clock, as before 20 Nov 2026).
+SCAN_WALL_SECONDS_PER_SLOT = 10.0
 # Measured in the pod on 20 Nov 2026 (image 1bdcba608c6a; no CPU limit, 50m request, 1Gi memory
 # limit), for an 8 MiB page of the seven assignment shapes with placeholder values: one scan took
 # 2.08 s with plain keys and 2.87 s with keys split by a tag. Four scans at once, in threads, all
 # hit `ScanTimeout` at 10.0 s because they share the interpreter lock (a follow-up, runcove-5t3oj.161.1,
-# addresses that). Security measured 18.4 s client-side for an 8 MiB publish, upload included.
+# was fixed by counting CPU time). Security measured 18.4 s client-side for an 8 MiB publish, upload included.
 
 
 class ScanTimeout(scanslots.ScanBusy):
-    """The scan ran past `SCAN_WALL_SECONDS`: the body was not fully scanned. A `ScanBusy`, so
+    """The scan ran past `SCAN_CPU_SECONDS` (or the wall backstop): the body was not fully scanned. A `ScanBusy`, so
     every caller refuses as for a busy server (503 with `Retry-After`, nothing stored), with
     its own words: the page took too long, not that the server is busy."""
 
@@ -928,8 +944,22 @@ class ScanTimeout(scanslots.ScanBusy):
         super().__init__(scanslots.TIMED_OUT)
 
 
-def _check_deadline(deadline: float | None) -> None:
-    if deadline is not None and time.monotonic() > deadline:
+class _Deadline:
+    """The two limits of one scan: the scanning thread's CPU clock and, as a backstop, the
+    wall clock. Made when the scan holds its slot (or has none, for a small page)."""
+
+    __slots__ = ("cpu_until", "wall_until")
+
+    def __init__(self, cpu_seconds: float, wall_seconds: float) -> None:
+        self.cpu_until = time.thread_time() + cpu_seconds
+        self.wall_until = time.monotonic() + wall_seconds
+
+
+def _check_deadline(deadline: _Deadline | None) -> None:
+    if deadline is not None and (
+        time.thread_time() > deadline.cpu_until
+        or time.monotonic() > deadline.wall_until
+    ):
         raise ScanTimeout
 
 
@@ -954,16 +984,16 @@ def scan(text: str) -> list[Finding]:
     A body over `scanslots.SMALL_PAGE` characters is scanned under a scan slot, as
     every other reader of a large page is: `scanslots.ScanBusy` when none comes free
     in time. It is never "no findings": a caller lets it go up, so a busy server is
-    a refusal to try again, never a clean scan. A scan that runs past `SCAN_WALL_SECONDS`
-    raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
+    a refusal to try again, never a clean scan. A scan that runs past `SCAN_CPU_SECONDS` of its thread's CPU
+    time (or the wall backstop) raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
     """
     with scanslots.slot(len(text)):  # ScanBusy goes up: a busy server, not this body
-        return _scan(text, time.monotonic() + SCAN_WALL_SECONDS)
+        wall = SCAN_WALL_SECONDS_PER_SLOT * settings.current().scan_slot_count()
+        return _scan(text, _Deadline(SCAN_CPU_SECONDS, wall))
 
 
-def _scan(text: str, deadline: float | None = None) -> list[Finding]:
-    """`scan` without the slot: the views, the shapes, the bounds, and (when given) the
-    `time.monotonic()` deadline."""
+def _scan(text: str, deadline: "_Deadline | None" = None) -> list[Finding]:
+    """`scan` without the slot: the views, the shapes, the bounds, and (when given) the deadline."""
     raw_view = _one_line_ending(text)
     text_view = _text_view(raw_view)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)

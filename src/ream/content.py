@@ -21,6 +21,7 @@ from ream import (
     mail,
     pagediff,
     pageframe,
+    pageviews,
     stamp,
     store,
     templates,
@@ -1172,6 +1173,8 @@ def create_content_app(db: Database) -> FastAPI:
                 headers={**base_headers(), "cache-control": "no-store"},
             )
         body, published_at = found
+        # The anonymous link: a reader the page was served to (runcove-5t3oj.158.1).
+        pageviews.record(db, artifact_id, pageviews.EXTERNAL, "")
         html = inject(stamp.apply(body, published_at), INERT_SHIM)
         return HTMLResponse(
             html,
@@ -1268,6 +1271,7 @@ def create_content_app(db: Database) -> FastAPI:
         if found is None:
             return _gone()
         body, published_at = found
+        email_share.record_open(db, share)
         html = inject(stamp.apply(body, published_at), INERT_SHIM)
         return HTMLResponse(
             html, headers={**headers_for(False), "x-robots-tag": "noindex, nofollow"}

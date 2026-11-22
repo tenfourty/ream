@@ -402,6 +402,16 @@ def _seed(database: Database) -> None:
         ),
         ("page_read", "artifact_id, read_version, read_at", ["a1", 2, T1]),
         (
+            "page_view_day",
+            "artifact_id, day, kind, views",
+            ["a1", "2026-10-15", "owner", 3],
+        ),
+        (
+            "page_viewer",
+            "artifact_id, kind, viewer, views, last_at, counted_at",
+            ["a1", "agent", "beta é", 2, T1, T0],
+        ),
+        (
             "email_share",
             (
                 "id, artifact_id, email, token_sha256, created_at, revoked_at,"
@@ -427,6 +437,7 @@ def _seed(database: Database) -> None:
         ),
         ("agent_alias", "old, new, renamed_at", ["oldname", "alpha", T0]),
         ("service_meta", "key, value, updated_at", ["owner_id", "jeremy", T0]),
+        ("service_meta", "key, value, updated_at", ["views_since", "2026-10-15", T0]),
         (
             "partner_outbox",
             (
@@ -719,6 +730,17 @@ def test_copy_and_verify_into_a_fresh_sqlite_file(db, sqlite_db):
     assert migrate.verify(db, sqlite_db) == checks
     # The counter carried over: 7 was handed out (and deleted), so 8 is next.
     assert _new_event_seq(sqlite_db) == 8
+
+
+def test_the_view_counting_day_is_copied_with_the_rest(db, sqlite_db):
+    """`views_since` is written by the first counted view, not by the migration, so a
+    fresh destination is empty and the copy brings the source's value over."""
+    _seed(db)
+    migrate.copy(db, sqlite_db, log=lambda _: None)
+    with sqlite_db.connect() as conn:
+        assert conn.execute(
+            "select value from service_meta where key = 'views_since'"
+        ).fetchone() == ("2026-10-15",)
 
 
 def test_a_non_empty_destination_is_refused(db, sqlite_db):

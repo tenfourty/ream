@@ -62,6 +62,7 @@ from ream import (
     markdown,
     onboarding,
     pagediff,
+    pageviews,
     partchanges,
     partdiff,
     partner_in,
@@ -2284,6 +2285,7 @@ def agent_router(
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
         part = _part_or_422(stored.body, offset, limit)
+        pageviews.record_agent_read(db, artifact_id, agent)
         report = store.render_report(db, artifact_id)
         return {
             **stored.__dict__,
@@ -2432,6 +2434,24 @@ def agent_router(
             },
         )
 
+    @router.get("/artifacts/{artifact_id}/stats")
+    def read_stats(
+        artifact_id: str,
+        days: int = Query(30, ge=1, le=365),
+        agent: str = Depends(caller),
+    ):
+        """How often YOUR OWN page was read, and by whom (runcove-5t3oj.158.1): the last
+        `days` UTC days (1 to 365, default 30, zero-filled, today last) of views by the
+        owner, by external readers and by other agents; the all-time `totals`; each named
+        email recipient's `opens` and last open; and `since`, the day of the first view
+        counted (nothing before it was kept). Your own reads are not counted. Owner-scoped:
+        another agent's page answers exactly as a page that is not there."""
+        try:
+            store.get_owned(db, agent, artifact_id)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such page") from exc
+        return pageviews.report(db, artifact_id, days)
+
     @router.get("/artifacts/{artifact_id}/versions")
     def read_versions(artifact_id: str, agent: str = Depends(caller)):
         """A page's history: what versions exist, when, and who wrote each.
@@ -2510,9 +2530,11 @@ def agent_router(
             stored = store.get_version_body(db, agent, artifact_id, n, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact or version") from exc
+        part = _part_or_422(stored.body, offset, limit)
+        pageviews.record_agent_read(db, artifact_id, agent)
         return {
             **stored.__dict__,
-            **_part_or_422(stored.body, offset, limit),
+            **part,
             "warnings": _warnings_for(artifact_id, stored.body),
         }
 
