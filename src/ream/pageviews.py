@@ -211,3 +211,67 @@ def viewers(db: Database, artifact_id: str) -> list[Viewer]:
             (artifact_id,),
         ).fetchall()
     return [Viewer(*row) for row in found]
+
+
+def _iso(value) -> str | None:
+    return None if value is None else _utc(value).isoformat()
+
+
+def report(
+    db: Database, artifact_id: str, days: int = 30, now: datetime | None = None
+) -> dict:
+    """What the publishing agent reads about its own page (`GET /pages/{id}/stats`, the MCP
+    `page_stats` tool, `ream stats`); the caller has already checked the page is its own.
+
+    `since`: the UTC day of the FIRST VIEW COUNTED on this service (any page; not
+    backfilled), or None while none has been; counts before it were not kept, so read a
+    zero there as unknown. `days`: `daily`. `totals`: every counted view of this page by
+    kind, all time (not the window), the anonymous link included. `shares`: each named
+    email recipient of the page, grouped by address, with opens (counted views, summed over
+    a replaced or withdrawn link), the last open and when the address was first shared
+    with; `withdrawn` when no live link remains."""
+    with db.connect() as conn:
+        since = conn.execute(
+            "select value from service_meta where key = %s", (VIEWS_SINCE,)
+        ).fetchone()
+        totals = {kind: 0 for kind in KINDS}
+        for kind, views in conn.execute(
+            "select kind, sum(views) from page_viewer where artifact_id = %s"
+            " group by kind",
+            (artifact_id,),
+        ).fetchall():
+            if kind in totals:
+                totals[kind] = int(views)
+        links = conn.execute(
+            "select s.email, s.created_at, s.revoked_at, v.views, v.last_at"
+            " from email_share s left join page_viewer v"
+            " on v.artifact_id = s.artifact_id and v.kind = 'external'"
+            " and v.viewer = s.id where s.artifact_id = %s order by s.created_at",
+            (artifact_id,),
+        ).fetchall()
+    people: dict[str, dict] = {}
+    for email, created_at, revoked_at, views, last_at in links:
+        one = people.setdefault(
+            email,
+            {
+                "email": email,
+                "opens": 0,
+                "last_opened_at": None,
+                "created_at": _iso(created_at),
+                "withdrawn": True,
+            },
+        )
+        one["opens"] += int(views or 0)
+        if last_at is not None and (
+            one["last_opened_at"] is None or _iso(last_at) > one["last_opened_at"]
+        ):
+            one["last_opened_at"] = _iso(last_at)
+        if revoked_at is None:
+            one["withdrawn"] = False
+    return {
+        "artifact_id": artifact_id,
+        "since": since[0] if since else None,
+        "days": daily(db, artifact_id, days, now),
+        "totals": totals,
+        "shares": list(people.values()),
+    }

@@ -315,3 +315,41 @@ def test_two_threads_recording_the_same_first_view_count_it_once(db, page):
     assert sorted(results) == [False, True]
     assert _viewer(db, page, "agent", "reader")[0] == 1
     assert _day(db, page) == {("2026-11-22", "agent"): 1}
+
+
+def test_two_viewers_recording_at_once_both_count(db, page):
+    """Different viewers of one page, in the same instant: each counts, the day's row is
+    exactly two (neither upsert lost the other's add) and `views_since` is written once."""
+    results = {}
+    gate = threading.Barrier(2)
+
+    def go(kind, viewer):
+        gate.wait(timeout=10)
+        results[(kind, viewer)] = pageviews.record(db, page, kind, viewer, now=T0)
+
+    threads = [
+        threading.Thread(target=go, args=("agent", "reader")),
+        threading.Thread(target=go, args=("owner", "")),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert results == {("agent", "reader"): True, ("owner", ""): True}
+    assert _day(db, page) == {("2026-11-22", "agent"): 1, ("2026-11-22", "owner"): 1}
+    assert pageviews.report(db, page, now=T0)["since"] == "2026-11-22"
+
+
+def test_two_viewers_of_the_same_kind_at_once_add_up_on_the_day(db, page):
+    gate = threading.Barrier(2)
+
+    def go(viewer):
+        gate.wait(timeout=10)
+        pageviews.record(db, page, "agent", viewer, now=T0)
+
+    threads = [threading.Thread(target=go, args=(v,)) for v in ("a-reader", "b-reader")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert _day(db, page) == {("2026-11-22", "agent"): 2}
