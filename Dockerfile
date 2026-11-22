@@ -73,8 +73,8 @@ FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf22
 # renderer starts, so they never pile up as zombies.
 #
 # IMAGE_REFRESH is the ISO week, passed by CI to every target: a new week changes the RUN line
-# below, which rebuilds this layer, so tini's and the base's security updates arrive within a
-# week and a cached layer never goes stale for longer (the same rule as CHROMIUM_REFRESH in
+# below, which rebuilds this layer, so tini's security updates arrive within a week (the
+# base image's own packages move only with its pinned digest) and a cached layer never goes stale for longer (the same rule as CHROMIUM_REFRESH in
 # `full`, which covers the browser layer). Unset, a plain build reuses its cached layer.
 ARG IMAGE_REFRESH=unset
 RUN echo "base layer for ${IMAGE_REFRESH}" && apt-get update \
