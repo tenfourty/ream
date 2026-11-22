@@ -399,6 +399,7 @@ jobs:
             # (Dockerfile; `full` is its last stage). The `app` target is built and checked
             # in the last step of this job, never pushed under a deployed tag.
             docker build --network host --target full \
+              --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
               --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
               -t "$image" .
             docker push "$image"
@@ -513,15 +514,20 @@ jobs:
       # until the renderer has its own pin): build `--target app` and assert, inside it, that no
       # browser is found; then the same assertion on the full image the steps above built, which
       # must find one, so an empty result cannot pass for a proof. Both images also run tini.
-      # Last in the job, so a failure here never stops an image from being published; it fails
-      # the job, and so holds the core.lock PR back, until the image is fixed.
+      # It runs AFTER the tags are pushed, so a failure here does not stop an image from being
+      # published, but it fails the job, and `core-lock` (which needs this job to succeed) is
+      # skipped for that commit. A re-run does not recover it: the re-run finds the pushed tag
+      # and reuses it, so `core_ref` is empty and `core-lock` stays off even when this step then
+      # passes. Only a new commit on main unblocks the deploy.
       - name: app image has no browser
         run: |
           set -eu
           sha12="${GITHUB_SHA:0:12}"
           full="git.tenfourty.site/runcove/artifacts:${sha12}"
           app="artifacts-app-check:${sha12}"
-          docker build --network host --target app -t "$app" .
+          docker build --network host --target app \
+            --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
+            -t "$app" .
           check='
           import shutil, sys
           from ream import rendercore

@@ -10,7 +10,10 @@ here:
    `runcove/artifacts:<sha12>`, `runcove/artifacts-core:<sha12>` and `runcove/artifacts-renderer:<sha12>`
    (printing `PUBLISHED renderer image=... digest=...`; job output `renderer_ref`, which nothing reads yet),
    then builds `--target app`, runs it and the full image, and fails if the app image finds a browser or
-   the full image finds none. The app image is not pushed.
+   the full image finds none. The app image is not pushed. That check runs after the tags are pushed:
+   if it fails, the images stay published but `core-lock` is skipped for that commit, and a re-run does
+   not recover it (the re-run finds the pushed tag and reuses it, so `core_ref` is empty). Only a new
+   commit on main unblocks the deploy.
 2. `core-lock` runs `.forgejo/scripts/core-lock-pr.sh`: it force-pushes branch `core-lock/next` on
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that

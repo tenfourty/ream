@@ -51,11 +51,12 @@ route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
 
 ## What a deployment adds
 
-1. **A Deployment** of one replica running the renderer image: `runcove/artifacts-renderer:<sha12>`,
-   which CI pushes with the same digest as the service's `full` image (the Dockerfile's `full` target,
-   the one with the browser). The service's own image may be the `app` target, which has no browser;
-   the renderer must never be an `app` image. Give the start line as the container's `args:`, and set
-   no `command:`:
+1. **A Deployment** of one replica. Today it runs the service's own image (the same digest, so one
+   pin moves both). From slice 2 of the browser-free service image it runs its own pinned
+   `runcove/artifacts-renderer:<sha12>`, which CI already pushes with the same digest as the service's
+   `full` image (the Dockerfile's `full` target, the one with the browser); once the service itself runs
+   an `app` image (no browser), the renderer must never be one. Give the start line as the container's
+   `args:`, and set no `command:`:
 
    ```yaml
    args: ["python", "-m", "ream.renderd", "--end-all-after-render", "--port", "8091"]
