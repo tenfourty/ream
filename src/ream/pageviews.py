@@ -30,6 +30,7 @@ handler's event loop.
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -143,10 +144,17 @@ def record(
         return False
 
 
-def record_agent_read(db: Database, artifact_id: str, reader: str) -> bool:
+def record_agent_read(
+    db: Database,
+    artifact_id: str,
+    reader: str,
+    writable: Collection[str] | None = None,
+) -> bool:
     """`reader` was served the body of page `artifact_id`: count it as an agent view unless
     `reader` is the page's own agent (the publisher reading back what it published, or
-    polling, is not a reader; office decision A). Same rules as `record`: AFTER the request's
+    polling, is not a reader; office decision A). `writable` is every agent whose pages the
+    caller may change (a signed-in app's `reach.writes()`: its person's app agents are one
+    publisher; office decision D); None means `reader` alone, as for a key. Same rules as `record`: AFTER the request's
     own transaction, never raises."""
     try:
         with db.connect() as conn:
@@ -156,7 +164,7 @@ def record_agent_read(db: Database, artifact_id: str, reader: str) -> bool:
     except Exception as exc:  # noqa: BLE001 - best-effort, as `record`
         _log.warning("page view not recorded (%s)", type(exc).__name__)
         return False
-    if row is None or row[0] == reader:
+    if row is None or row[0] in (writable if writable else (reader,)):
         return False
     return record(db, artifact_id, AGENT, reader)
 

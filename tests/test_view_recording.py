@@ -232,3 +232,20 @@ def test_a_failing_recorder_does_not_fail_any_read(
         f"/api/v1/pages/{page.id}/body", headers={"Authorization": f"Bearer {key}"}
     )
     assert got.status_code == 200
+
+
+def test_a_sibling_app_agent_reading_through_an_app_does_not_count(db):
+    """A signed-in app writes the pages of its person's other app agents (`reach.writes()`),
+    so it is one publisher with them: office decision D. An office's page, which it cannot
+    write, still counts under the app-agent name."""
+    import test_mcp_reach as r
+
+    app = r._app(db)
+    sibling = r._app(db, r.CLAUDE_CODE)
+    mine = store.publish(db, sibling.agent, "By the sibling", PAGE.format("sib"))
+    theirs = store.publish(db, "office", "By an office", PAGE.format("off"))
+    for page_id in (mine.id, theirs.id):
+        out = r._tool(r._as(db, app), "read_page", page_id=page_id)
+        assert out["isError"] is False, out
+    assert _rows(db, mine.id) == []
+    assert _rows(db, theirs.id) == [("agent", app.agent, 1)]

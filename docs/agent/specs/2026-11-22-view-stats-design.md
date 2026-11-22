@@ -53,3 +53,4 @@ Stored: the email already in `email_share`, counts, timestamps. Never IP, user a
 A. The publishing agent's own reads are not counted (its polling would swamp the numbers).
 B. Anonymous link-share readers count as external, unnamed (the owner asked especially for external pages).
 C. No retention prune at first: rows are small (pages x 3 kinds x days); keeping is the cheap undo, deleting is not. Revisit if size matters.
+D. (22 Nov, reversible) The publisher exemption covers every agent the caller can write: a signed-in app is exempt on the pages of all its person's app agents (`reach.writes()`), a key only on its own agent's. An owner-reach app reading a page it cannot write still counts as an agent view under its app-agent name.

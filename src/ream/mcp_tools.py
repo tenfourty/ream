@@ -455,7 +455,7 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         )
     except api.PastTheEnd as exc:
         raise ToolError(str(exc)) from None
-    pageviews.record_agent_read(call.db, page_id, call.agent)
+    pageviews.record_agent_read(call.db, page_id, call.agent, call.reach.writes())
     out = {
         **jsonable_encoder(stored.__dict__),
         **part,
