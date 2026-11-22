@@ -224,9 +224,11 @@ file already swapped when it gets the lock uses that key and asks for no second 
 10 seconds for the lock; past that the swap is skipped with the usual stderr note and the old key is
 sent. Limit: a process that read the key just before another's swap keeps that old key in memory, which
 stays valid until the new key's first use, so it can get one 401 if the swapper uses the new key first. That 401 reads "replaced by a newer
-one", which also suggests someone else used the key; on a machine where a swap has just happened it
-is this, not theft, and so is the same 401 after a waiter gives up at 10 seconds while another process
-is mid-swap. Only a rotating key takes the lock (the `GET /me` comes first, unlocked), and the lockfile
+one", which also suggests someone else used the key. To tell the two apart, look at the key file's
+modification time: if it was rewritten minutes ago and the next command works, it was this swap (the
+same goes for the 401 after a waiter gives up at 10 seconds while another process is mid-swap);
+otherwise treat it as the message says, because a thief's rotate leaves this machine's key file stale.
+Only a rotating key takes the lock (the `GET /me` comes first, unlocked), and the lockfile
 is refused unless it is a regular file of the same user (a symlink there is never followed).
 Where the platform has no `fcntl` (Windows) the swap runs without the lock.
 The swap needs tools at level 8 or later, and its lock level 9 or later (`ream --version` shows the level). Rotating keys are refused 14 days after they were made unless swapped, so

@@ -453,6 +453,14 @@ def maybe_rotate(args, key: str) -> str:
                 return key
             save_key_file(path, new_key)
     except (HTTPFailure, UsageError, OSError) as exc:
+        # The request or the lock failed, but another process may have swapped the file in the
+        # meantime (our key can already be dead): then the file's key is the one to use, and
+        # there is nothing to report.
+        try:
+            if time.time() - path.stat().st_mtime < _ROTATE_CHECK_AFTER_SECONDS:
+                return _read_key(path)
+        except (UsageError, OSError):
+            pass
         print(
             f"note: this machine's weekly key swap did not happen ({exc}); "
             "the current key still works, and it will try again",

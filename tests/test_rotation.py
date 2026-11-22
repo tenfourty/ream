@@ -359,3 +359,21 @@ def test_a_fifo_planted_as_the_lockfile_is_refused_promptly(
     assert "POST /keys/rotate" not in _calls(log)
     assert key_file.read_text().strip() == "art_old_0123456789abcdefghij"
     assert "weekly key swap did not happen" in capsys.readouterr().err
+
+
+def test_a_refused_me_while_the_file_was_swapped_meanwhile_uses_the_files_key_silently(
+    tmp_path, monkeypatch, capsys
+):
+    key_file = _stale_key_file(tmp_path)
+
+    def me_refused_after_another_process_swapped(method, url, *a, **kw):
+        # Another process swapped (fresh file, new key) and used its key, so ours is dead.
+        client.save_key_file(key_file, "art_swapped_elsewhere_0123456789")
+        raise client.HTTPFailure(401, "this key was replaced by a newer one")
+
+    monkeypatch.setattr(client, "_request", me_refused_after_another_process_swapped)
+    monkeypatch.setattr(client, "_api_base", lambda: "http://ream.test/api/v1")
+    got = client.maybe_rotate(_args(key_file), "art_old_0123456789abcdefghij")
+    assert got == "art_swapped_elsewhere_0123456789"
+    out = capsys.readouterr()
+    assert out.out == "" and out.err == ""
