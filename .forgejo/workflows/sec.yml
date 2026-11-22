@@ -79,6 +79,9 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec-unpriv "$SEC_REGISTRY_OWNER"
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=privacy bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test:
     runs-on: runcove-sec-unpriv
@@ -145,6 +148,9 @@ jobs:
       - name: sec-private-check selftest
         run: .forgejo/scripts/sec-private-check.sh --selftest
 
+      - name: sec-public-main-check selftest
+        run: .forgejo/scripts/sec-public-main-check.sh --selftest
+
       - name: tests
         env:
           # The browser tests run in `test-sqlite`. Name no browser here (an explicit
@@ -163,6 +169,9 @@ jobs:
         # (the deployment repo's CI-builders doc); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   test-sqlite:
     runs-on: runcove-sec-unpriv
@@ -258,6 +267,9 @@ jobs:
           REAM_TEST_DB: sqlite
           REAM_BROWSER: /nonexistent/browser
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=test-sqlite bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
   # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
@@ -329,6 +341,9 @@ jobs:
         env:
           REAM_TEST_DB: sqlite
         run: uv run pytest -q -n auto --maxprocesses 5
+      - name: memory peak
+        run: |
+          echo "MEMORY PEAK job=core-bare bytes=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)" || true
 
   image:
     needs: [runner-guard, privacy, test, test-sqlite, core-bare]
@@ -348,6 +363,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0  # the ancestry check below needs the whole history
 
       # THE ORDER OF THE PROOFS, and why each sits where it does. Each one fails the job, and the
       # SEC BUILT line is printed by the last step only, so a failure anywhere means no pin:
@@ -362,10 +378,19 @@ jobs:
       #                       minutes) is caught here, and the last push is the last thing that
       #                       could have published anything.
       #   5. the SEC BUILT line, in the same step as 4, after its checks.
+      # And one proof that is about what is built, not where: public main of runcove/artifacts must be
+      # an ancestor of the commit built (the next step, run again in step 4's step), so a private copy
+      # that has not merged public main prints no SEC BUILT line: its image, pinned by hand, would
+      # roll production back (22 Nov 2026). It fails closed when public main cannot be read.
       - name: prove the repo and the registry owner private
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
+
+      - name: prove public main is in this commit
+        env:
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
+        run: .forgejo/scripts/sec-public-main-check.sh
 
       - name: docker cli
         run: |
@@ -510,9 +535,12 @@ jobs:
         env:
           SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
           SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}
           DEPLOYED_REF: ${{ steps.deployed.outputs.ref }}
         run: |
           set -euo pipefail
+          # Public main again: it may have moved while the images built, and it is never skipped.
+          .forgejo/scripts/sec-public-main-check.sh
           .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
           .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
           .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts"

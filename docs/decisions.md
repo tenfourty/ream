@@ -1334,6 +1334,25 @@ exists, is last and installs chromium; both carry tini) and the `core image has 
 `image` job in `.forgejo/workflows/ci.yml` (and the same step in `sec.yml`), which runs the pushed core
 image and the full image; `tests/test_ci_image_targets.py` pins which target each image is built from.
 
+## The 22 Nov 2026 CI tool-install fix is released without the hand-pinned rollout (22 Nov 2026)
+
+The fix makes CI's test jobs install uv from a pinned release whose sha256 is checked against a
+value written in `scripts/guards/workflow-runner-guard.sh`. It changes only CI, nothing in the
+deployed image, so for this one release the embargoed-fix runbook's steps 4 and 5 (the private image
+and its hand pin) were skipped.
+
+**Chosen:** release it to public `main` now, as with the 19 Nov 2026 gate fix. Because the private
+repository's `main` already held a later fix still under embargo, the release is a merge of the
+private commit that carried this fix alone (`c6c14f1`) into public `main`, not a push of the
+private `main`; the later fix stays private until its own release.
+
+**Not chosen:** building and hand-pinning a private image that would not differ from the public one;
+holding this release until the later fix is released too.
+
+**Evidence:** security approved the change at `aabb8c534` and agreed to skip steps 4 and 5 on
+22 Nov 2026; Jeremy approved this release on 22 Nov 2026 (lettered answer (a): release now without
+the hand-pinned rollout, once security agrees to skip that step).
+
 ## An optional internal port serves only the health check and the partner endpoint (22 Nov 2026)
 
 `REAM_INTERNAL_PORT` (unset: nothing changes) opens a second listener whose own app answers

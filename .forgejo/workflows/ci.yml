@@ -95,6 +95,9 @@ jobs:
       - name: sec-private-check selftest
         run: .forgejo/scripts/sec-private-check.sh --selftest
 
+      - name: sec-public-main-check selftest
+        run: .forgejo/scripts/sec-public-main-check.sh --selftest
+
       - name: tests
         env:
           # The browser tests run in `test-sqlite`. Name no browser here (an explicit

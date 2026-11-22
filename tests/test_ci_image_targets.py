@@ -138,3 +138,29 @@ def test_the_browser_probe_exits_nonzero_explicitly_instead_of_asserting():
     ):
         assert "assert " not in step
         assert "sys.exit(1)" in step
+
+
+def test_sec_proves_public_main_is_in_the_commit_before_it_builds_and_again_before_the_line():
+    steps = _sec_image_steps()
+    names = list(steps)
+    check = "prove public main is in this commit"
+    assert ".forgejo/scripts/sec-public-main-check.sh" in steps[check]
+    # before anything is built or pushed
+    assert names.index(check) < names.index("build and push the core image")
+    # the last step runs it again, before it echoes the SEC BUILT line (the only place it appears)
+    last = steps[names[-1]]
+    assert "SEC BUILT image=" in last
+    assert last.index("sec-public-main-check.sh") < last.index("SEC BUILT image=")
+    assert sum("SEC BUILT image=" in s for s in steps.values()) == 1
+    # the ancestry needs the whole history, and the check can be neither skipped nor allowed to fail
+    image = SEC.read_text().split("\n  image:\n", 1)[1]
+    checkout = image.split("\n      - ")[1]  # the first step, which has no name
+    code = "\n".join(
+        ln for ln in checkout.splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert code.startswith("uses: actions/checkout@") and re.search(
+        r"^\s+fetch-depth: 0\b", code, re.MULTILINE
+    )
+    for text in (steps[check], last):
+        assert "SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}" in text
+        assert "continue-on-error" not in text and "\n        if:" not in text
