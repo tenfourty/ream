@@ -2047,7 +2047,101 @@ def _machines_page(
     return "".join(parts)
 
 
-def _people_section(artifact_id: str, people: list, mail_on: bool) -> str:
+_READERS_CSS = (
+    "<style>.cx .rk{display:inline-block;min-width:7rem;color:var(--muted)}"
+    ".cx .tot{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0}"
+    ".cx .tot b{font-size:var(--text-md);margin-left:var(--space-4)}"
+    ".cx .chart{display:flex;align-items:flex-end;gap:2px;height:3.5rem;margin:.35rem 0 .9rem;"
+    "border-bottom:1px solid var(--line)}"
+    ".cx .bar{flex:1;min-height:1px;background:var(--accent);opacity:.85;border-radius:2px 2px 0 0}"
+    ".cx .bar.nil{background:var(--line);opacity:1}"
+    ".cx table{width:100%;border-collapse:collapse;font-size:var(--text-sm)}"
+    ".cx th,.cx td{text-align:left;padding:var(--space-4) var(--space-5);"
+    "border-bottom:1px solid var(--line)}.cx .muted{color:var(--muted)}</style>"
+)
+
+_KIND_LABELS = (
+    ("owner", "You"),
+    ("external", "People with a link"),
+    ("agent", "Other agents"),
+)
+
+
+def _opened_times(n: int) -> str:
+    """ " &middot; opened 3 times", or nothing for a link nobody has opened."""
+    return f" &middot; opened {n} time{'' if n == 1 else 's'}" if n else ""
+
+
+def _readers_page(report: dict, title: str) -> str:
+    """The owner's twin of `GET /pages/{id}/stats` (runcove-5t3oj.158.1): the same
+    `pageviews.report()` drawn for a person, server-rendered with no script. Every
+    string from outside (a recipient's email, the title) goes through `escape`; the
+    bars are CSS boxes whose heights are integers computed here."""
+    ident = escape(report["artifact_id"])
+    totals = report["totals"]
+    parts = [
+        _CONNECT_CSS,
+        _READERS_CSS,
+        f'<div class="cx"><section><h2>Readers of {escape(title)}</h2>',
+    ]
+    if report["since"]:
+        parts.append(
+            f'<p class="muted">First view counted on {escape(report["since"])} (UTC). '
+            "Views before then were not kept, so read a zero there as unknown.</p>"
+        )
+    if not any(totals.values()):
+        parts.append("<p>Nobody has read this page yet.</p>")
+    parts.append(
+        '<div class="tot">'
+        + "".join(
+            f'<span><span class="rk">{label}</span><b>{int(totals[kind])}</b></span>'
+            for kind, label in _KIND_LABELS
+        )
+        + "</div>"
+    )
+    days = report["days"]
+    for kind, label in _KIND_LABELS:
+        peak = max((d[kind] for d in days), default=0)
+        bars = "".join(
+            f'<i class="bar{"" if d[kind] else " nil"}" '
+            f'style="height:{max(3, round(100 * d[kind] / peak)) if d[kind] else 1}%" '
+            f'title="{escape(d["day"])}: {int(d[kind])}"></i>'
+            for d in days
+        )
+        parts.append(
+            f"<h3>{label}, last {len(days)} days</h3>"
+            f'<div class="chart" data-kind="{kind}" role="img" '
+            f'aria-label="{label}: {sum(d[kind] for d in days)} views in {len(days)} days">'
+            f"{bars}</div>"
+        )
+    shares = report["shares"]
+    if shares:
+        rows = "".join(
+            f"<tr><td>{escape(s['email'])}"
+            + (' <span class="muted">(withdrawn)</span>' if s["withdrawn"] else "")
+            + f"</td><td>{int(s['opens'])}</td><td>"
+            + (
+                str(escape(_ago(datetime.fromisoformat(s["last_opened_at"]))))
+                if s["last_opened_at"]
+                else "not opened yet"
+            )
+            + "</td></tr>"
+            for s in shares
+        )
+        parts.append(
+            "<h3>People you shared it with</h3><table><thead><tr><th>Person</th>"
+            f"<th>Opens</th><th>Last opened</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    parts.append(
+        f'<form class="row"><a class="btn" href="/a/{ident}">Back to the page</a></form>'
+        "</section></div>"
+    )
+    return "".join(parts)
+
+
+def _people_section(
+    artifact_id: str, people: list, mail_on: bool, opens: dict[str, int] | None = None
+) -> str:
     """Sharing with one person by email (homelab-ij8.16, his (1a)): their own
     link, confirmed on each new device by a code sent to their inbox; he sees
     who has access and withdraws each person separately."""
@@ -2059,6 +2153,7 @@ def _people_section(artifact_id: str, people: list, mail_on: bool) -> str:
             if p.last_opened_at
             else " &middot; not opened yet"
         )
+        + _opened_times((opens or {}).get(p.email, 0))
         + f'<form method="post" action="/a/{ident}/share/email/{escape(p.id)}/withdraw" '
         'style="display:inline"> <button class="btn" type="submit">Withdraw</button></form></li>'
         for p in people
@@ -2089,6 +2184,7 @@ def _share_page(
     note: str = "",
     people: list | None = None,
     mail_on: bool = False,
+    opens: dict[str, int] | None = None,
 ) -> str:
     """Sharing one page with people outside his space (homelab-ij8.101). The
     link shows the latest version, just the page; he can stop it at any time.
@@ -2121,7 +2217,7 @@ def _share_page(
             '<button class="btn primary" type="submit">Create link</button>'
             f'<a class="btn" href="/a/{ident}">Cancel</a></form></section>'
         )
-    parts.append(_people_section(artifact_id, people or [], mail_on))
+    parts.append(_people_section(artifact_id, people or [], mail_on, opens))
     parts.append("</div>")
     return "".join(parts)
 
@@ -3154,6 +3250,7 @@ def _page_menu(
     rows.append(
         f'<a class="mrow" href="/a/{ident}/move">{_icon("copy")}Move to another agent</a>'
     )
+    rows.append(f'<a class="mrow" href="/a/{ident}/stats">{_icon("all")}Readers</a>')
     rows.append(
         f'<a class="mrow" href="/a/{ident}/share">{_icon("open")}'
         + ("Shared by link" if shared else "Share a link")
@@ -7038,8 +7135,31 @@ def gallery_router(db: Database) -> APIRouter:
                     note,
                     people=email_share.people(db, artifact_id),
                     mail_on=mail.enabled(),
+                    opens={
+                        s["email"]: s["opens"]
+                        for s in pageviews.report(db, artifact_id, 1)["shares"]
+                    },
                 ),
                 scripts='<script src="/connect.js" defer></script>',
+            ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/a/{artifact_id}/stats", response_class=HTMLResponse)
+    def readers_page(artifact_id: str) -> HTMLResponse:
+        """Who has read a page: the owner's twin of the agent's stats route. Unscoped (the
+        gallery is his); one query path, `pageviews.report`."""
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title from artifact where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such page")
+        return HTMLResponse(
+            _shell(
+                "Readers",
+                _readers_page(pageviews.report(db, artifact_id, 30), row[0]),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )

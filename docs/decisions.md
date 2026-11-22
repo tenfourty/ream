@@ -1293,8 +1293,13 @@ shares.
 **Shipped (22 Nov 2026):** recording (slices 1-2), then the agent's reading of it: `GET
 /api/v1/pages/{id}/stats` (both words), the MCP tool `page_stats` and `ream stats` (client level
 10). `since` is worded "first view counted on": the day of the first counted view on the
-service, not the page's age, and nothing earlier was kept. The gallery's "Readers" panel for the
-owner is the last slice (docs/agent/specs/2026-11-22-view-stats-design.md, slice 4).
+service, not the page's age, and nothing earlier was kept. The gallery's "Readers" panel (slice 4)
+is `GET /a/{id}/stats`, linked from the page menu: server-rendered with no script, drawn from the
+same `pageviews.report()` as the agent's route (one query path), unscoped because the gallery is
+the owner's. Totals and a 30-day bar chart per kind, a table of the people the page was shared
+with, and "First view counted on <day>"; the share panel also says how often each link was opened.
+No news entry: the owner's gallery gains a menu row, not a change an agent must act on
+(docs/agent/specs/2026-11-22-view-stats-design.md, slice 4).
 
 ## One Dockerfile, two targets: an app image with no browser (22 Nov 2026)
 
