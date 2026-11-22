@@ -128,8 +128,9 @@ listings answer 200 with the pins of the pages they could not read unknown (`anc
 that a request needs answers 503 with `Retry-After`. The secret scan also has a time bound once it holds its slot
 (`scan.SCAN_CPU_SECONDS`, 10 s of the scanning thread's own CPU time, checked before each shape and at each match; plus a wall-clock backstop of `SCAN_WALL_SECONDS_PER_SLOT` times the slot count, a slot-hold limit, acceptable only because a scan that can take a slot (a value over `SMALL_PAGE`, today a page body alone) is reachable only with a revocable credential, and every other scanned field is capped at 64 KiB or less before its scan; `tests/test_scan_call_sites.py` fails for a scan site no one has classified, and the backstop must become a per-scan wall bound if a slot-taking scan ever becomes reachable without such a credential): past either the scan raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
 `REAM_RENDERER_URL` (also `ARTIFACTS_RENDERER_URL`; unset: nothing changes, the browser runs in the
-service's own process as on a fresh install) names a renderer running as its own process or pod, for resource
-isolation: `python -m ream.renderd --port 8091`, same image. It must be `http://host:port` with an explicit port and
+service's own process as on a fresh install, in an image that has one: `full`, a plain `docker build .`) names a renderer running as its own process or pod, for resource
+isolation: `python -m ream.renderd --port 8091`, from a `full` image (`runcove/artifacts-renderer`; the deployed service's
+`app` image has no browser, so renderd cannot run from it). It must be `http://host:port` with an explicit port and
 nothing else (no path, query, fragment or credentials), on a host other than the gallery's, `REAM_API_HOST` and
 `REAM_FORMER_HOST`, or start-up refuses. Set, `thumbs.render_report` sends the stamped page there through
 `renderwire.call` and never starts a browser itself (`REAM_BROWSER` is not read); a renderer that gives no usable
@@ -194,8 +195,10 @@ without a label a page says only which KEY published it. `REAM_SESSION="<agent>/
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
-**A push to `main` asks to deploy.** CI tests, builds an image and pushes it as
-`runcove/artifacts-core:<sha12>`, then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
+**A push to `main` asks to deploy.** CI tests, builds the `app` image (no browser) and pushes it as
+`runcove/artifacts-core:<sha12>`, and the `full` image (the browser) as `runcove/artifacts:<sha12>` and
+`runcove/artifacts-renderer:<sha12>`; the core and renderer digests differ, and the deployed renderer pod
+must not run the app image (homelab's pod guard refuses it). Then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
 `CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image (and `renderer.lock` to `runcove/artifacts-renderer:<sha12>` when that image was published), set to merge when that
 repo's checks succeed. ream-homelab builds the deployed image and opens the homelab pin PR, which the homelab maintainer
 merges. Core's own `pin` job (`pin-pr.sh`) is off. How it flows, and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.

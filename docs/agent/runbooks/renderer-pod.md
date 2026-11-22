@@ -51,11 +51,13 @@ route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
 
 ## What a deployment adds
 
-1. **A Deployment** of one replica. Today it runs the service's own image (the same digest, so one
-   pin moves both). From slice 2 of the browser-free service image it runs its own pinned
-   `runcove/artifacts-renderer:<sha12>`, which CI already pushes with the same digest as the service's
-   `full` image (the Dockerfile's `full` target, the one with the browser); once the service itself runs
-   an `app` image (no browser), the renderer must never be one. Give the start line as the container's
+1. **A Deployment** of one replica, running its own pinned `runcove/artifacts-renderer:<sha12>`: the
+   Dockerfile's `full` target, the one with the browser. Since 22 Nov 2026 (step 3 of the browser-free
+   service image) the service's own image, `runcove/artifacts-core:<sha12>`, is the `app` target and has
+   no browser, so **the two images differ by digest and the renderer must never be the app image**: a
+   renderer pod on it has no browser and cannot render. The deployment's renderer pod guard must refuse
+   a renderer image equal to the app image (homelab's `ream-renderer-pod-guard.sh`; that switch-over
+   ships with step 3, on homelab's side; until then the two digests were the same). Give the start line as the container's
    `args:`, and set no `command:`:
 
    ```yaml
@@ -113,5 +115,8 @@ the same container, and is ended with every render.
 Unset `REAM_RENDERER_URL` on the service and restart it: renders run in the service's own process again.
 That works only if the service runs a `full` image (one with the browser), not an `app` image: with
 neither a renderer nor a browser the service starts, logs one WARNING that thumbnails, render checks and
-screenshots are off, and does not draw them. Put the service back on a `full` image first, then unset the
-variable. The renderer can then be removed.
+screenshots are off, and does not draw them. The deployed service is built on `artifacts-core`, an `app`
+image, so on the homelab going back also means moving the service onto a `full` image
+(`runcove/artifacts:<sha12>`, or `artifacts-renderer`'s digest) first; a deployment that does that has
+chosen to run the browser in the service's process again. Put the service on a `full` image first, then
+unset the variable. The renderer can then be removed.

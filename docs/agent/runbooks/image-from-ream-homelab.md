@@ -3,17 +3,21 @@
 Since 9 Nov 2026 (`docs/decisions.md`) production's image is built by `runcove/ream-homelab`, not
 here:
 
-1. A push to `main` here passes `test` and `test-sqlite`; `image` builds the image and pushes
-   `runcove/artifacts-core:<sha12>`, printing `PUBLISHED core image=... digest=...`. A
-   `REUSED core` line means no new image: step 2 is skipped. The same job builds `--target full`
-   (the Dockerfile's last stage, the image with the browser), pushes that one digest as
-   `runcove/artifacts:<sha12>`, `runcove/artifacts-core:<sha12>` and `runcove/artifacts-renderer:<sha12>`
-   (printing `PUBLISHED renderer image=... digest=...`; job output `renderer_ref`, which nothing reads yet),
-   then builds `--target app`, runs it and the full image, and fails if the app image finds a browser or
-   the full image finds none. The app image is not pushed. That check runs after the tags are pushed:
-   if it fails, the images stay published but `core-lock` is skipped for that commit, and a re-run does
-   not recover it (the re-run finds the pushed tag and reuses it, so `core_ref` is empty). Only a new
-   commit on main unblocks the deploy.
+1. A push to `main` here passes `test` and `test-sqlite`; `image` builds two images from the
+   Dockerfile. `--target full` (its last stage, the image with the browser) is pushed as
+   `runcove/artifacts:<sha12>` and, under the same digest, as `runcove/artifacts-renderer:<sha12>`
+   (printing `PUBLISHED renderer image=... digest=...`; job output `renderer_ref`). `--target app` (no
+   browser) is pushed as `runcove/artifacts-core:<sha12>`, printing `PUBLISHED core image=... digest=...`.
+   **From 22 Nov 2026 (step 3 of the browser-free image) the core and renderer images differ by
+   digest**: the core image carries no browser, so the deployed service cannot render in its own
+   process whatever its settings say, and the renderer image must never be the app image. The core step
+   fails if its digest equals the full image's. A `REUSED core` line means no new image: step 2 is
+   skipped. The last step, `core image has no browser`, pulls the pushed core ref (on a re-run, the
+   tag's current image), runs it and the full image, and fails if the core image finds a browser or the
+   full image finds none. That check runs after the tags are pushed: if it fails, the images stay
+   published but `core-lock` is skipped for that commit, and a re-run does not recover it (the re-run
+   finds the pushed tag and reuses it, so `core_ref` is empty). Only a new commit on main unblocks the
+   deploy.
 2. `core-lock` runs `.forgejo/scripts/core-lock-pr.sh`: it force-pushes branch `core-lock/next` on
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that
@@ -37,7 +41,11 @@ here:
    order only while `renderer.yaml` has the placeholder: in the same change that replaces it, the
    homelab repo must remove the kustomize `replacements` that copy the app image onto the renderer
    pod and teach its pin lander that the artifacts target may change `renderer.yaml`
-   (homelab bead homelab-q9dof).
+   (homelab bead homelab-q9dof). That has landed. **Homelab's renderer pod guard
+   (`ream-renderer-pod-guard.sh`) must now refuse a renderer image whose digest equals the app image's**
+   (until this change the same digest was expected); that guard switch-over ships with this change, on
+   homelab's side. The renderer's tag still follows the app's (`renderer.lock` tag equals `core.lock`'s),
+   but the two files hold different digests.
 
 Needs the secret `CORE_LOCK_TOKEN` on `runcove/artifacts` (write access to ream-homelab, nothing
 else; never in a file or on a command line). Without it `core-lock` fails with "CORE_LOCK_TOKEN is
@@ -46,7 +54,8 @@ the `test` job and for a rollback.
 
 ## Roll back
 
-Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
+Core's `pin` job, if switched back on, pins `runcove/artifacts:<sha12>`, which is the `full` image (it
+has the browser; the deployed service is normally built on `artifacts-core`, which has none). Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
 back to its main-only condition, keeping the `github.repository == 'runcove/artifacts'` conjunct (the workflow-runner guard
 refuses a job without it), and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
 again, which is the homelab maintainer's change; without it the pin PRs are refused. Close any open
