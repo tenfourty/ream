@@ -32,7 +32,12 @@ here:
    also moves the renderer pod's image (`renderer.yaml`, both containers) to it, and the pin job
    prints a second line, `PUBLISHED renderer image=... digest=...`. The app's `PUBLISHED image=...`
    line is unchanged. With no `renderer.lock`, or while `renderer.yaml` still holds the placeholder
-   image, the pin PR changes the app's line only, so the two repos can land in either order.
+   image, the pin PR changes the app's line only. The renderer moves only when `renderer.lock`'s tag
+   equals `core.lock`'s (else it is left alone and the PR says so). The two repos can land in either
+   order only while `renderer.yaml` has the placeholder: in the same change that replaces it, the
+   homelab repo must remove the kustomize `replacements` that copy the app image onto the renderer
+   pod and teach its pin lander that the artifacts target may change `renderer.yaml`
+   (homelab bead homelab-q9dof).
 
 Needs the secret `CORE_LOCK_TOKEN` on `runcove/artifacts` (write access to ream-homelab, nothing
 else; never in a file or on a command line). Without it `core-lock` fails with "CORE_LOCK_TOKEN is
