@@ -320,9 +320,13 @@ jobs:
     # The pushed image as <repo>:<sha12>@sha256:<digest>, for the pin job.
     outputs:
       ref: ${{ steps.build.outputs.ref }}
-      # The core image's ref (empty if its step failed, or if it reused an existing image);
-      # the `core-lock` job reads it.
+      # The core image's ref (the `app` image, no browser; empty if its step failed, or if it
+      # reused an existing image); the `core-lock` job reads it.
       core_ref: ${{ steps.core.outputs.ref }}
+      # The renderer image's ref (the full image, with the browser: the same digest as `ref`,
+      # under its own tag; empty if its step failed, or if it reused an existing image); the
+      # `core-lock` job passes it on. It never has the core image's digest.
+      renderer_ref: ${{ steps.renderer.outputs.ref }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -395,7 +399,12 @@ jobs:
               *"manifest unknown"*|*"not found"*) ;;
               *) echo "$pulled" >&2; echo "could not tell whether $image exists" >&2; exit 1 ;;
             esac
-            docker build --network host \
+            # --target full: the image with the browser, as a plain `docker build .` builds it
+            # (Dockerfile; `full` is its last stage). It is `artifacts:<sha12>` and the renderer's
+            # image. The core image is the `app` target, built in the next step but one; the
+            # last step runs it.
+            docker build --network host --target full \
+              --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
               --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
               -t "$image" .
             docker push "$image"
@@ -413,11 +422,16 @@ jobs:
             echo "REUSED image=${image} digest=${digest} (existing tag, not built or certified by this run)"
           fi
 
-      # The plug-in-free core image (core-and-plugins design 7.1 option A, step 8): the same
-      # build, tagged as runcove/artifacts-core:<sha12>, for the plug-in repo to build on.
-      # The image built above IS the core image today (core carries no plug-in installed from
-      # outside). Nothing consumes it yet and the pin job never reads it, so a failure here is
-      # reported but does not fail the job: production's path is the step above. It logs in
+      # The plug-in-free core image (core-and-plugins design 7.1 option A, step 8):
+      # runcove/artifacts-core:<sha12>, for ream-homelab to build the deployed image on. Built
+      # `--target app`: the image with NO browser (Dockerfile; docs/decisions.md, 22 Nov 2026), so
+      # rendering in the service's own process cannot be turned on by configuration; renders run
+      # in the renderer (the image of the step below). It is NOT the image built above: its digest
+      # differs from `artifacts:<sha12>`'s and from the renderer's, and the step fails if it is
+      # the same. It shares the `build` stage with the full image (cached in this job's daemon),
+      # so both carry the same wheels. A failure here fails nothing by itself (`core_ref` stays
+      # empty, so `core-lock` does not run); the last step then fails the job, even when the push
+      # succeeded and only the digest read-back failed (a fresh run with no core ref fails there). It logs in
       # again with the same token. A re-run reuses an existing core tag, as above.
       - name: push core image
         id: core
@@ -451,14 +465,113 @@ jobs:
             *"manifest unknown"*|*"not found"*) ;;
             *) echo "$pulled" >&2; echo "could not tell whether $core exists" >&2; exit 1 ;;
           esac
-          docker tag "$BUILD_REF" "$core"
+          docker build --network host --target app \
+            --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
+            -t "$core" .
           docker push "$core"
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$core" \
             | grep -m1 '^git.tenfourty.site/runcove/artifacts-core@sha256:' | cut -d@ -f2)
           [ -n "$digest" ] || { echo "no registry digest for $core after the push" >&2; exit 1; }
-          [ "$digest" = "${BUILD_REF##*@}" ] || { echo "core digest differs from the built image's" >&2; exit 1; }
+          [ "$digest" != "${BUILD_REF##*@}" ] || { echo "core digest equals the full image's: the core image must be the app target" >&2; exit 1; }
           echo "ref=${core}@${digest}" >> "$GITHUB_OUTPUT"
           echo "PUBLISHED core image=${core} digest=${digest}"
+
+      # The renderer's own image tag: runcove/artifacts-renderer:<sha12>, the SAME digest as
+      # the image built above (the `full` target, which holds the browser), so a deployment pins
+      # the renderer apart from the service (docs/decisions.md, 22 Nov 2026). It must never be the
+      # app image. A failure here is reported but does not fail the job (`core-lock` then moves
+      # `core.lock` only). A re-run reuses an existing renderer tag.
+      - name: push renderer image
+        id: renderer
+        continue-on-error: true
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+          # Tagged from the exact digest the build step produced, never from the mutable
+          # :<sha12> tag; and only when this run built it (reused=0).
+          BUILD_REF: ${{ steps.build.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
+        run: |
+          set -eu
+          if [ "$BUILD_REUSED" != 0 ]; then
+            echo "REUSED renderer: the image was not built by this run (reused=${BUILD_REUSED:-unset}), so no renderer image is pushed or certified"
+            exit 0
+          fi
+          case "$BUILD_REF" in
+            git.tenfourty.site/runcove/artifacts:*@sha256:*) ;;
+            *) echo "unexpected build ref" >&2; exit 1 ;;
+          esac
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          sha12="${GITHUB_SHA:0:12}"
+          renderer="git.tenfourty.site/runcove/artifacts-renderer:${sha12}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u artifacts-publisher --password-stdin
+          if pulled=$(docker pull "$renderer" 2>&1); then
+            echo "REUSED renderer: $renderer already exists in the registry; nothing pushed, not certified by this run"
+            exit 0
+          fi
+          case "$pulled" in
+            *"manifest unknown"*|*"not found"*) ;;
+            *) echo "$pulled" >&2; echo "could not tell whether $renderer exists" >&2; exit 1 ;;
+          esac
+          docker tag "$BUILD_REF" "$renderer"
+          docker push "$renderer"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$renderer" \
+            | grep -m1 '^git.tenfourty.site/runcove/artifacts-renderer@sha256:' | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $renderer after the push" >&2; exit 1; }
+          [ "$digest" = "${BUILD_REF##*@}" ] || { echo "renderer digest differs from the built image's" >&2; exit 1; }
+          echo "ref=${renderer}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "PUBLISHED renderer image=${renderer} digest=${digest}"
+
+      # The browser-free image, proved by running it: the image pushed as `artifacts-core` (the
+      # step above built it `--target app`) must find no browser inside it; then the same
+      # assertion on the full image, which must find one, so an empty result cannot pass for a
+      # proof. Both images also run tini. The core image is run by the ref the push step output
+      # (`<repo>:<sha12>@sha256:<digest>`), pulled first so what runs is what the registry holds;
+      # on a re-run (nothing pushed by this run) it is the tag's current image, and a tag that is
+      # not there fails the step. It has no `continue-on-error` and no `if:` (tests pin both). It runs AFTER the tags are pushed, so a failure here does not
+      # stop an image from being published, but it fails the job, and `core-lock` (which needs this
+      # job to succeed) is skipped for that commit. A re-run does not recover it: the re-run finds
+      # the pushed tag and reuses it, so `core_ref` is empty and `core-lock` stays off even when
+      # this step then passes. Only a new commit on main unblocks the deploy.
+      - name: core image has no browser
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+          CORE_REF: ${{ steps.core.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
+        run: |
+          set -eu
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          # A run that built the images must have published a core ref. Without one (the push or its
+          # digest read-back failed) `core-lock` is skipped, and the tag fallback below could find
+          # an image that was pushed anyway and let the job go green: fail here instead.
+          if [ -z "$CORE_REF" ] && [ "$BUILD_REUSED" = 0 ]; then
+            echo "the core image step published no ref in a run that built the images" >&2
+            exit 1
+          fi
+          sha12="${GITHUB_SHA:0:12}"
+          full="git.tenfourty.site/runcove/artifacts:${sha12}"
+          core="${CORE_REF:-git.tenfourty.site/runcove/artifacts-core:${sha12}}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u artifacts-publisher --password-stdin
+          docker pull "$core"
+          check='
+          import shutil, sys
+          from ream import rendercore
+          found = [n for n in ("chromium", "chrome-headless-shell") if shutil.which(n)]
+          available = rendercore.available()
+          print(f"{sys.argv[1]}: available={available} found={found}")
+          if sys.argv[1] == "core":
+              ok, msg = available is False and found == [], "the core image carries a browser"
+          else:
+              ok, msg = available is True and bool(found), "the full image carries no browser"
+          if not ok:
+              print("FAIL: " + msg, file=sys.stderr)
+              sys.exit(1)
+          '
+          docker run --rm --entrypoint /app/.venv/bin/python "$core" -c "$check" core
+          docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full
+          docker run --rm --entrypoint /usr/bin/tini "$core" --version
+          docker run --rm --entrypoint /usr/bin/tini "$full" --version
 
   # Opens the pull request on the deployment repo that moves production onto this image
   # (15 Oct 2026): the manifests live there, pinned by digest, and only a
@@ -513,4 +626,7 @@ jobs:
           # Through the environment, not interpolated into the script: the script
           # validates it as the core image's <repo>:<sha12>@sha256:<digest> before using it.
           CORE_REF: ${{ needs.image.outputs.core_ref }}
-        run: .forgejo/scripts/core-lock-pr.sh "$GITHUB_SHA" "$CORE_REF"
+          # The renderer image's ref (empty if its step failed: then only core.lock moves);
+          # validated by the script as the renderer's <repo>:<sha12>@sha256:<digest>.
+          RENDERER_REF: ${{ needs.image.outputs.renderer_ref }}
+        run: .forgejo/scripts/core-lock-pr.sh "$GITHUB_SHA" "$CORE_REF" "$RENDERER_REF"

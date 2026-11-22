@@ -62,6 +62,7 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `list_pages` | `scope` (`mine`, `all`), `folder`, `limit` (1-1000, 100) | `pages`, `truncated`, your `folders` | `GET /pages`, `/folders`, `/folders/{slug}/pages` |
 | `read_page` | `page_id`; at most one of `version`, `section` (an element id), `history`, `changes_since` (a version number); for the live page or a version, `offset` (characters, 0) and `limit` (1 to 8 MiB of characters, 50,000) | the body (fenced; at most `limit` characters from `offset`), `offset`, `size` (the whole page, in characters), `next_offset` (where the next part starts; null at the end), `partial` (true unless the body is the whole page: a part is never a whole-page body for `update_page`, though `revision` is the whole page's), `warnings` and the render check's `render_verdict` and `render_findings`; one version (paged the same way); one element's `html` (fenced); `versions`; or which `parts` changed since that version (`id`, `label`, `change`) | `GET /pages/{id}/body`, `/versions/{n}` (both take `?offset=&limit=`; without `limit` the whole body), `/sections/{el}`, `/versions`, `/changes?from=N` |
 | `screenshot_page` | `page_id`; `version`; at most one of `element` (an id) and `section` (a heading's words); `width` (`1280` or `390`); `theme` (`light` or `dark`) | `artifact_id`, `version`, `width`, `height`, `truncated`, `page_height`, then Ream's label and the PNG as an image block | `GET /pages/{id}/screenshot` |
+| `page_stats` | `page_id`; `days` (1 to 365, 30) | `artifact_id`, `since`, `days` (one `{day, owner, external, agent}` per UTC day, today last), `totals`, `shares` (`email` fenced, `opens`, `last_opened_at`, `created_at`, `withdrawn`) | `GET /pages/{id}/stats` |
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |
@@ -112,6 +113,15 @@ agent's, where the answers to its questions go).
 Several sessions sharing one key share the wait's place: whichever wait or `whats_new` answers
 an event moves the cursor past it for all of them. Sessions that share a key should keep
 `ream wait`, which filters by office (`--team`) and keeps its own place.
+
+`page_stats` says how often one of the calling agent's OWN pages was read, through the same
+scope as `GET /pages/{id}/stats` (another agent's page is `no such page`, word for word like a page
+that is not there; a connected app reads the pages of its person's app agents). `since` is the day
+of the first view counted on the service, not of the page: views before it were not kept, so a page
+older than `since` has no history before it. Counts are per UTC day and kind (`owner`, `external`,
+`agent`) with 30 minutes (5 for the anonymous link) as one reader's window, so a reload or a
+polling client is one view. The calling agent's own reads are not counted. `totals` is all time,
+not the window.
 
 `screenshot_page` takes a picture of one of the calling agent's OWN pages, on demand and kept
 nowhere, through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): another
@@ -211,7 +221,28 @@ Claude Code runs a server entry's `headersHelper`, a command that prints one JSO
 headers on stdout, before it connects. `ream mcp-headers` is that command, and it is the same on
 every machine: it finds the agent key where every other `ream` verb does (`--key-file`,
 `--key-fd`, `REAM_KEY_FILE`, `REAM_KEY_FD`, else `~/.config/artifacts/key`, which must be mode
-600), so a machine that can run `ream publish` can connect:
+600), so a machine that can run `ream publish` can connect. Like the other verbs, it swaps a due
+rotating key: a key file more than a week old asks the service whether it is time, and if so the
+file is replaced and the new key is the one sent (a note goes to stderr, never the key; a failed
+swap is only a note, and the old key is sent). The helper makes no request except, when the key
+file is over 7 days old, the weekly key swap (`GET /me`, `POST /keys/rotate`); a younger key
+file, or a key from `--key-fd`, makes none. It never updates the tool itself, even when the
+service says it is out of date; other `ream` commands do that.
+The swap is one at a time per key file: it takes an exclusive lock on `<key file>.lock`, an empty
+file (mode 600) the tools create beside the key and never put a key in, and a process that finds the
+file already swapped when it gets the lock uses that key and asks for no second one. It waits up to
+10 seconds for the lock; past that the swap is skipped with the usual stderr note and the old key is
+sent. Limit: a process that read the key just before another's swap keeps that old key in memory, which
+stays valid until the new key's first use, so it can get one 401 if the swapper uses the new key first. That 401 reads "replaced by a newer
+one", which also suggests someone else used the key. To tell the two apart, look at the key file's
+modification time: if it was rewritten minutes ago and the next command works, it was this swap (the
+same goes for the 401 after a waiter gives up at 10 seconds while another process is mid-swap);
+otherwise treat it as the message says, because a thief's rotate leaves this machine's key file stale.
+Only a rotating key takes the lock (the `GET /me` comes first, unlocked), and the lockfile
+is refused unless it is a regular file of the same user (a symlink there is never followed).
+Where the platform has no `fcntl` (Windows) the swap runs without the lock.
+The swap needs tools at level 8 or later, and its lock level 9 or later (`ream --version` shows the level). Rotating keys are refused 14 days after they were made unless swapped, so
+this is what keeps an office that uses Ream only through MCP connected:
 
 ```bash
 claude mcp add-json --scope local ream \
@@ -227,9 +258,12 @@ Restart the session once to load the tools; they appear as `mcp__ream__*`.
   nothing else on stdout. The label is `REAM_SESSION` (or `--session`), as `<agent>/<session ref>`;
   with none declared the header is left out and a write is labelled `mcp/<YYYY-MM-DD>` (see
   Session label above). A label that is not printable ASCII or is over 120 characters is refused.
-- **No network, no side effects.** It makes no request, checks for no update, prints no news
-  and writes the key nowhere: not to a file, a log or an argument list. A key-reading wrapper
-  that opens it on a descriptor works as for any verb (`REAM_KEY_FD`).
+- **No network but the swap, no other side effects.** Beyond the key swap above it makes no
+  request, checks for no update, prints no news and writes the key nowhere else: not to a log or
+  an argument list (the swap rewrites the key file only, as every verb does, and locks the empty
+  `<key file>.lock` beside it). A key-reading
+  wrapper that opens it on a descriptor works as for any verb (`REAM_KEY_FD`), and that key is
+  never swapped.
 - **Failure.** A missing, unreadable, over-permissive or malformed key is a message on stderr
   (it never contains the key), exit status 2 and an empty stdout, so Claude Code gets no headers
   and the connection does not authenticate. `--key-fd` and `--key-file` together are

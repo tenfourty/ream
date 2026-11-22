@@ -46,11 +46,17 @@ fix touches none of them until release.
    `.github/workflows` too (the GitHub mirror's `publish.yml`): every job there is gated to
    `github.repository == 'tenfourty/ream'`, so a forge setting or version that reads that folder still
    dispatches nothing in artifacts-sec.
-4. **Images.** On artifacts-sec `main` only: `runcove-sec/artifacts-core:<sha12>`, then the
+4. **Images.** On artifacts-sec `main` only: `runcove-sec/artifacts-core:<sha12>`, built
+   `--target app` (the Dockerfile's browser-free target, as in the public pipeline), then the
    deployed image `runcove-sec/artifacts:<sha12>-<plugins sha12>` from ream-homelab's Dockerfile
-   at its `main` on that core. Straight after its push each is proved to exist (an authenticated
+   at its `main` on that core, so the deployed service has no browser either. Straight after its push each is proved to exist (an authenticated
    call lists its tags; an anonymous 404 alone would also be the answer for a mistyped name) and
-   then not pullable anonymously. After the last push the repo, the owner and both images are
+   then not pullable anonymously. The core is also run and proved to find no browser (a `full` image
+   built in the job and never pushed is the positive control, and must differ from the core). No
+   renderer image is built or pushed here: a hand-pinned fix reaches the service only, and the
+   renderer pod keeps the public `artifacts-renderer` it already runs. A fix that changes the renderer's
+   code is therefore not in that pod until a renderer image carrying it exists, which this pipeline does
+   not build: raise it with security and homelab's office before the rollout. After the last push the repo, the owner and both images are
    proved again, in case one went public while the pushes ran; only then does the run print one
    `SEC BUILT image=<ref>@sha256:<digest>` line. No lock PR: ream-homelab's `main` never moves.
    This step and step 5 were skipped once: for the secret-scan gate fix of 19 Nov 2026, which

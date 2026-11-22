@@ -10,6 +10,7 @@ every error path below carries a status code and the server's own JSON
 """
 
 import argparse
+import contextlib
 import http.client
 import ipaddress
 import json
@@ -349,12 +350,79 @@ def save_key_file(path: Path, key: str) -> None:
         raise
 
 
+# The swap is serialised across processes on a sibling lockfile, `<key file>.lock`: the service
+# withdraws an unused pending successor when the same key asks to rotate again, so two processes
+# swapping at once (Claude Code runs `ream mcp-headers` on every MCP connect) could leave the file
+# holding a key the service has just revoked. The lockfile holds nothing; it is only locked.
+_SWAP_LOCK_WAIT_SECONDS = 10.0
+_SWAP_LOCK_POLL_SECONDS = 0.05
+
+
+@contextlib.contextmanager
+def _swap_lock(path: Path):
+    """An exclusive `flock` on `<path>.lock` (0600, made beside the key file, never holding a
+    key; refused unless it is a regular file of this user), held for the body. Waits up to `_SWAP_LOCK_WAIT_SECONDS` in non-blocking tries, then
+    raises `TimeoutError` (an `OSError`), as it does for a lockfile that cannot be opened. The
+    lock goes with the descriptor, so a crashed holder never leaves one behind.
+
+    `fcntl` is imported here, not at the top, because Ream ships on PyPI and the client must
+    import on every platform. Where it is missing (Windows) the swap runs without the lock, as
+    it did before the lock existed."""
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    # Read-only is enough for flock. NONBLOCK so opening a planted FIFO returns at once (it would
+    # block for ever, past the wait bound) and the fstat below can refuse it. NOFOLLOW refuses a planted symlink (the lock must not open
+    # some other file of the user's), and the fstat refuses anything that is not a regular file
+    # of ours, so a lockfile another user made in a shared directory is not trusted either.
+    fd = os.open(
+        path.with_name(path.name + ".lock"),
+        os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        info = os.fstat(fd)
+        geteuid = getattr(os, "geteuid", None)
+        if not stat.S_ISREG(info.st_mode) or (
+            geteuid is not None and info.st_uid != geteuid()
+        ):
+            raise OSError("the key swap lockfile is not a regular file of this user")
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        deadline = time.monotonic() + _SWAP_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "another process held the key swap lock for over "
+                        f"{_SWAP_LOCK_WAIT_SECONDS:g} s"
+                    ) from None
+                time.sleep(_SWAP_LOCK_POLL_SECONDS)
+        yield
+    finally:
+        os.close(fd)
+
+
 def maybe_rotate(args, key: str) -> str:
     """Replace this machine's key if it is due (homelab-ij8.34, Jeremy's (3a)):
     keys from artifacts-connect swap themselves weekly, and one never swapped is
     refused after two weeks. Returns the key to use from here on. Never prints a
     key. A failure to rotate never fails the command the agent actually ran --
-    the old key still works until the new one is first used."""
+    the old key still works until the new one is first used.
+
+    Only a rotating key takes the lock: `GET /me` comes first and unlocked, and a key that is
+    not rotating returns at once, so no lockfile is made for it (a read-only key directory
+    stays quiet). The rotate and the file write then run under `_swap_lock`. Once it holds the
+    lock it looks at the file's age again: a file now younger than the check threshold was
+    swapped by another process while this one waited, so the key in the file is returned and no
+    second rotate is asked for."""
     path = _key_file_in_use(args)
     if path is None:
         return key
@@ -364,17 +432,35 @@ def maybe_rotate(args, key: str) -> str:
         return key
     if age < _ROTATE_CHECK_AFTER_SECONDS:
         return key
-    base = _api_base()
     try:
+        base = _api_base()
         me = _request("GET", f"{base}/me", key, None)
         if not me.get("rotating"):
             return key
-        fresh = _request("POST", f"{base}/keys/rotate", key, {})
-        new_key = fresh.get("key")
-        if not isinstance(new_key, str) or not new_key.startswith("art_"):
-            return key
-        save_key_file(path, new_key)
+        with _swap_lock(path):
+            try:
+                age = time.time() - path.stat().st_mtime
+            except OSError:
+                return key
+            if age < _ROTATE_CHECK_AFTER_SECONDS:
+                try:
+                    return _read_key(path)
+                except (UsageError, OSError):
+                    return key
+            fresh = _request("POST", f"{base}/keys/rotate", key, {})
+            new_key = fresh.get("key")
+            if not isinstance(new_key, str) or not new_key.startswith("art_"):
+                return key
+            save_key_file(path, new_key)
     except (HTTPFailure, UsageError, OSError) as exc:
+        # The request or the lock failed, but another process may have swapped the file in the
+        # meantime (our key can already be dead): then the file's key is the one to use, and
+        # there is nothing to report.
+        try:
+            if time.time() - path.stat().st_mtime < _ROTATE_CHECK_AFTER_SECONDS:
+                return _read_key(path)
+        except (UsageError, OSError):
+            pass
         print(
             f"note: this machine's weekly key swap did not happen ({exc}); "
             "the current key still works, and it will try again",
@@ -2994,6 +3080,125 @@ def screenshot_run() -> None:
     plugin_cli.load_or_exit()
     news.announce()
     sys.exit(screenshot_main())
+
+
+# --- ream stats (runcove-5t3oj.158.1, slice 3) ------------------------------------------
+
+
+def build_stats_parser() -> argparse.ArgumentParser:
+    parser = _Parser(
+        prog=prog_name("ream stats"),
+        description=(
+            "How often one of YOUR OWN pages was read, and by whom (GET "
+            "/api/v1/pages/ID/stats): views per day by the owner, external readers and "
+            "other agents, all-time totals, and each named email recipient's opens. Your "
+            "own reads are not counted. Counting began on the day the service says: "
+            "views before it were not kept."
+        ),
+    )
+    parser.add_argument("page_id", metavar="PAGE-ID")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        metavar="N",
+        choices=range(1, 366),
+        help="how many UTC days, today last (1 to 365, default 30)",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the service's answer as JSON"
+    )
+    parser.add_argument(
+        "--key-file",
+        help=f"the file holding the agent key (default {_DEFAULT_KEY_FILE}, "
+        "or $REAM_KEY_FILE)",
+    )
+    parser.add_argument(
+        "--key-fd",
+        type=int,
+        metavar="N",
+        help="read the key from an already-open descriptor (or set $REAM_KEY_FD)",
+    )
+    parser.add_argument("--session", help="the session label (default $REAM_SESSION)")
+    return parser
+
+
+def _stats_text(found: dict, days: int) -> str:
+    """The answer as lines for a person: counts only, and every string from the service
+    (an email an agent typed) passed through `_printable`."""
+    since = found.get("since")
+    lines = [f"page {_printable(found.get('artifact_id'))}"]
+    if not since:
+        lines.append("no views counted yet")
+    else:
+        lines.append(
+            f"first view counted on {_printable(since)} (views before it were not kept)"
+        )
+    totals = found.get("totals") or {}
+    lines.append(
+        "all time: "
+        + "  ".join(
+            f"{k} {int(totals.get(k) or 0)}" for k in ("owner", "external", "agent")
+        )
+    )
+    shown = [d for d in found.get("days") or [] if any(d.get(k) for k in _STAT_KINDS)]
+    lines.append(f"last {days} days:" + ("" if shown else " no views"))
+    for d in shown:
+        lines.append(
+            f"  {_printable(d.get('day'))}  "
+            + "  ".join(f"{k} {int(d.get(k) or 0)}" for k in _STAT_KINDS)
+        )
+    for share in found.get("shares") or []:
+        opens = int(share.get("opens") or 0)
+        last = share.get("last_opened_at")
+        lines.append(
+            f"shared with {_printable(share.get('email'))}"
+            + (" (withdrawn)" if share.get("withdrawn") else "")
+            + f": {opens} open{'' if opens == 1 else 's'}"
+            + (f", last {_printable(last)}" if last else "")
+        )
+    return "\n".join(lines)
+
+
+_STAT_KINDS = ("owner", "external", "agent")
+
+
+def stats_main(argv: list[str] | None = None) -> int:
+    args = build_stats_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    use_session(session_label(args.session))
+    try:
+        key = _resolve_key(args)
+        key = maybe_rotate(args, key)
+        found = _request(
+            "GET",
+            f"{_api_base()}/pages/{quote(args.page_id, safe='')}/stats?days={args.days}",
+            key,
+            None,
+        )
+        print(
+            json.dumps(found, ensure_ascii=False)
+            if args.json
+            else _stats_text(found, args.days)
+        )
+        return 0
+    except HTTPFailure as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    except UsageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- last resort: `str(exc)` can carry
+        # the key. Only the exception's class name is ever safe to print.
+        print(f"error: {type(exc).__name__}", file=sys.stderr)
+        return 1
+
+
+def stats_run() -> None:
+    """`ream stats PAGE-ID [--days N] [--json]`."""
+    plugin_cli.load_or_exit()
+    news.announce()
+    sys.exit(stats_main())
 
 
 def changes_run() -> None:

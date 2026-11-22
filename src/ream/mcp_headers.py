@@ -13,8 +13,19 @@ finds it (`--key-file`, `--key-fd`, `REAM_KEY_FILE`, `REAM_KEY_FD`, else
 `~/.config/artifacts/key`), by the same functions, so the same refusals apply: a file other users
 can read, or anything that is not shaped like a key.
 
-What it never does: make a request (so it is fast, and there is nothing to retry or update from),
-check for a newer tool, print the news, write the key anywhere, or put it on an argument list.
+Like `ream publish` and the other verbs, it swaps a due rotating key: a key FILE older than seven
+days asks the service (`GET /me`, and `POST /keys/rotate` when the key is rotating) and, if a swap
+is due, the file is replaced and the headers carry the new key. A key file younger than that, and
+any key from a descriptor, make no request at all. Rotating keys are refused after 14 days unless
+swapped, so an office that uses Ream only through MCP would otherwise lose access. A swap's notes
+go to stderr only; a swap that fails never fails the command (the old key still works, and the
+next run tries again).
+
+The helper makes no request except, when the key file is over 7 days old, the weekly key swap
+(`GET /me`, `POST /keys/rotate`). It never updates the tool itself, even when the service says
+the tool is out of date: that would run `uv tool install` and re-exec inside Claude Code's
+helper call, so `main` turns the self-update off for this process; other `ream` commands do it.
+It also never prints the news, writes the key anywhere else, or puts it on an argument list.
 Every problem goes to stderr, in words that cannot contain the key, with a non-zero exit and an
 empty stdout: Claude Code treats that as "no headers" and the server answers 401, which is the
 honest outcome of a missing key.
@@ -27,7 +38,7 @@ from __future__ import annotations
 import json
 import sys
 
-from ream import client
+from ream import client, selfupdate
 from ream.cli import prog_name
 
 # The longest label the server accepts (`api.session_label`: 120 characters, else 422 on
@@ -41,8 +52,9 @@ def build_parser() -> client._Parser:
         description=(
             "Print the HTTP headers for Ream's MCP server (the Authorization header from "
             "this agent's key, and X-Ream-Session when a session is declared) as one JSON "
-            "object on one line. It is a Claude Code `headersHelper`: it makes no request "
-            "and prints nothing else to stdout. "
+            "object on one line. It is a Claude Code `headersHelper`: it prints nothing else "
+            "to stdout, makes a request only to swap a key file more than a week old "
+            "that is due to rotate, and never updates the tool itself. "
             'Set it up with: claude mcp add-json --scope local ream \'{"type":"http",'
             '"url":"<gallery>/mcp","headersHelper":"ream mcp-headers"}\''
         ),
@@ -72,6 +84,8 @@ def headers(args) -> dict[str, str]:
     its text never carries the key."""
     # The key first: with none, nothing else matters and nothing is printed.
     key = client._resolve_key(args)
+    # A due rotating key is swapped as in every other verb: stderr notes only, never a failure.
+    key = client.maybe_rotate(args, key)
     out = {"Authorization": f"Bearer {key}"}
     session = client.declared_session(args.session)
     if session:
@@ -93,6 +107,10 @@ def headers(args) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    # No self-update in a helper Claude Code is waiting on: `selfupdate.on_response` returns at
+    # once when its one decision per process is already taken, so an "outdated" answer to the
+    # key swap's requests runs no `uv tool install` and no re-exec. This process only.
+    selfupdate._done = True
     try:
         line = json.dumps(headers(args))
     except client.UsageError as exc:

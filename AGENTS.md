@@ -72,6 +72,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
+| View counts: who read a page, per day and per viewer (`record`, best-effort, emits no event; read back by `report` through `GET /api/v1/pages/{id}/stats`, the MCP `page_stats` tool and `ream stats`); the design is `docs/agent/specs/2026-11-22-view-stats-design.md` | `src/ream/pageviews.py` |
 | Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render; a screenshot on request (`rendercore.shoot`, over the browser's DevTools pipe; `/v1/shot` on the renderer), and an agent's screenshot of its own page (`shots.take`, served at `GET /api/v1/pages/{id}/screenshot`) | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `devtools.py`, `thumbs.py`, `shots.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
 | A page asking for a window-high frame (`<meta name="ream-frame" content="viewport">`): the name and value, read by the shim, the gallery's frame and the screenshot | `src/ream/pageframe.py` |
 | HTML parsing: the one parser base every reader of a page uses (a new reader subclasses it; `tests/test_htmlbound.py` refuses any other) | `src/ream/htmlbound.py` |
@@ -80,7 +81,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | The logo guide and the gallery's named design values (colours, type, spacing) | `docs/brand.md`, `src/ream/design.py` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
-| Container | `Dockerfile` |
+| Container (one Dockerfile, two targets: `full` has the browser and is the last stage, so a plain `docker build .` renders in-process; `app` has none and needs a renderer) | `Dockerfile`; `tests/test_dockerfile_targets.py` |
 | Deployment values | the deployment's own repo (for the homelab, the homelab repo); this repo keeps none |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
 | An embargoed security fix: built in the private `runcove-sec/artifacts-sec` and pinned by hand before it is public | `.forgejo/workflows/sec.yml` (on the dedicated runner labels only: `runcove-sec` for the image build, `runcove-sec-unpriv` for every other job), `.forgejo/scripts/sec-private-check.sh`, `scripts/guards/workflow-runner-guard.sh`; runbook `docs/agent/runbooks/embargoed-fix.md` |
@@ -130,18 +131,19 @@ need no plug-in: format, signing and the addresses it refuses are in `docs/plugi
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
 (`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the secret scan refuses the request (503 with `Retry-After`, nothing stored), the publish checks and the render findings say they did not run, the comment
 listings answer 200 with the pins of the pages they could not read unknown (`anchor_state` "", and `quote_state` "" too unless the page's words were already read), and a reader
-that a request needs answers 503 with `Retry-After`. The secret scan also has a wall-clock bound once it holds its slot
-(`scan.SCAN_WALL_SECONDS`, 10 s, checked before each shape and at each match): past it the scan raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
+that a request needs answers 503 with `Retry-After`. The secret scan also has a time bound once it holds its slot
+(`scan.SCAN_CPU_SECONDS`, 10 s of the scanning thread's own CPU time, checked before each shape and at each match; plus a wall-clock backstop of `SCAN_WALL_SECONDS_PER_SLOT` times the slot count, a slot-hold limit, acceptable only because a scan that can take a slot (a value over `SMALL_PAGE`, today a page body alone) is reachable only with a revocable credential, and every other scanned field is capped at 64 KiB or less before its scan; `tests/test_scan_call_sites.py` fails for a scan site no one has classified, and the backstop must become a per-scan wall bound if a slot-taking scan ever becomes reachable without such a credential): past either the scan raises `ScanTimeout`, a `ScanBusy`, and is refused the same way.
 `REAM_RENDERER_URL` (also `ARTIFACTS_RENDERER_URL`; unset: nothing changes, the browser runs in the
-service's own process as on a fresh install) names a renderer running as its own process or pod, for resource
-isolation: `python -m ream.renderd --port 8091`, same image. It must be `http://host:port` with an explicit port and
+service's own process as on a fresh install, in an image that has one: `full`, a plain `docker build .`) names a renderer running as its own process or pod, for resource
+isolation: `python -m ream.renderd --port 8091`, from a `full` image (`runcove/artifacts-renderer`; the deployed service's
+`app` image has no browser, so renderd cannot run from it). It must be `http://host:port` with an explicit port and
 nothing else (no path, query, fragment or credentials), on a host other than the gallery's, `REAM_API_HOST` and
 `REAM_FORMER_HOST`, or start-up refuses. Set, `thumbs.render_report` sends the stamped page there through
 `renderwire.call` and never starts a browser itself (`REAM_BROWSER` is not read); a renderer that gives no usable
 answer (down, slow past 30 s, busy, or an answer failing `renderwire`'s checks) stores the verdict `unchecked` with
 one finding saying so, and is never replaced by a render in the service's own process. Preview answers 200 as
 before, with `reason: "renderer_unavailable"` then. renderd takes no key: who may call it is the deployment's
-network policy. Runbook: `docs/agent/runbooks/renderer-pod.md`.
+network policy. Runbook: `docs/agent/runbooks/renderer-pod.md`. With neither it nor a browser found (an `app` image, no renderer named), start-up logs one WARNING that thumbnails, render checks and screenshots are off (`serve._warn_renderer_off`).
 
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
 `X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older
@@ -199,9 +201,12 @@ without a label a page says only which KEY published it. `REAM_SESSION="<agent>/
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
-**A push to `main` asks to deploy.** CI tests, builds an image and pushes it as
-`runcove/artifacts-core:<sha12>`, then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
-`CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image, set to merge when that
+**A push to `main` asks to deploy.** CI tests, builds the `app` image (no browser) and pushes it as
+`runcove/artifacts-core:<sha12>`, and the `full` image (the browser) as `runcove/artifacts:<sha12>` and
+`runcove/artifacts-renderer:<sha12>`; the core and renderer digests differ: CI refuses a core digest equal to the full (renderer) one, and
+ream-homelab's pin (`pin-pr.sh --check-renderer-lock`) is to refuse a `renderer.lock` digest equal to `core.lock`'s (that check is
+added in ream-homelab, separately from this repo's change). Then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
+`CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image (and `renderer.lock` to `runcove/artifacts-renderer:<sha12>` when that image was published), set to merge when that
 repo's checks succeed. ream-homelab builds the deployed image and opens the homelab pin PR, which the homelab maintainer
 merges. Core's own `pin` job (`pin-pr.sh`) is off. How it flows, and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.
 

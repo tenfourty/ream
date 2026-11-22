@@ -7,7 +7,8 @@ name: sec
 #   privacy  proves the repo private with no push mirror, and the registry owner private; any
 #            doubt fails the run before a test, a build or a push
 #   tests    the same three jobs as ci.yml (copied from it: keep them in step)
-#   image    on main only: the core image and the deployed image (core + ream-homelab's plug-ins
+#   image    on main only: the core image (the `app` target: no browser, proved by running it) and
+#            the deployed image (core + ream-homelab's plug-ins
 #            at its main), both pushed under the private owner, each proven to exist and not
 #            pullable anonymously, and everything proven private once more after the last push;
 #            prints one SEC BUILT line for the pin, only then. It never opens a pin or lock PR.
@@ -353,7 +354,8 @@ jobs:
       #   0. (job `privacy`)  repo and registry owner private: before any test or build
       #   1. below            the same again on this runner: settings may have changed while the
       #                       tests ran, and this is right before anything is pushed
-      #   2. core image       pushed, then proven to EXIST and hidden, straight after its push
+      #   2. core image       pushed, then proven to EXIST and hidden, straight after its push, then
+      #                       run, and proven to find no browser (it is the `app` target)
       #   3. deployed image   pushed, then proven to EXIST and hidden, straight after its push
       #   4. after the last push: repo and owner private AGAIN, and both images hidden AGAIN.
       #                       The repo or an image going public WHILE the pushes ran (they take
@@ -397,8 +399,10 @@ jobs:
               *"manifest unknown"*|*"not found"*) ;;
               *) echo "$pulled" >&2; echo "could not tell whether $repo:$sha12 exists" >&2; exit 1 ;;
             esac
-            docker build --network host \
-              --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" -t "$repo:$sha12" .
+            # --target app: the image with NO browser, as in ci.yml (docs/decisions.md, 22 Nov
+            # 2026), so the deployed image built on it cannot render in the service's own process.
+            docker build --network host --target app \
+              --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" -t "$repo:$sha12" .
             docker push "$repo:$sha12"
           fi
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repo:$sha12" \
@@ -410,6 +414,53 @@ jobs:
         env:
           SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
         run: .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
+
+      # The browser-free core, proved by running the pushed image (the ref the build step output,
+      # pulled first; on a re-run, the tag's image) as ci.yml's `core image has no browser` does:
+      # it must find no browser. The positive control is the `full` target built here and NEVER
+      # pushed (this job builds no renderer): it must find one, so an empty result cannot pass
+      # for a proof, and its image id must differ from the core's (the core is the app target).
+      # Fails the job before the deployed image is built, so a browser in the core means no pin.
+      - name: core image has no browser
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          CORE_REF: ${{ steps.core.outputs.ref }}
+        run: |
+          set -euo pipefail
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "SEC_REGISTRY_TOKEN is not set on this repo" >&2; exit 1; }
+          case "$CORE_REF" in
+            "git.tenfourty.site/${SEC_REGISTRY_OWNER}/artifacts-core:"*@sha256:*) ;;
+            *) echo "unexpected core ref" >&2; exit 1 ;;
+          esac
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u "$SEC_REGISTRY_USER" --password-stdin
+          docker pull "$CORE_REF"
+          full="artifacts-full-check:${GITHUB_SHA:0:12}"
+          docker build --network host --target full \
+            --build-arg IMAGE_REFRESH="$(date -u +%G-W%V)" \
+            --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
+            -t "$full" .
+          core_id=$(docker image inspect --format '{{.Id}}' "$CORE_REF")
+          full_id=$(docker image inspect --format '{{.Id}}' "$full")
+          [ -n "$core_id" ] && [ -n "$full_id" ] || { echo "no image id" >&2; exit 1; }
+          [ "$core_id" != "$full_id" ] || { echo "the core image is the full image: it must be the app target" >&2; exit 1; }
+          check='
+          import shutil, sys
+          from ream import rendercore
+          found = [n for n in ("chromium", "chrome-headless-shell") if shutil.which(n)]
+          available = rendercore.available()
+          print(f"{sys.argv[1]}: available={available} found={found}")
+          if sys.argv[1] == "core":
+              ok, msg = available is False and found == [], "the core image carries a browser"
+          else:
+              ok, msg = available is True and bool(found), "the full image carries no browser"
+          if not ok:
+              print("FAIL: " + msg, file=sys.stderr)
+              sys.exit(1)
+          '
+          docker run --rm --entrypoint /app/.venv/bin/python "$CORE_REF" -c "$check" core
+          docker run --rm --entrypoint /app/.venv/bin/python "$full" -c "$check" full
+          docker run --rm --entrypoint /usr/bin/tini "$CORE_REF" --version
 
       # The deployed image is ream-homelab's Dockerfile at its main, on this core. ream-homelab's own
       # CI cannot do it: it installs the core from the public repo by commit (this one is not there

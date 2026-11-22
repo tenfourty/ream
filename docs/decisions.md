@@ -1237,7 +1237,7 @@ runs the public image since 20 Nov 2026 (pod image line read by artifacts-mainta
 ## The secret scan stops at a time bound (released 20 Nov 2026)
 
 The secret scan stops at a wall-clock bound (`scan.SCAN_WALL_SECONDS`, 10 s, the same figure as the
-other readers' backstop), checked before each shape and at each match. A scan past it raises
+other readers' backstop; the bound later changed from wall clock to the thread's CPU time, see the follow-up below), checked before each shape and at each match. A scan past it raises
 `ScanTimeout`, a `ScanBusy` with its own words (the page took too long to scan), so it is refused as
 a busy server is: 503 with `Retry-After`, nothing stored. `--check` prints one line and exits 1 when
 it cannot finish the scan. A single regex search already running is not interrupted; each is linear
@@ -1247,6 +1247,18 @@ with security's two wording and measurement fixes. The follow-up for four large 
 once comes next as an ordinary public change: it counts the deadline in CPU time, with the wall
 clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 
+**Follow-up (security approved, 20 Nov 2026):** the bound is now `scan.SCAN_CPU_SECONDS` (10 s of
+the scanning thread's own `time.thread_time()`), because scans in threads share the interpreter lock
+and four legitimate worst-case pages all hit the wall bound. The wall clock stays as a backstop of
+`SCAN_WALL_SECONDS_PER_SLOT` (10 s) times the slot count, counted from taking the slot. That backstop is
+a slot-hold limit, not a per-scan wall bound, and is acceptable only because a scan that can take a
+slot (a value over `scanslots.SMALL_PAGE`) is reachable only with a revocable credential. Today
+that is a page body alone, sent with a Ream key on `/api/v1`, with a key or an owner-only app token
+on `/mcp`, or from the owner's own gallery session; every other scanned field is capped at 64 KiB
+or less before its scan. `tests/test_scan_call_sites.py` holds this: a new place that starts a
+scan fails until it is classified. If a slot-taking scan ever becomes reachable without such a
+credential, the backstop must drop back to a per-scan wall bound. The per-call pattern bounds are unchanged.
+
 **Not chosen:**
 - No bound beyond the slot wait: a slow scan would hold its slot for as long as it ran.
 - Holding the release until the follow-up is done: the bound already refuses a scan that cannot
@@ -1254,8 +1266,73 @@ clock kept as a backstop (tracked as runcove-5t3oj.161.1).
 
 **Evidence:** Jeremy approved the release on 20 Nov 2026 (decision: release now, follow-up next);
 security reviewed the fix and retested it live in production; the in-shape check is held by
-`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_WALL_SECONDS` in
+`tests/test_scanslots.py`. The in-pod measurements are beside `SCAN_CPU_SECONDS` in
 `src/ream/scan.py`.
+
+## A page's owner sees its view stats, external readers by name (20 Nov 2026)
+
+Ream records how each page is read, and its owner can see it: views over time, split into
+Jeremy's own opens, opens by the people a page was shared with by email, and agent reads. Both
+Jeremy, in the gallery, and the agent that published the page, through `/api/v1` and MCP for its
+own pages only, can read them (the every-human-action-has-an-agent-twin rule). For each external
+share the stats name the recipient's email, how many times they opened the page and when they
+last did; Ream already knows each reader, who signs in with an emailed code. Today only
+`page_read` exists: the owner's last open and version, overwritten on every open. Tracked as
+runcove-5t3oj.158.1 (backlog, behind the land-existing-work focus).
+
+**Not chosen:**
+- Stats for Jeremy only, or for the publishing agent only: either breaks the agent-twin rule or
+  hides his own pages' reading from him.
+- Anonymous counts for external readers, or naming them only on shares made with an opt-in: he
+  wants to know who read a page he shared.
+
+**Evidence:** Jeremy asked for it in #hq-artifacts on 20 Nov 2026, pages shared outside above all,
+and chose (a) on both questions there: who sees the stats, and per-recipient detail for external
+shares.
+
+**Shipped (22 Nov 2026):** recording (slices 1-2), then the agent's reading of it: `GET
+/api/v1/pages/{id}/stats` (both words), the MCP tool `page_stats` and `ream stats` (client level
+10). `since` is worded "first view counted on": the day of the first counted view on the
+service, not the page's age, and nothing earlier was kept. The gallery's "Readers" panel (slice 4)
+is `GET /a/{id}/stats`, linked from the page menu: server-rendered with no script, drawn from the
+same `pageviews.report()` as the agent's route (one query path), unscoped because the gallery is
+the owner's. Totals and a 30-day bar chart per kind, a table of the people the page was shared
+with, and "First view counted on <day>"; the share panel also says how often each link was opened.
+No news entry: the owner's gallery gains a menu row, not a change an agent must act on
+(docs/agent/specs/2026-11-22-view-stats-design.md, slice 4).
+
+## One Dockerfile, two targets: an app image with no browser (22 Nov 2026)
+
+The Dockerfile now has a shared `base` (slim image, tini, environment, user, entrypoint), an `app`
+stage (base plus the finished virtualenv and wheels, no browser, no fonts) and a `full` stage (base plus
+Debian's chromium and fonts, then the same copies). `full` is the last stage, so a plain `docker build .`
+and `--target full` still give the image that renders in its own process. CI publishes `full` under the
+existing tags and under a new `runcove/artifacts-renderer:<sha12>` (the same digest), and builds `app`
+only to run it and assert it finds no browser (with the full image as the positive control). Nothing
+deployed changed in that first step. The aim: once the renderer pod has its own pin, the service can run the
+`app` image and rendering stays in the renderer. A start with neither a renderer named nor a browser
+found logs one warning that thumbnails, render checks and screenshots are off.
+
+**Step 3 (22 Nov 2026): the core is the app target.** `runcove/artifacts-core:<sha12>`, the image
+ream-homelab builds the deployed service on, is now built `--target app` and has no browser, so rendering in
+the service's own process cannot be turned back on by configuration. `artifacts:<sha12>` and
+`artifacts-renderer:<sha12>` stay the `full` build, and the core's digest differs from theirs: CI refuses
+a core digest equal to the full image's, and ream-homelab's pin is to refuse a `renderer.lock` digest equal
+to `core.lock`'s. The `image` job's last step, `core image has no browser`, pulls the pushed core and
+asserts it finds no browser, with the full image as the positive control; it has no `continue-on-error`,
+and a fresh run that published no core ref fails the job. The embargoed pipeline (`sec.yml`) builds its
+private core the same way and builds no renderer. Going back to a browser in the deployed service would
+need a core lock on a full-target core, which CI no longer builds; until one exists the renderer pod stays.
+
+**Not chosen:**
+- Two Dockerfiles: the browser-free one drifts from the other, and CI would need a proof that they match.
+- `app` as the last stage: a plain `docker build .` on a fresh install would then silently lose
+  thumbnails and render checks, which is the default a fresh install expects.
+
+**Evidence:** `tests/test_dockerfile_targets.py` (the stage chain of `app` names no browser; `full`
+exists, is last and installs chromium; both carry tini) and the `core image has no browser` step of the
+`image` job in `.forgejo/workflows/ci.yml` (and the same step in `sec.yml`), which runs the pushed core
+image and the full image; `tests/test_ci_image_targets.py` pins which target each image is built from.
 
 ## An optional internal port serves only the health check and the partner endpoint (22 Nov 2026)
 
