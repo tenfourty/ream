@@ -14,6 +14,9 @@ Deliberately NOT rewritten: SESSION labels (`*.session`,
 time, not a reference to an agent, and nothing resolves them to one.
 `connect_request.suggested_name` is what a machine proposed before Jeremy
 named it, and `agent_key.replaces` is a key id.
+
+An agent's reads of other agents' pages (`page_viewer`, kind 'agent', viewer the name; see
+`pageviews`) move too, merged into `new`'s row where it has one for the same page.
 """
 
 from __future__ import annotations

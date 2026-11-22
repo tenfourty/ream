@@ -2,7 +2,7 @@
 wired into any request path). The windows, the per-day counts, the cascade, the rule that
 recording never fails the caller, and a rename moving an agent's own reads."""
 
-import re
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -237,20 +237,81 @@ def test_a_dry_run_rename_leaves_the_reads_where_they_are(db, page):
     assert _viewer(db, page, "agent", "new-reader") is None
 
 
+def _since(db):
+    with db.connect() as conn:
+        return conn.execute(
+            "select value from service_meta where key = 'views_since'"
+        ).fetchall()
+
+
 @pytest.mark.usefixtures("fresh_schema")
-def test_views_since_is_written_once_at_migration(db):
+def test_the_migration_seeds_no_views_since(db):
     db.reset()
     db.migrate()  # SQLite's reset only drops
-    with db.connect() as conn:
-        (value,) = conn.execute(
-            "select value from service_meta where key = 'views_since'"
-        ).fetchone()
-        assert re.fullmatch(r"\d{4}-\d\d-\d\d", value)
-        conn.execute(
-            "update service_meta set value = '2026-01-01' where key = 'views_since'"
-        )
-    db.migrate()  # a later start leaves it alone
-    with db.connect() as conn:
-        assert conn.execute(
-            "select value from service_meta where key = 'views_since'"
-        ).fetchone() == ("2026-01-01",)
+    assert _since(db) == []
+
+
+def test_the_first_counted_view_writes_views_since_and_a_later_one_keeps_it(db, page):
+    assert _since(db) == []
+    pageviews.record(db, page, "owner", "", now=T0)
+    assert _since(db) == [("2026-11-22",)]
+    pageviews.record(db, page, "owner", "", now=T0 + timedelta(days=3))
+    pageviews.record(db, page, "agent", "reader", now=T0 + timedelta(days=4))
+    assert _since(db) == [("2026-11-22",)]
+
+
+def test_a_view_that_is_not_counted_writes_no_views_since(db):
+    pageviews.record(db, "a" * 26, "owner", "", now=T0)  # no such page
+    pageviews.record(db, "a" * 26, "bogus", "", now=T0)
+    assert _since(db) == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "viewer", "window"),
+    [
+        ("agent", "reader", timedelta(minutes=30)),
+        ("external", "share1", timedelta(minutes=30)),
+        ("owner", "", timedelta(minutes=30)),
+        ("external", "", timedelta(minutes=5)),
+    ],
+)
+def test_a_view_exactly_one_window_later_counts(db, page, kind, viewer, window):
+    pageviews.record(db, page, kind, viewer, now=T0)
+    just_inside = T0 + window - timedelta(microseconds=1)
+    assert pageviews.record(db, page, kind, viewer, now=just_inside) is False
+    assert pageviews.record(db, page, kind, viewer, now=T0 + window) is True
+    assert _viewer(db, page, kind, viewer)[0] == 2
+
+
+def test_daily_clamps_days_to_between_one_and_a_year(db, page):
+    assert len(pageviews.daily(db, page, days=0, now=T0)) == 1
+    assert len(pageviews.daily(db, page, days=-5, now=T0)) == 1
+    assert len(pageviews.daily(db, page, days=1000, now=T0)) == 365
+    assert pageviews.daily(db, page, days=0, now=T0)[0]["day"] == "2026-11-22"
+
+
+def test_last_at_never_moves_backwards(db, page):
+    pageviews.record(db, page, "agent", "reader", now=T0)
+    pageviews.record(db, page, "agent", "reader", now=T0 + timedelta(minutes=20))
+    earlier = T0 + timedelta(minutes=5)  # a late-arriving call with an older clock
+    assert pageviews.record(db, page, "agent", "reader", now=earlier) is False
+    views, last_at, counted_at = _viewer(db, page, "agent", "reader")
+    assert (views, last_at, counted_at) == (1, T0 + timedelta(minutes=20), T0)
+
+
+def test_two_threads_recording_the_same_first_view_count_it_once(db, page):
+    results = []
+    gate = threading.Barrier(2)
+
+    def go():
+        gate.wait(timeout=10)
+        results.append(pageviews.record(db, page, "agent", "reader", now=T0))
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert sorted(results) == [False, True]
+    assert _viewer(db, page, "agent", "reader")[0] == 1
+    assert _day(db, page) == {("2026-11-22", "agent"): 1}

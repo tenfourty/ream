@@ -72,6 +72,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
+| View counts: who read a page, per day and per viewer (`record`, best-effort, emits no event; not yet called from any request path); the design is `docs/agent/specs/2026-11-22-view-stats-design.md` | `src/ream/pageviews.py` |
 | Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render; a screenshot on request (`rendercore.shoot`, over the browser's DevTools pipe; `/v1/shot` on the renderer), and an agent's screenshot of its own page (`shots.take`, served at `GET /api/v1/pages/{id}/screenshot`) | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `devtools.py`, `thumbs.py`, `shots.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
 | A page asking for a window-high frame (`<meta name="ream-frame" content="viewport">`): the name and value, read by the shim, the gallery's frame and the screenshot | `src/ream/pageframe.py` |
 | HTML parsing: the one parser base every reader of a page uses (a new reader subclasses it; `tests/test_htmlbound.py` refuses any other) | `src/ream/htmlbound.py` |

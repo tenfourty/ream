@@ -1072,11 +1072,6 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " counted_at timestamptz not null,"
             " primary key (artifact_id, kind, viewer))"
         ),
-        (
-            "insert into service_meta (key, value)"
-            " values ('views_since', strftime('%Y-%m-%d', 'now'))"
-            " on conflict do nothing"
-        ),
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)

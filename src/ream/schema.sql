@@ -1352,7 +1352,9 @@ alter table agent_key add column if not exists revoked_by text;
 -- per (page, kind, viewer) with the total, the last open and the last COUNTED view (the dedupe
 -- window runs from it). `viewer` is '' for the owner (never his id) and for an anonymous link,
 -- an agent's name for an agent, an `email_share.id` for a named recipient. Written only by
--- `pageviews.record`. SQLite does the same as its schema step 35.
+-- `pageviews.record`, which also writes the `service_meta` key `views_since` (the UTC day of
+-- the first counted view) once; the migration seeds nothing, so a copy into a fresh database
+-- (`migrate.copy`) finds it empty. SQLite does the same as its schema step 35.
 create table if not exists page_view_day (
     artifact_id text    not null references artifact(id) on delete cascade,
     day         text    not null,
@@ -1370,8 +1372,3 @@ create table if not exists page_viewer (
     counted_at  timestamptz not null,
     primary key (artifact_id, kind, viewer)
 );
-
--- The day counting began, written once (`on conflict do nothing`): there is no backfill.
-insert into service_meta (key, value)
-    values ('views_since', to_char(now() at time zone 'utc', 'YYYY-MM-DD'))
-    on conflict do nothing;

@@ -14,6 +14,17 @@ link, viewer '') and `agent` (another agent's read of the body, viewer is its na
 `record` is best-effort. Counting is never worth failing a request over, so it catches what
 the database throws, logs the exception's TYPE only, and returns False. It emits no event:
 `event` rows wake waiting agents, and a reader opening a page is not news.
+
+The first counted view also writes the `service_meta` key `views_since` (its UTC day, once;
+the migration seeds nothing, so `migrate.copy` finds the tables empty). A reader of it treats
+a missing key as "no views yet".
+
+CALLING IT (slice 2): `record` opens its own connection and transaction, so call it only
+AFTER the request's own transaction has closed. On SQLite one writer holds the lock, and a
+write attempted while the caller's own is still open waits out the busy timeout and then
+fails: a view silently lost (it is best-effort, so nothing says so). It is also synchronous
+database work: call it from a sync route or a worker thread, never straight from an `async`
+handler's event loop.
 """
 
 from __future__ import annotations
@@ -37,6 +48,9 @@ WINDOW = timedelta(minutes=30)
 # The anonymous link names no one, so its readers are one viewer: a shorter window, so two
 # people opening the link a few minutes apart still count twice.
 ANONYMOUS_WINDOW = timedelta(minutes=5)
+
+# The `service_meta` key holding the UTC day of the first counted view (absent: none yet).
+VIEWS_SINCE = "views_since"
 
 
 def window_for(kind: str, viewer: str) -> timedelta:
@@ -70,8 +84,9 @@ def record(
     that failed). Never raises.
 
     One transaction: insert the viewer's row (a first view, counted); else bump the count
-    where the last counted view is older than the window (counted); else only move
-    `last_at`. A counted view adds one to the page's row for the UTC day."""
+    where the last counted view is at least a window old (a view exactly one window later
+    counts); else only move `last_at` forward, never back. A counted view adds one to the
+    page's row for the UTC day, and the first ever writes `views_since`."""
     if not _valid(kind, viewer):
         _log.warning("page view not recorded: kind or viewer refused")
         return False
@@ -93,19 +108,21 @@ def record(
             if not counted:
                 counted = (
                     conn.execute(
-                        "update page_viewer set views = views + 1, last_at = %s,"
+                        "update page_viewer set views = views + 1,"
+                        " last_at = case when last_at < %s then %s else last_at end,"
                         " counted_at = %s"
                         " where artifact_id = %s and kind = %s and viewer = %s"
-                        " and counted_at < %s returning artifact_id",
-                        (at, at, artifact_id, kind, viewer, cutoff),
+                        " and counted_at <= %s returning artifact_id",
+                        (at, at, at, artifact_id, kind, viewer, cutoff),
                     ).fetchone()
                     is not None
                 )
             if not counted:
                 conn.execute(
-                    "update page_viewer set last_at = %s"
+                    "update page_viewer"
+                    " set last_at = case when last_at < %s then %s else last_at end"
                     " where artifact_id = %s and kind = %s and viewer = %s",
-                    (at, artifact_id, kind, viewer),
+                    (at, at, artifact_id, kind, viewer),
                 )
                 return False
             conn.execute(
@@ -114,6 +131,11 @@ def record(
                 " on conflict (artifact_id, day, kind) do update"
                 " set views = page_view_day.views + 1",
                 (artifact_id, at.strftime("%Y-%m-%d"), kind),
+            )
+            conn.execute(
+                "insert into service_meta (key, value) values (%s, %s)"
+                " on conflict (key) do nothing",
+                (VIEWS_SINCE, at.strftime("%Y-%m-%d")),
             )
         return True
     except Exception as exc:  # noqa: BLE001 - best-effort: the type is logged, the request goes on
@@ -133,8 +155,9 @@ class Viewer:
 def daily(
     db: Database, artifact_id: str, days: int = 30, now: datetime | None = None
 ) -> list[dict]:
-    """The last `days` UTC days of a page, today last, zero-filled:
+    """The last `days` (clamped to 1..365) UTC days of a page, today last, zero-filled:
     `[{"day": "2026-11-22", "owner": 0, "external": 3, "agent": 1}, ...]`."""
+    days = max(1, min(365, days))
     today = (_utc(now) if now is not None else datetime.now(UTC)).date()
     first = today - timedelta(days=days - 1)
     rows = {
