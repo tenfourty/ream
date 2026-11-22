@@ -2,22 +2,27 @@
 endpoint (`ream.internal_port`). Everything else there is a plain 404 whatever the Host
 header says, and port 8000's app is unchanged."""
 
+import asyncio
 import base64
 import json
+import signal
 import socket
-import time
+import threading
+import urllib.error
 import urllib.request
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from ream import internal_port, keys, partner, partner_in, settings
+from ream import internal_port, keys, partner, partner_in, serve, settings
 from ream.app import create_app
 
+ROOT = Path(__file__).resolve().parent.parent
 HOST = "artifacts-svc.internal"
 KEY_ID = "qd-test-1"
 GALLERY = "gallery.invalid"
@@ -99,8 +104,8 @@ def test_the_internal_app_serves_the_partner_endpoint_on_the_partner_host(
 ):
     ok = signed_post(at(internal, HOST), partner_key)
     via_main = signed_post(at(create_app(db, inbound), HOST), partner_key)
-    assert ok.status_code < 300, ok.text
-    assert via_main.status_code == ok.status_code or via_main.status_code < 300
+    assert 200 <= ok.status_code < 300, ok.text
+    assert ok.status_code == via_main.status_code
     # The signature is still the credential, as on port 8000.
     bad = signed_post(at(internal, HOST), partner_key, tamper=True)
     assert bad.status_code in (400, 401, 403), bad.status_code
@@ -131,7 +136,8 @@ def test_everything_else_is_a_plain_404_whatever_the_host(db, internal):
                 assert got.text == "not found"
         assert c.post("/api/v1/pages", headers=auth, json={}).status_code == 404
         assert c.post("/mcp", headers=auth, json={}).status_code == 404
-        assert c.head("/healthz").status_code == 404 or host  # HEAD is not served
+        # HEAD is not served on /healthz, as on the main port (a 405 there)
+        assert c.head("/healthz").status_code in (404, 405)
     # A conflicting Host-override header changes nothing.
     got = at(internal, "x.invalid").get(
         "/", headers={"x-forwarded-host": GALLERY, "x-original-host": GALLERY}
@@ -158,37 +164,106 @@ def free_port():
         return s.getsockname()[1]
 
 
-def test_the_real_listener_serves_only_the_internal_app(db, inbound):
+def fetch(port, path, host):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", headers={"Host": host}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310
+            return r.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except OSError:
+        return None  # nothing is listening
+
+
+def test_the_real_listener_runs_on_the_main_loop_and_serves_only_the_internal_app(
+    db, inbound
+):
+    port = free_port()
+
+    async def scenario():
+        term = signal.getsignal(signal.SIGTERM)
+        intr = signal.getsignal(signal.SIGINT)
+        listener = internal_port.InternalListener(
+            internal_port.create_internal_app(db, inbound), "127.0.0.1", port
+        )
+        before = {t.ident for t in threading.enumerate()}
+        await listener.start()
+        loop = asyncio.get_running_loop()
+        # The same loop as the caller's, and no thread of its own.
+        assert listener._task.get_loop() is loop
+        assert {t.ident for t in threading.enumerate()} - before <= set()
+        assert signal.getsignal(signal.SIGTERM) is term
+        assert signal.getsignal(signal.SIGINT) is intr
+
+        async def get(path, host):
+            return await loop.run_in_executor(None, fetch, port, path, host)
+
+        assert await get("/healthz", "probe") == 200
+        assert await get("/", GALLERY) == 404
+        assert await get("/api/v1/pages", API) == 404
+        await listener.stop()
+        assert listener._task.done()
+        assert await get("/healthz", "probe") is None
+
+    asyncio.run(scenario())
+
+
+def drive_lifespan(app):
+    """Run `app` (an ASGI app) through lifespan; returns `(startup, shutdown, finish)`
+    coroutines: `startup()` sends lifespan.startup and waits for its answer, `shutdown()`
+    the same for shutdown, `finish()` awaits the app's end."""
+    inbox, outbox = asyncio.Queue(), asyncio.Queue()
+    task = asyncio.ensure_future(app({"type": "lifespan"}, inbox.get, outbox.put))
+
+    async def startup():
+        await inbox.put({"type": "lifespan.startup"})
+        return await outbox.get()
+
+    async def shutdown():
+        await inbox.put({"type": "lifespan.shutdown"})
+        return await outbox.get()
+
+    return startup, shutdown, task
+
+
+def test_the_internal_port_answers_only_between_lifespan_startup_and_shutdown(
+    db, inbound, monkeypatch
+):
+    monkeypatch.setattr(serve.signal, "signal", lambda *a, **k: None)
     port = free_port()
     listener = internal_port.InternalListener(
         internal_port.create_internal_app(db, inbound), "127.0.0.1", port
     )
-    listener.start()
-    try:
 
-        def get(path, host):
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{port}{path}", headers={"Host": host}
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=5) as r:  # noqa: S310
-                    return r.status
-            except urllib.error.HTTPError as exc:
-                return exc.code
+    async def main_app(scope, receive, send):
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+            else:
+                await send({"type": "lifespan.shutdown.complete"})
+                return
 
-        for _ in range(50):
-            try:
-                assert get("/healthz", "probe") == 200
-                break
-            except OSError:
-                time.sleep(0.1)
-        else:
-            pytest.fail("the internal listener did not come up")
-        assert get("/", GALLERY) == 404
-        assert get("/api/v1/pages", API) == 404
-    finally:
-        listener.stop()
-    assert not listener._thread.is_alive()
+    async def scenario():
+        loop = asyncio.get_running_loop()
+
+        async def get():
+            return await loop.run_in_executor(None, fetch, port, "/healthz", "probe")
+
+        startup, shutdown, task = drive_lifespan(
+            serve._arm_shutdown_signals(main_app, listener)
+        )
+        assert await get() is None  # bound, but nothing answers before startup
+        assert (await startup())["type"] == "lifespan.startup.complete"
+        assert await get() == 200
+        assert (await shutdown())["type"] == "lifespan.shutdown.complete"
+        await task
+        assert listener._task.done()  # shutdown stopped it
+        assert await get() is None
+
+    asyncio.run(scenario())
 
 
 def test_a_port_already_taken_stops_start_up_with_a_clear_message(db, inbound):
@@ -204,9 +279,14 @@ def test_a_port_already_taken_stops_start_up_with_a_clear_message(db, inbound):
     assert "REAM_INTERNAL_PORT" in str(exc.value)
 
 
-def test_unset_starts_no_second_listener(db, inbound):
-    with settings.override() as current:
-        assert internal_port.maybe_start(db, inbound, current) is None
+def test_the_main_port_constant_matches_the_dockerfile_cmd():
+    cmd = next(
+        line
+        for line in (ROOT / "Dockerfile").read_text().splitlines()
+        if line.startswith("CMD ")
+    )
+    argv = json.loads(cmd.removeprefix("CMD "))
+    assert int(argv[argv.index("--port") + 1]) == settings.MAIN_PORT
 
 
 def test_only_exact_paths_are_served(internal, partner_key):
@@ -253,4 +333,4 @@ def test_unset_binds_nothing(db, inbound, monkeypatch):
     monkeypatch.setattr(internal_port.socket, "socket", refuse)
     monkeypatch.setattr(internal_port, "InternalListener", refuse)
     with settings.override() as current:
-        assert internal_port.maybe_start(db, inbound, current) is None
+        assert internal_port.maybe_create(db, inbound, current) is None

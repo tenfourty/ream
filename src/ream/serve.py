@@ -32,7 +32,7 @@ from ream.db import Database
 log = logging.getLogger("ream.serve")
 
 
-def _arm_shutdown_signals(app, on_shutdown=None):
+def _arm_shutdown_signals(app, internal=None):
     """Wrap `app` so every held /events request ends as soon as this process is
     asked to stop.
 
@@ -82,9 +82,12 @@ def _arm_shutdown_signals(app, on_shutdown=None):
 
             async def watching(message):
                 # The app has finished shutting down: stop the core outbox sender.
+                if message["type"] == "lifespan.startup.complete" and internal:
+                    # The internal port answers only once the app has started.
+                    await internal.start()
                 if message["type"].startswith("lifespan.shutdown"):
-                    if on_shutdown is not None:
-                        on_shutdown()
+                    if internal is not None:
+                        await internal.stop()
                     plugin_api.stop_all()
                     sinks.stop(timeout=2.0)
                     comments.stop_sweeper(timeout=2.0)
@@ -268,8 +271,7 @@ def app_from_env():
     sinks.start(db)
     plugin_api.start_all(db)  # plug-in start hooks (API 1.2)
     # The optional second listener (REAM_INTERNAL_PORT): /healthz and the partner endpoint
-    # only, started last so a pod that cannot finish starting never answers a probe there.
-    internal = internal_port.maybe_start(db, inbound, configured)
-    return _arm_shutdown_signals(
-        create_app(db, inbound), internal.stop if internal else None
-    )
+    # only. Bound here, so a taken port stops the start; it starts serving on the main loop
+    # when the lifespan startup completes, so it never answers before the app is up.
+    internal = internal_port.maybe_create(db, inbound, configured)
+    return _arm_shutdown_signals(create_app(db, inbound), internal)

@@ -51,8 +51,9 @@ DEFAULT_OWNER_PRONOUN = "they"
 DEFAULT_GALLERY_ORIGIN = "http://localhost:8000"
 DEFAULT_SCAN_SLOTS = 4
 DEFAULT_BIND_HOST = "127.0.0.1"
-# The port the image's CMD serves the main listener on (`Dockerfile`); the internal port
-# may not be this one.
+# The port the image's CMD serves the main listener on: it mirrors the Dockerfile CMD's
+# `--port` (`tests/test_internal_port.py` fails when they differ). The internal port may
+# not be this one.
 MAIN_PORT = 8000
 # The command-line tools' endpoint when `REAM_API` is unset. This is OUR house's address,
 # kept here so the many agents on several machines that run the tools with no variable set

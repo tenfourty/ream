@@ -21,19 +21,25 @@ part. What it answers:
   route and all), so the two ports cannot drift;
 * everything else, whatever the Host: a plain 404. A WebSocket is closed.
 
-How it is served: `start` binds the socket in the calling thread (so a port already taken
-stops start-up with a clear message, never a half-started pod) and runs a second
-`uvicorn.Server` on it in a daemon thread. The main listener, started by the image's
-unchanged CMD, is untouched. `stop` is called when the main app's lifespan shuts down.
+How it is served: `InternalListener` binds the socket in the factory (so a port already
+taken stops start-up with a clear message, never a half-started pod) and runs a second
+`uvicorn.Server` as a task on the MAIN event loop, started when the main app's lifespan
+startup has completed and stopped, awaited, when its shutdown runs (`serve._arm_shutdown_signals`).
+One loop on purpose: a probe of `/healthz` here must be able to fail when the main server's
+loop is wedged, and the handler runs in the worker threads (as the old probe on 8000 did), so a
+starved thread pool shows too. The server's `capture_signals` is a no-op, or uvicorn would take
+SIGTERM and SIGINT from the main server. The main listener, started by the image's unchanged
+CMD, is untouched.
 """
 
 import asyncio
+import contextlib
 import logging
 import socket
-import threading
 
 import uvicorn
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
 from ream import hosts, partner_in, settings
 from ream.app import create_partner_dispatch
@@ -75,7 +81,9 @@ def create_internal_app(db: Database, partner_inbound=None):
             await not_found(scope, receive, send)
             return
         if path == "/healthz" and scope["method"] == "GET":
-            await JSONResponse({"status": "ok"})(scope, receive, send)
+            # A sync handler in the worker threads, as `/healthz` on the main port is.
+            body = await run_in_threadpool(lambda: {"status": "ok"})
+            await JSONResponse(body)(scope, receive, send)
             return
         if path == partner_in.PATH:
             host = hosts.normalise(hosts.first_host_header(scope))
@@ -87,8 +95,16 @@ def create_internal_app(db: Database, partner_inbound=None):
     return app
 
 
+class _Server(uvicorn.Server):
+    """A server that leaves the process's signal handlers to the main one."""
+
+    @contextlib.contextmanager
+    def capture_signals(self):
+        yield
+
+
 class InternalListener:
-    """A second uvicorn server on its own socket, in a daemon thread."""
+    """A second uvicorn server on its own socket, run as a task on the running loop."""
 
     def __init__(self, app, host: str, port: int) -> None:
         self._sock = socket.socket(
@@ -102,7 +118,6 @@ class InternalListener:
             raise SystemExit(
                 f"REAM_INTERNAL_PORT: cannot listen on {host}:{port} ({exc.strerror})"
             ) from None
-        self._sock.set_inheritable(True)
         config = uvicorn.Config(
             app,
             lifespan="off",
@@ -111,29 +126,32 @@ class InternalListener:
             log_config=None,
             timeout_graceful_shutdown=15,
         )
-        self._server = uvicorn.Server(config)
-        self._thread = threading.Thread(
-            target=lambda: asyncio.run(self._server.serve(sockets=[self._sock])),
-            name="internal-port",
-            daemon=True,
-        )
+        self._server = _Server(config)
+        self._task: asyncio.Task | None = None
 
-    def start(self) -> None:
-        self._thread.start()
+    async def start(self) -> None:
+        """Serve, on the running loop; returns once it accepts connections."""
+        self._task = asyncio.create_task(self._server.serve(sockets=[self._sock]))
+        while not self._server.started and not self._task.done():
+            await asyncio.sleep(0.01)
+        if self._task.done():
+            self._task.result()  # raises what stopped it
+            raise RuntimeError("the internal listener stopped at start-up")
+        log.info("internal port: serving /healthz and the partner endpoint only")
 
-    def stop(self, timeout: float = 5.0) -> None:
+    async def stop(self) -> None:
         self._server.should_exit = True
-        self._thread.join(timeout)
+        if self._task is not None:
+            await self._task
+        self._sock.close()
 
 
-def maybe_start(db: Database, partner_inbound, configured: settings.Settings):
-    """Start the internal listener when `REAM_INTERNAL_PORT` is set; return it, or None."""
+def maybe_create(db: Database, partner_inbound, configured: settings.Settings):
+    """Bind the internal listener when `REAM_INTERNAL_PORT` is set and return it (not yet
+    serving: `start` runs it); None when unset, and then no socket is opened."""
     port = configured.internal_port_number()
     if port is None:
         return None
-    listener = InternalListener(
+    return InternalListener(
         create_internal_app(db, partner_inbound), configured.bind_host, port
     )
-    listener.start()
-    log.info("internal port %d: serving /healthz and the partner endpoint only", port)
-    return listener
