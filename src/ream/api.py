@@ -1279,6 +1279,18 @@ def archive_page(db: Database, agent: str, artifact_id: str, archived: bool) -> 
     return store.get_owned(db, agent, artifact_id).__dict__
 
 
+def duplicate_page(db: Database, agent: str, artifact_id: str) -> dict:
+    """POST /pages/{id}/duplicate, for the route and the MCP `organise_page` tool: the
+    caller's own page only (an exact match on the agent, no wider reach for anyone)."""
+    try:
+        published, body = store.duplicate(db, artifact_id, agent=agent)
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such page") from exc
+    thumbs.render_in_background(db, published.id, published.version, body)
+    partchanges.in_background(db, published.id, published.version)
+    return _saying_who_reads(published.__dict__)
+
+
 def rename_page(db: Database, agent: str, artifact_id: str, title: str) -> dict:
     """POST /pages/{id}/rename, for the route and the MCP `organise_page` tool."""
     try:
@@ -2884,13 +2896,7 @@ def agent_router(
         store.duplicate: copying an answered decision would manufacture a
         record of Jeremy answering a question he has never seen.
         """
-        try:
-            published, body = store.duplicate(db, artifact_id, agent=agent)
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such page") from exc
-        thumbs.render_in_background(db, published.id, published.version, body)
-        partchanges.in_background(db, published.id, published.version)
-        return _saying_who_reads(published.__dict__)
+        return duplicate_page(db, agent, artifact_id)
 
     @router.delete("/artifacts/{artifact_id}")
     def delete(artifact_id: str, agent: str = Depends(caller)):

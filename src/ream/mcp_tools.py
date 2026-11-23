@@ -1367,7 +1367,12 @@ _ORGANISE = (
     "comments_off",
     "close_to_agents",
     "open_to_agents",
+    "duplicate",
 )
+
+
+def _next_organise(arguments: dict[str, Any]) -> str | None:
+    return _NEXT_PUBLISH if arguments.get("action") == "duplicate" else None
 
 
 @tool(
@@ -1377,13 +1382,17 @@ _ORGANISE = (
         "One of your pages: rename (title), pin or unpin, archive or unarchive, file in "
         "one of your folders (folder; folder_title names a new one) or unfile, restore "
         "after delete_page, comments_on or comments_off, close_to_agents (only the person "
-        "and you can read it) or open_to_agents. Not for its content: use update_page."
+        "and you can read it) or open_to_agents, or duplicate (a new page with this one's live "
+        "body and title plus a copy suffix, no versions, comments or questions; only your own "
+        "page; the answer is the new page, as publish_page's). Not for its content: use "
+        "update_page."
     ),
     read_only=False,
     destructive=False,
     idempotent=False,
     permission=WRITE,
     fences=_OWN,
+    next_step=_next_organise,
     input_schema=_schema(
         {
             "page_id": PAGE_ID,
@@ -1416,6 +1425,8 @@ def _organise_page(call: Call, arguments: dict[str, Any]) -> dict:
         out = api.agents_can_read_page(db, agent, page_id, action == "open_to_agents")
     elif action in ("comments_on", "comments_off"):
         out = api.comments_page(db, agent, page_id, action.removeprefix("comments_"))
+    elif action == "duplicate":
+        out = api.duplicate_page(db, agent, page_id)
     else:
         # POST /pages/move with one id; its answer as it is (`missing` says "no such
         # page" and "not yours" alike).

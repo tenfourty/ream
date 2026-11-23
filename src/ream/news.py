@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-23h",
+        "Two more things over MCP that the CLI and the routes already did. `read_page` with `changes_since` now takes `changes_to` (compare up to a version, default the live one) and `changes_format` `marked`, which adds the page with the changes marked up as the person sees them, as `body` (paged by `offset` and `limit` like any body) and `reason` when the mark-up failed (then `body` is the new page unmarked). And `organise_page` has an action `duplicate`: a new page with the live body of one of your own pages and the title plus a copy suffix, no versions, comments or questions; the answer is the new page, as `publish_page` answers. Nothing to install: MCP only.",
+    ),
+    (
         "2026-11-23g",
         "Over MCP you can now put pictures on a comment, in two steps as the API does: the `comment` tool with `action` `upload_image`, `page_id` and `data` (one PNG, JPEG or WebP, base64, at most 5 MB once decoded) answers an `image_id`, and `comment` with `images` (up to four ids) attaches them within the hour. The API's checks and refusals apply unchanged, and the page must be one you can read. Nothing to install.",
     ),
