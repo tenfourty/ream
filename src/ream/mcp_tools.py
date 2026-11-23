@@ -351,16 +351,13 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
     title="Read a page",
     description=(
         "A page's stored HTML: the live version, one version (version), one element "
-        "(section), its history (history), or which parts changed since a version "
-        "(changes_since, up to changes_to, default the live version; changes_format "
-        "marked adds the page with the changes marked up as a person sees them, as body, "
-        "paged like any body, and reason when it could not: then body is the new page "
-        "unmarked). The live version carries Ream's render report: render_verdict "
-        "(ok, broken or unchecked) and render_findings. A large page comes in parts "
-        f"(offset, limit; default {api.READ_PART_DEFAULT} characters) with size and "
-        "next_offset; partial true is not the whole page: never update a page with it. "
-        "Not for how it looks: use "
-        "screenshot_page. Not for finding a page: use list_pages."
+        "(section), its history (history), or what changed since a version "
+        "(changes_since, to changes_to; changes_format marked adds the page with the "
+        "changes marked up as a person sees them). The live version carries "
+        "render_verdict and render_findings. A large page comes in parts "
+        f"(offset, limit; default {api.READ_PART_DEFAULT} characters) with next_offset; "
+        "partial true is not the whole page: never update a page with it. "
+        "Not for how it looks: use screenshot_page. Not for finding a page: use list_pages."
     ),
     read_only=True,
     destructive=False,
