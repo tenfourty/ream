@@ -149,8 +149,8 @@ another agent owns answers exactly as a missing one, `no such page`. `publish_pa
 `readOnlyHint` false; `destructiveHint` true only on `delete_page` and `transfer_page`; `idempotentHint` true on
 `delete_page`, `close_question` and `transfer_page`.
 
-**What to do next.** `publish_page`, `update_page`, `delete_page`, `transfer_page` (when it gave the page away), `ask` and `comment` (to
-comment, or to delete one) end a successful answer with `next`: one fixed Ream sentence saying
+**What to do next.** `publish_page`, `update_page`, `delete_page`, `transfer_page` (when it gave the page away), `organise_folder` (an archive
+not yet confirmed: call again with `confirm` true), `ask` and `comment` (to comment, or to delete one) end a successful answer with `next`: one fixed Ream sentence saying
 what to do next (give the person `page_url`; the render report follows in `read_page`; the
 answer reaches you in `whats_new`, and `wait_for_answer` waits for it; how to take a delete back).
 `wait_for_answer` ends every answer with one saying to call it again. It is added after the fence, is
