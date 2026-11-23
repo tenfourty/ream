@@ -1,18 +1,14 @@
 """The internal port: an optional second listener that serves only `/healthz` and the
 partner inbound endpoint.
 
-Why it exists: port 8000 picks the app by the Host header alone (`app.create_app`), and
-only the ingress guards the gallery. Anything inside the cluster that can reach 8000 can
-send the gallery's Host and be served as the owner. `REAM_INTERNAL_PORT` gives in-cluster
-callers (the kubelet's probes, the partner's server) a port that cannot reach the gallery
-at all, so the network policy can keep everything else off 8000.
+Why it exists: the health check (the kubelet's probes) and the partner's events get a
+port of their own, whose listener serves nothing else. `REAM_INTERNAL_PORT` opens it.
 
-How a request is kept off the gallery: the internal listener has its OWN ASGI app object,
-built here, that holds no reference to the gallery, API, content or MCP apps. It is not a
-port check inside the shared router, which would be one forgotten branch from serving the
-gallery; there is nothing here to forget. Which listener a request came in on is decided
-by which socket the server accepted it on, so no header or client-supplied value takes
-part. What it answers:
+What it serves: the internal listener has its OWN ASGI app object, built here, that holds
+no reference to the gallery, API, content or MCP apps, so it is an allow-list of two paths
+and nothing more, not a port check inside the shared router. Which listener a request came
+in on is decided by which socket the server accepted it on, so no header or client-supplied
+value takes part. What it answers:
 
 * `GET /healthz` on any Host (probes carry the pod's address): the same body as the
   gallery's, a static `{"status": "ok"}`;
