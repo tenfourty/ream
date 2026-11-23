@@ -1564,6 +1564,9 @@ _ICON = {
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
     "find": '<path d="M7.1 2.2a4.9 4.9 0 1 0 2.96 8.8l3 3a.7.7 0 0 0 1-1l-3-3A4.9 4.9 0 0 0 7.1 2.2Zm0 1.4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>',
     "list": '<path d="M2 3.2h1.9v1.9H2V3.2Zm3.4 .35h8.6v1.2H5.4V3.55ZM2 7.05h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4V7.4ZM2 10.9h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4v-1.2Z"/>',
+    # An eye: an almond with a round hole and a pupil in it (even-odd, so the
+    # hole and the pupil need no reversed winding), for "Readers".
+    "eye": '<path fill-rule="evenodd" d="M8 3c3.1 0 5.5 2.1 6.7 5-1.2 2.9-3.6 5-6.7 5S2.5 10.9 1.3 8C2.5 5.1 4.9 3 8 3Zm0 2.4a2.6 2.6 0 1 0 0 5.2 2.6 2.6 0 0 0 0-5.2Zm0 1.3a1.3 1.3 0 1 1 0 2.6 1.3 1.3 0 0 1 0-2.6Z"/>',
     "grid": '<path d="M2.2 2.2h5v5h-5v-5Zm6.6 0h5v5h-5v-5Zm-6.6 6.6h5v5h-5v-5Zm6.6 0h5v5h-5v-5Z"/>',
     # A speech bubble with a tail, at the same 16-square weight as the rest of
     # the set -- the reference uses one here too; its own glyph is a sprite we
@@ -2048,16 +2051,27 @@ def _machines_page(
 
 
 _READERS_CSS = (
-    "<style>.cx .rk{display:inline-block;min-width:7rem;color:var(--muted)}"
+    "<style>.cx .rk{color:var(--muted)}"
     ".cx .tot{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0}"
-    ".cx .tot b{font-size:var(--text-md);margin-left:var(--space-4)}"
-    ".cx .chart{display:flex;align-items:flex-end;gap:2px;height:3.5rem;margin:.35rem 0 .9rem;"
+    ".cx .tot>span{display:flex;align-items:baseline;gap:var(--space-5)}"
+    ".cx .tot b{font-size:var(--text-md)}"
+    ".cx .chart{display:flex;align-items:flex-end;gap:2px;height:3.5rem;margin:.35rem 0 var(--space-3);"
     "border-bottom:1px solid var(--line)}"
     ".cx .bar{flex:1;min-height:1px;background:var(--accent);opacity:.85;border-radius:2px 2px 0 0}"
     ".cx .bar.nil{background:var(--line);opacity:1}"
     ".cx table{width:100%;border-collapse:collapse;font-size:var(--text-sm)}"
     ".cx th,.cx td{text-align:left;padding:var(--space-4) var(--space-5);"
-    "border-bottom:1px solid var(--line)}.cx .muted{color:var(--muted)}</style>"
+    "border-bottom:1px solid var(--line)}"
+    # The table's first and last cells carry no side padding, and the Back button's form
+    # sheds the wall's `.row` left padding (it is the wall's row rule, leaking in by its
+    # class name), so the headings, the table's text and the button share one left edge.
+    ".cx .row{padding-left:0}"
+    ".cx th:first-child,.cx td:first-child{padding-left:0}"
+    ".cx th:last-child,.cx td:last-child{padding-right:0}"
+    ".cx .muted{color:var(--muted)}"
+    ".cx .scale{display:flex;justify-content:space-between;gap:var(--space-5);"
+    "margin:0 0 .9rem;font-size:var(--text-xs);"
+    "color:var(--muted)}</style>"
 )
 
 _KIND_LABELS = (
@@ -2070,6 +2084,23 @@ _KIND_LABELS = (
 def _opened_times(n: int) -> str:
     """ " &middot; opened 3 times", or nothing for a link nobody has opened."""
     return f" &middot; opened {n} time{'' if n == 1 else 's'}" if n else ""
+
+
+def _short_day(day: str) -> str:
+    """ "2026-11-21" as "21 Nov" (the gallery's own short date, as in "Updated 23 Nov")."""
+    d = datetime.fromisoformat(day)
+    return f"{d.day} {d:%b}"
+
+
+def _bar(day: str, n: int, peak: int) -> str:
+    """One day's bar: a box whose height is a share of the peak (an integer computed
+    here), with its date and count as the hover text and for a screen reader."""
+    words = f"{_short_day(day)}: {n} view{'' if n == 1 else 's'}"
+    height = max(3, round(100 * n / peak)) if n else 1
+    return (
+        f'<i class="bar{"" if n else " nil"}" style="height:{height}%" role="img" '
+        f'title="{words}" aria-label="{words}"></i>'
+    )
 
 
 def _readers_page(report: dict, title: str) -> str:
@@ -2102,17 +2133,24 @@ def _readers_page(report: dict, title: str) -> str:
     days = report["days"]
     for kind, label in _KIND_LABELS:
         peak = max((d[kind] for d in days), default=0)
-        bars = "".join(
-            f'<i class="bar{"" if d[kind] else " nil"}" '
-            f'style="height:{max(3, round(100 * d[kind] / peak)) if d[kind] else 1}%" '
-            f'title="{escape(d["day"])}: {int(d[kind])}"></i>'
-            for d in days
-        )
+        bars = "".join(_bar(d["day"], int(d[kind]), peak) for d in days)
+        total = sum(d[kind] for d in days)
+        # The chart is a group whose bars are each an image with their own words,
+        # because the children of an `img` are presentational and a screen reader
+        # would skip them. The peak and the first and last day size the bars for
+        # a reader who has no pointer to hover them.
         parts.append(
             f"<h3>{label}, last {len(days)} days</h3>"
-            f'<div class="chart" data-kind="{kind}" role="img" '
-            f'aria-label="{label}: {sum(d[kind] for d in days)} views in {len(days)} days">'
+            f'<div class="chart" data-kind="{kind}" role="group" '
+            f'aria-label="{label}: {total} views in {len(days)} days">'
             f"{bars}</div>"
+            + (
+                f'<div class="scale"><span>{_short_day(days[0]["day"])}</span>'
+                f"<span>{f'Peak {peak} a day' if peak else 'No views'}</span>"
+                f"<span>{_short_day(days[-1]['day'])}</span></div>"
+                if days
+                else ""
+            )
         )
     shares = report["shares"]
     if shares:
@@ -3195,6 +3233,12 @@ def _connect_page(
     return "".join(parts)
 
 
+# Between the parts of the menu header's second line: a span, so `.mhead span` mutes it
+# like the parts (a bare text node would take the ink colour), and hidden from a screen
+# reader, which gets the parts as separate phrases.
+_MHEAD_SEP = '<span aria-hidden="true"> &middot; </span>'
+
+
 def _page_menu(
     artifact_id: str,
     title: str,
@@ -3220,15 +3264,19 @@ def _page_menu(
         (
             '<div class="mhead">'
             f"<b>Page by {escape(agent)}</b>"
-            f"<span>Updated {escape(updated)}</span>"
-            # Who else can read it, said where he looks for what a page is
-            # (homelab-ij8.105).
-            + (
-                "<span>All your agents can read it</span>"
-                if agents_can_read
-                else f"<span>Only you and {escape(agent)} can read it</span>"
+            + _MHEAD_SEP.join(
+                [
+                    f"<span>Updated {escape(updated)}</span>",
+                    # Who else can read it, said where he looks for what a page is
+                    # (homelab-ij8.105).
+                    (
+                        "<span>All your agents can read it</span>"
+                        if agents_can_read
+                        else f"<span>Only you and {escape(agent)} can read it</span>"
+                    ),
+                    *(["<span>Shared by link</span>"] if shared else []),
+                ]
             )
-            + ("<span>Shared by link</span>" if shared else "")
             + "</div>"
         ),
         (f'<a class="mrow" href="#rename">{_icon("rename")}Rename</a>'),
@@ -3250,7 +3298,7 @@ def _page_menu(
     rows.append(
         f'<a class="mrow" href="/a/{ident}/move">{_icon("copy")}Move to another agent</a>'
     )
-    rows.append(f'<a class="mrow" href="/a/{ident}/stats">{_icon("all")}Readers</a>')
+    rows.append(f'<a class="mrow" href="/a/{ident}/stats">{_icon("eye")}Readers</a>')
     rows.append(
         f'<a class="mrow" href="/a/{ident}/share">{_icon("open")}'
         + ("Shared by link" if shared else "Share a link")

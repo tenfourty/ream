@@ -81,3 +81,69 @@ def test_the_share_panel_shows_opens(db, gallery, page):
     share, _ = email_share.create(db, page.id, "ann@example.com")
     pageviews.record(db, page.id, "external", share.id)
     assert "opened 1 time" in gallery.get(f"/a/{page.id}/share").text
+
+
+def test_each_bar_names_its_date_and_count_for_hover_and_screen_readers(
+    db, gallery, page
+):
+    now = datetime.now(UTC)
+    pageviews.record(db, page.id, "owner", "", now=now - timedelta(days=1))
+    pageviews.record(db, page.id, "agent", "other", now=now)
+    text = gallery.get(f"/a/{page.id}/stats").text
+    day = now - timedelta(days=1)
+    words = f"{day.day} {day:%b}: 1 view"
+    assert f'title="{words}" aria-label="{words}"' in text
+    # a quiet day is a plural, not "1 views"
+    assert re.search(
+        r'title="\d+ \w{3}: 0 views" aria-label="\d+ \w{3}: 0 views"', text
+    )
+    assert len(re.findall(r'<i class="bar[ "][^>]*role="img"', text)) == 3 * 30
+
+
+def test_each_chart_gives_its_peak_and_first_and_last_day(db, gallery, page):
+    now = datetime.now(UTC)
+    for who in ("a", "b", "c"):
+        pageviews.record(db, page.id, "agent", who, now=now - timedelta(days=2))
+    pageviews.record(db, page.id, "agent", "a", now=now)
+    text = gallery.get(f"/a/{page.id}/stats").text
+    first, last = now - timedelta(days=29), now
+    scales = re.findall(r'<div class="scale">(.*?)</div>', text)
+    assert len(scales) == 3
+    assert scales[2] == (
+        f"<span>{first.day} {first:%b}</span><span>Peak 3 a day</span>"
+        f"<span>{last.day} {last:%b}</span>"
+    )
+    assert "No views" in scales[0] and "No views" in scales[1]
+
+
+def test_the_totals_pairs_share_one_spacing_and_the_table_aligns_left(gallery, page):
+    text = gallery.get(f"/a/{page.id}/stats").text
+    # one gap for every label/number pair, not a fixed-width label for the first
+    assert ".cx .tot>span{display:flex;align-items:baseline;gap:var(--space-5)}" in text
+    assert "min-width:7rem" not in text
+    # the table's outer cells carry no side padding, so it starts where the headings do
+    assert ".cx th:first-child,.cx td:first-child{padding-left:0}" in text
+    # ...and so does the Back button's form, which the wall's `.row` rule would indent
+    assert ".cx .row{padding-left:0}" in text
+
+
+def test_the_readers_row_has_its_own_icon_not_the_all_pages_grid(gallery, page):
+    text = gallery.get(f"/a/{page.id}").text
+    row = re.search(
+        r'<a class="mrow" href="/a/[^"]+/stats">(<svg.*?</svg>)Readers</a>', text
+    )
+    all_pages = re.search(
+        r'<a class="mrow" href="/">(<svg.*?</svg>)All pages</a>', text
+    )
+    assert row and all_pages
+    assert row.group(1) != all_pages.group(1)
+    assert 'fill-rule="evenodd"' in row.group(1)
+
+
+def test_the_menu_header_separates_its_parts(gallery, page):
+    text = gallery.get(f"/a/{page.id}").text
+    head = re.search(r'<div class="mhead">(.*?)</div>', text).group(1)
+    assert "Updated" in head and "All your agents can read it" in head
+    sep = '</span><span aria-hidden="true"> &middot; </span><span>'
+    assert head.count(sep) == 1
+    assert "</span><span>" not in head.replace(sep, "")
