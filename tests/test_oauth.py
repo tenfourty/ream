@@ -476,3 +476,44 @@ def test_a_signed_in_app_can_call_whats_new_without_a_key(web, provider):
         )
         assert out.status_code == 200
         assert not out.json()["result"].get("isError")
+
+
+def _signin_rows(db) -> int:
+    with db.connect() as conn:
+        return conn.execute("select count(*) from mcp_signin").fetchone()[0]
+
+
+def test_a_provider_that_answers_400_is_a_clear_page_not_a_500(
+    web, provider, db, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        oidc, "fetch", lambda *_a: oidc.Response(400, "text/plain", b"upstream-secret")
+    )
+    oidc.clear_caches()
+    with caplog.at_level("WARNING", logger="ream.oauth"):
+        page = web.get("/oauth/authorize", params=params())
+    assert page.status_code == 502
+    assert "Sign-in is unavailable" in page.text and "Try again later" in page.text
+    assert "HTTP 400" not in page.text and "discovery document" not in page.text
+    assert "upstream-secret" not in page.text
+    assert "ream_oauth" not in page.headers.get("set-cookie", "")
+    assert _signin_rows(db) == 0
+    warned = [r for r in caplog.records if r.name == "ream.oauth"]
+    assert len(warned) == 1 and warned[0].levelname == "WARNING"
+    assert "answered HTTP 400" in warned[0].getMessage()
+
+
+def test_a_provider_that_is_down_is_a_clear_page_and_its_words_stay_in_the_log(
+    web, provider, db, monkeypatch, caplog
+):
+    def refuse(_uri):
+        raise oidc.SignInRefused("provider-detail-xyz")
+
+    monkeypatch.setattr(oidc, "begin", refuse)
+    with caplog.at_level("WARNING", logger="ream.oauth"):
+        page = web.get("/oauth/authorize", params=params())
+    assert page.status_code == 502
+    assert "the sign-in provider could not be reached" in page.text
+    assert "provider-detail-xyz" not in page.text
+    assert _signin_rows(db) == 0
+    assert "provider-detail-xyz" in caplog.text

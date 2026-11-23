@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -25,6 +26,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from ream import db as dbmod
 from ream import hosts, mcp_apps, mcp_clients, oidc, ratelimit, settings
 from ream.db import Database
+
+log = logging.getLogger("ream.oauth")
 
 ACCESS_PREFIX = "rmo_"
 REFRESH_PREFIX = "rmr_"
@@ -266,7 +269,16 @@ def authorize(db: Database, request: Request) -> Response:
     if scope.split() and not requested_permissions(scope):
         return fail("invalid_scope", "none of the scopes asked for is known")
     now = datetime.now(UTC)
-    start = oidc.begin(callback_uri())
+    try:
+        start = oidc.begin(callback_uri())
+    except oidc.SignInRefused as exc:
+        # The provider is down or misconfigured: say so, and keep its words in the log only.
+        log.warning("oauth authorize: the sign-in provider refused: %s", exc)
+        return _error_page(
+            "Sign-in is unavailable: the sign-in provider could not be reached. "
+            "Try again later.",
+            502,
+        )
     browser = secrets.token_urlsafe(32)
     with db.connect() as conn:
         conn.execute(
