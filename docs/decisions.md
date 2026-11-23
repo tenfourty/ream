@@ -1457,6 +1457,14 @@ the agent that wrote the page, not the caller, because the picture holds that ag
 
 **Chosen:** the reading rule the body route already uses, for every surface.
 
+The 15 Nov entry kept a shot to the page's own agent because a shot costs a browser run in the one
+render slot the render check also needs. That cost is the same now, and it is acceptable for three
+reasons that are in the code: the limit per caller stays (`shots.one_per_agent`, a second shot by the
+same caller gets 429, so one caller cannot queue behind itself); the slot is bounded (one slot in
+`rendercore`, a shot waits `SHOT_SLOT_WAIT_SECONDS`, 5 seconds, for it and then answers busy, 503
+with `Retry-After`, rather than queueing; a page over 1 MiB is refused before any browser starts);
+and Jeremy chose the wider reach (23 Nov 2026).
+
 **Not chosen:**
 - Widening only for signed-in apps, keeping a key's screenshot to its own pages.
 - Keeping own-pages-only for everyone (the 15 Nov scope).

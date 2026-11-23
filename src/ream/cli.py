@@ -59,7 +59,7 @@ the command line on unchanged, so `ream VERB --help` shows that program's own he
 
   publish        publish or update a page             (artifacts-publish)
   changes        which parts of a page a round changed (artifacts-publish --changes)
-  screenshot     save a PNG of your own page as a reader sees it
+  screenshot     save a PNG of a page you can read, as a reader sees it
   stats          how often your own page was read, and by whom
   ask            put a question on a page             (artifacts-decide ask)
   wait           wait for an answer                   (artifacts-decide wait)

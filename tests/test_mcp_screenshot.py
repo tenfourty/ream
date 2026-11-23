@@ -154,6 +154,26 @@ def test_a_closed_page_answers_as_no_such_page(
     assert browser.calls == []
 
 
+def test_a_page_in_the_bin_answers_as_an_unknown_id_for_a_key_and_an_app(
+    client, on, db, token, other, page, browser
+):
+    assert store.set_deleted(db, page, True, agent="mcp-seat")
+    app = _app(db)
+    for version in (None, 1):
+        arguments = {} if version is None else {"version": version}
+        said = "no such page" if version is None else "no such page or version"
+        for as_key in (token, other):
+            assert error_text(shoot(client, as_key, page_id=page, **arguments)) == said
+            assert (
+                error_text(shoot(client, as_key, page_id=MISSING, **arguments)) == said
+            )
+        binned = _tool(_as(db, app), "screenshot_page", page_id=page, **arguments)
+        unknown = _tool(_as(db, app), "screenshot_page", page_id=MISSING, **arguments)
+        assert error_text(binned) == error_text(unknown) == said
+    assert refusal(route(client, other, page)) == "no such page"
+    assert browser.calls == []
+
+
 def test_another_agents_open_page_is_shot_and_labelled_with_its_agent(
     client, on, token, other, page, browser
 ):
