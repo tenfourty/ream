@@ -1113,6 +1113,7 @@ SPEC_TOOLS = {
     "publish_page": mcp.WRITE,
     "update_page": mcp.WRITE,
     "organise_page": mcp.WRITE,
+    "organise_folder": mcp.WRITE,
     "delete_page": mcp.WRITE,
     "comment": mcp.WRITE,
     "ask": mcp.WRITE,

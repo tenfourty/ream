@@ -1272,6 +1272,70 @@ def move_to_folder(db: Database, agent: str, payload: MoveBody) -> dict:
     return {"moved": moved, "missing": missing, "folder": filed}
 
 
+def rename_folder(
+    db: Database, agent: str, slug: str, payload: FolderRenameBody
+) -> dict:
+    """POST /folders/{slug}/rename, for the route and the MCP `organise_folder` tool."""
+    if payload.slug is None and payload.title is None:
+        raise HTTPException(
+            422,
+            {"field": "slug", "detail": "send a new slug, a new title, or both"},
+        )
+    try:
+        got = store.rename_folder(db, agent, slug, payload.slug, payload.title)
+    except store.BodyTooLarge as exc:
+        # The request's own name for it: this route takes `title`.
+        raise HTTPException(
+            413,
+            {
+                "field": "title",
+                "size": exc.size,
+                "detail": "title exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    except folders.SlugTaken as exc:
+        raise HTTPException(
+            409,
+            {
+                "field": "slug",
+                "detail": f"folder name {exc.slug!r} is already in use (as a folder"
+                " or as the old name of another)",
+            },
+        ) from exc
+    if got is None:
+        raise HTTPException(404, "no such folder")
+    return got
+
+
+def archive_folder(
+    db: Database, agent: str, slug: str, payload: FolderArchiveBody
+) -> dict:
+    """POST /folders/{slug}/archive, for the route and the MCP `organise_folder` tool."""
+    try:
+        got = store.set_folder_archived(
+            db, agent, slug, payload.archived, confirm=payload.confirm
+        )
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    if got is None:
+        raise HTTPException(404, "no such folder")
+    return got
+
+
 def archive_page(db: Database, agent: str, artifact_id: str, archived: bool) -> dict:
     """POST /pages/{id}/archive, for the route and the MCP `organise_page` tool."""
     if not store.set_archived(db, artifact_id, archived, agent=agent):
@@ -2687,49 +2751,7 @@ def agent_router(
         """Give one of this agent's folders a new slug and/or title. The old slug keeps
         resolving. A slug already in use (or another folder's old slug) is a 409; a folder
         that is not this agent's is a 404, as is one that does not exist. Never creates."""
-        if payload.slug is None and payload.title is None:
-            raise HTTPException(
-                422,
-                {"field": "slug", "detail": "send a new slug, a new title, or both"},
-            )
-        try:
-            got = store.rename_folder(db, agent, slug, payload.slug, payload.title)
-        except store.BodyTooLarge as exc:
-            # The request's own name for it: this route takes `title`.
-            raise HTTPException(
-                413,
-                {
-                    "field": "title",
-                    "size": exc.size,
-                    "detail": "title exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except folders.BadSlug as exc:
-            raise HTTPException(422, _BAD_SLUG) from exc
-        except folders.SlugTaken as exc:
-            raise HTTPException(
-                409,
-                {
-                    "field": "slug",
-                    "detail": f"folder name {exc.slug!r} is already in use (as a folder"
-                    " or as the old name of another)",
-                },
-            ) from exc
-        if got is None:
-            raise HTTPException(404, "no such folder")
-        return got
+        return rename_folder(db, agent, slug, payload)
 
     @router.post("/folders/{slug}/archive")
     def folder_archive(
@@ -2737,15 +2759,7 @@ def agent_router(
     ):
         """Archive one of this agent's folders and every live page in it (two steps: without
         `confirm: true` it only says what it would do), or unarchive it."""
-        try:
-            got = store.set_folder_archived(
-                db, agent, slug, payload.archived, confirm=payload.confirm
-            )
-        except folders.BadSlug as exc:
-            raise HTTPException(422, _BAD_SLUG) from exc
-        if got is None:
-            raise HTTPException(404, "no such folder")
-        return got
+        return archive_folder(db, agent, slug, payload)
 
     @router.post("/artifacts/move")
     def move_pages(payload: MoveBody, agent: str = Depends(caller)):

@@ -592,7 +592,7 @@ the same key works at /mcp on the address agent.json names under "mcp": one POST
 message, JSON answers, your key in the Authorization header as on /api/v1. It reaches
 what the key reaches. Its tools read (list_pages, read_page, comments, questions,
 whats_new, wait_for_answer, screenshot_page, page_stats) and write (publish_page, update_page,
-organise_page, delete_page, comment, ask, close_question, record_answer), each as its
+organise_page, organise_folder, delete_page, comment, ask, close_question, record_answer), each as its
 /api/v1 route does; a write may pass `session`, else it carries your X-Ream-Session
 header, else mcp/<today>. Over MCP, listen with wait_for_answer instead of a `ream wait`
 process: it holds up to 50 seconds for an answer or comment on your pages and answers

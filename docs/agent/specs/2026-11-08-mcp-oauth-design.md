@@ -468,7 +468,7 @@ reach and behave exactly as before.
 | Consent box | OAuth scope | Tools it allows |
 |---|---|---|
 | Read pages, comments and questions | `ream:read` | `whoami`, `list_pages`, `read_page`, `get_template`, `comments`, `questions`, `whats_new`, `wait_for_answer`; every resource and prompt |
-| Publish, comment and ask | `ream:write` | `publish_page`, `update_page`, `organise_page`, `delete_page`, `comment`, `ask`, `close_question` |
+| Publish, comment and ask | `ream:write` | `publish_page`, `update_page`, `organise_page`, `organise_folder`, `delete_page`, `comment`, `ask`, `close_question` |
 | Pass on your answers | `ream:relay` | `record_answer` |
 
 `whoami` is always listed. Claude.ai asks for every scope in `scopes_supported`; the person
@@ -490,6 +490,7 @@ over HTTP; secret scanning, size limits and events are therefore the same. Annot
 | `publish_page` | a new page, HTML or markdown | `POST /pages` |
 | `update_page` | a new version, or one section | `PATCH /pages/{id}`, `PATCH /pages/{id}/sections/{el}` |
 | `organise_page` | rename, pin, archive, file in a folder, restore | `POST /pages/{id}/rename`, `/pin`, `/archive`, `POST /pages/move`, `/restore` |
+| `organise_folder` | rename, archive (two steps), unarchive a folder | `POST /folders/{slug}/rename`, `/archive` |
 | `delete_page` | delete, restorable | `DELETE /pages/{id}` |
 | `comments` | a page's comments | `GET /pages/{id}/comments` |
 | `comment` | comment, reply, resolve, reopen | `POST /pages/{id}/comments`, `/comments/{id}/resolve`, `/reopen` |

@@ -268,7 +268,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
         _agent_name,
     ),
     "folder": _SLUG,
-    "slug": _SLUG,
+    **dict.fromkeys(("slug", "previous_slug"), _SLUG),
     "kind": _KINDS,
     "visibility": one_of("private", "link", "public"),
     "check_status": one_of("ok", "failed"),
@@ -1435,6 +1435,73 @@ def _organise_page(call: Call, arguments: dict[str, Any]) -> dict:
             {"ids": "ids", "folder": "folder", "folder_title": "folder_title"},
         )
         out = api.move_to_folder(db, agent, payload)
+    return jsonable_encoder(out)
+
+
+_ORGANISE_FOLDER = ("rename", "archive", "unarchive")
+
+
+def _next_organise_folder(arguments: dict[str, Any]) -> str | None:
+    if arguments.get("action") == "archive" and arguments.get("confirm") is not True:
+        return (
+            "Nothing changed yet: call again with confirm true to archive the folder."
+        )
+    return None
+
+
+@tool(
+    "organise_folder",
+    title="Organise a folder",
+    description=(
+        "One of your folders (folder: its slug, or an old slug): rename it (action rename; "
+        "new_slug and/or title, the old slug keeps working), archive it with every live page "
+        "in it (action archive: without confirm true it only says what it would do; with "
+        "it, the pages are archived and their open questions set aside) or unarchive it "
+        "(restores only the pages the folder archived). Not for filing a page in a folder: "
+        "use organise_page."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    next_step=_next_organise_folder,
+    fences=_OWN,
+    input_schema=_schema(
+        {
+            "folder": {
+                "type": "string",
+                "description": "One of your folders, by slug (an old slug works).",
+            },
+            "action": {"type": "string", "enum": list(_ORGANISE_FOLDER)},
+            "new_slug": {"type": "string", "description": "rename: the new slug."},
+            "title": {"type": "string", "description": "rename: the new name."},
+            "confirm": {
+                "type": "boolean",
+                "description": "archive: true to do it; otherwise only a preview.",
+            },
+        },
+        ("folder", "action"),
+    ),
+)
+def _organise_folder(call: Call, arguments: dict[str, Any]) -> dict:
+    slug = _str(arguments, "folder", required=True)
+    action = arguments.get("action")
+    if action not in _ORGANISE_FOLDER:
+        raise ToolError(f"action must be one of: {', '.join(_ORGANISE_FOLDER)}")
+    takes = {"rename": {"new_slug", "title"}, "archive": {"confirm"}}.get(action, set())
+    _only(arguments, {"folder", "action", *takes})
+    if action == "rename":
+        payload = _body(
+            api.FolderRenameBody, arguments, {"new_slug": "slug", "title": "title"}
+        )
+        out = api.rename_folder(call.db, call.agent, slug, payload)
+    else:
+        archived = _body(
+            api.FolderArchiveBody,
+            {"archived": action == "archive", "confirm": _bool(arguments, "confirm")},
+            {"archived": "archived", "confirm": "confirm"},
+        )
+        out = api.archive_folder(call.db, call.agent, slug, archived)
     return jsonable_encoder(out)
 
 
