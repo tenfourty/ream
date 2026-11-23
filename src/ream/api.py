@@ -35,7 +35,7 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
@@ -241,9 +241,18 @@ class RecordBody(BaseModel):
     fields: dict | None = None
 
 
+class EditItem(BaseModel):
+    """One quoted-text edit: `old_str` must occur exactly once in the page as the edits
+    before it left it (`ream.quoteedit`)."""
+
+    old_str: str
+    new_str: str
+
+
 class PatchBody(BaseModel):
-    body: str
-    expected_revision: str
+    # Exactly one of `body` (the whole page, with `expected_revision`) or `edits`.
+    body: str | None = None
+    expected_revision: str | None = None
     # Omitted entirely -> the page keeps the name it has. This is `None` rather
     # than `""` so that clearing a title and not touching it stay distinguishable:
     # an empty string is a rename to nothing, which the title guard refuses.
@@ -260,6 +269,23 @@ class PatchBody(BaseModel):
     refresh_every: int | None = None
     # Omitted (or null) keeps the page's setting; "on" or "off" sets it.
     comments: Literal["on", "off"] | None = None
+    # Quoted-text edits to the live page, in order, all or nothing (`store.patch_edits`):
+    # instead of `body`, and with no `format`. `expected_revision` is optional with them.
+    edits: list[EditItem] | None = None
+
+    @model_validator(mode="after")
+    def _body_or_edits(self):
+        if self.edits is None:
+            if self.body is None:
+                raise ValueError("send body, or edits")
+            if self.expected_revision is None:
+                raise ValueError("expected_revision is required with body")
+        else:
+            if self.body is not None:
+                raise ValueError("send body or edits, not both")
+            if "format" in self.model_fields_set:
+                raise ValueError("format goes with body, not with edits")
+        return self
 
 
 class CommentsBody(BaseModel):
@@ -1001,6 +1027,8 @@ def update_page(
     payload: PatchBody,
 ) -> dict:
     """PATCH /pages/{id}, for the route and the MCP `update_page` tool."""
+    if payload.edits is not None:
+        return update_page_edits(db, agent, seat_session, artifact_id, payload)
     body = payload.body
     if payload.format == "markdown":
         # The title keeps its usual rule on update: omitted keeps the name
@@ -1085,6 +1113,59 @@ def update_page(
         ) from exc
     except store.NotFound as exc:
         raise HTTPException(404, "no such page") from exc
+
+
+def update_page_edits(
+    db: Database,
+    agent: str,
+    seat_session: str | None,
+    artifact_id: str,
+    payload: PatchBody,
+) -> dict:
+    """PATCH /pages/{id} with `edits`: quoted-text replacements applied to the live page."""
+    from ream import quoteedit, sections
+
+    try:
+        published, body = store.patch_edits(
+            db,
+            agent,
+            artifact_id,
+            [(item.old_str, item.new_str) for item in payload.edits or []],
+            expected_revision=payload.expected_revision,
+            note=payload.note,
+            session=seat_session,
+            title=payload.title,
+            folder=payload.folder,
+            folder_title=payload.folder_title,
+            refresh_every=(
+                payload.refresh_every
+                if "refresh_every" in payload.model_fields_set
+                else store.KEEP
+            ),
+            comments=(payload.comments if payload.comments is not None else store.KEEP),
+        )
+    except quoteedit.EditError as exc:
+        raise HTTPException(422, exc.refusal()) from exc
+    except store.BadInterval as exc:
+        raise HTTPException(422, _BAD_INTERVAL) from exc
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    except folders.FolderArchived as exc:
+        raise HTTPException(409, _archived_folder(exc.slug)) from exc
+    except (sections.SectionError, *SECTION_REFUSALS) as exc:
+        refusal = section_refusal(exc)
+        if (
+            isinstance(refusal.detail, dict)
+            and refusal.detail.get("field") == "section"
+        ):
+            refusal.detail = {**refusal.detail, "field": "edits"}
+        raise refusal from exc
+    if not published.unchanged:
+        thumbs.render_in_background(db, published.id, published.version, body)
+        partchanges.in_background(db, published.id, published.version)
+    return _saying_who_reads(
+        {**published.__dict__, "warnings": page_warnings(db, published.id, body)}
+    )
 
 
 def update_page_section(

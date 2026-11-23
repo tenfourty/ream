@@ -552,6 +552,14 @@ def _slots_in(root) -> set[str]:
     }
 
 
+def slots(body: str) -> frozenset:
+    """The question slots of a whole page, as a browser reads it (`_slots_in`), for the
+    update that has no element to name: `store.patch_edits`. Raises TooLargeError for a
+    page over SECTION_PAGE_MAX, like every other reading here."""
+    with scanslots.slot():
+        return frozenset(_slots_in(_parse(body)))
+
+
 def _one_target(root, element_id: str):
     hits = _with_id(root, element_id)
     if not hits:

@@ -1315,6 +1315,69 @@ def test_update_page_is_the_whole_page_and_the_section_routes(client, on, token,
     assert error and text == "unknown argument: op"
 
 
+def test_update_page_edits_is_the_route(client, on, token, db):
+    one, two = twins(db)
+    edits = [
+        {"old_str": '<p id="p2">two</p>', "new_str": '<p id="p2">deux</p>'},
+        {"old_str": "deux", "new_str": "zwei"},
+    ]
+    by_tool = tool_ok(
+        client,
+        token,
+        "update_page",
+        page_id=one,
+        edits=edits,
+        note="n",
+        session=SESSION,
+    )
+    by_route = route(
+        client, token, "PATCH", f"/pages/{two}", {"edits": edits, "note": "n"}
+    )
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+    assert '<p id="p2">zwei</p>' in store.get_body(db, "mcp-seat", one).body
+    # A refusal is the route's, word for word, and names the edit.
+    miss = [{"old_str": "nowhere", "new_str": "x"}]
+    error, text = call_tool(client, token, "update_page", page_id=one, edits=miss)
+    refused = route(client, token, "PATCH", f"/pages/{two}", {"edits": miss})
+    assert refused.status_code == 422
+    assert error and text == refusal(refused)
+    assert json.loads(text)["index"] == 0
+
+
+def test_update_page_edits_do_not_go_with_a_body_or_a_section(client, on, token, db):
+    one, _ = twins(db)
+    edits = [{"old_str": "one", "new_str": "uno"}]
+    error, text = call_tool(
+        client, token, "update_page", page_id=one, edits=edits, body=TWIN
+    )
+    assert error and text == "give body or edits, not both"
+    error, text = call_tool(
+        client,
+        token,
+        "update_page",
+        page_id=one,
+        edits=edits,
+        section="s1",
+        op="remove",
+    )
+    assert error and text == "unknown argument: edits"
+    error, text = call_tool(
+        client, token, "update_page", page_id=one, edits=edits, format="html"
+    )
+    assert (
+        error
+        and text == "arguments: Value error, format goes with body, not with edits"
+    )
+    assert store.get_body(db, "mcp-seat", one).body == TWIN
+    listed = mcp.TOOLS["update_page"].input_schema["properties"]["edits"]
+    assert listed["maxItems"] == 50 and listed["items"]["required"] == [
+        "old_str",
+        "new_str",
+    ]
+
+
 ORGANISE = [
     ({"action": "rename", "title": "Renamed"}, "/rename", {"title": "Renamed"}),
     ({"action": "pin"}, "/pin", {"pinned": True}),

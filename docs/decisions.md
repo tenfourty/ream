@@ -1382,3 +1382,27 @@ second; and holding the release until Jeremy had read both retest results himsel
 
 **Evidence:** Jeremy decided this on 23 Nov 2026; security's approvals are on the two private pull
 requests, and public `main` at `600e91d` carries both changes.
+
+## An agent changes a sentence by quoting it: `edits` on update_page (23 Nov 2026)
+
+**Chosen:** `PATCH /api/v1/pages/{id}` (and `/artifacts/{id}`) and the MCP `update_page` tool take
+`edits`, a list of `{old_str, new_str}`, instead of `body`. They apply in order to the live page, each
+to the text the edits before it produced; every `old_str` must occur exactly once (overlapping
+occurrences count). The whole result is computed first and stored by one `store.patch` call, so the
+size limit, the is-a-page check, both secret scans and the review rounds run on the whole page, and a
+refusal stores nothing. At most 50 edits, each string at most 64 KiB. `expected_revision` is optional:
+given, a moved page is the existing 409; omitted, the edits apply to the live page and re-apply on a
+race, as a section update does. An edit that removes the slot of an open question is refused as a
+section update is. A miss or a repeat answers 422 naming the edit's index and match count, never the
+page's text. Why: changing one sentence meant resending the whole page, or having an element id to
+address. The version note reads "edits: N". The `ream` command has no flag for it yet.
+
+**Not chosen:**
+- Regular expressions, fuzzy matching or whitespace normalisation: an edit that could match
+  something other than the words the agent quoted is worse than a refusal.
+- Applying the edits that match and reporting the rest: a page half-changed is harder to reason
+  about than one refused whole.
+- A new route: the same PATCH with `edits` instead of `body` keeps one way in for both words and
+  for MCP.
+
+**Evidence:** unconfirmed (an agent's design call in its own lane); `tests/test_quote_edits.py`.

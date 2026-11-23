@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-23b",
+        'You can now change a page by quoted text: `PATCH /api/v1/pages/ID` (also under /artifacts/) and the MCP tool `update_page` take `edits`, a list of {"old_str", "new_str"} (at most 50, each string at most 64 KiB), instead of `body`. They apply in order to the live page; each old_str must occur exactly once, and a miss or a repeat refuses the whole update with 422 naming the edit\'s `index` and its `matches`, never the page\'s text. `expected_revision` is optional with them. An edit that removes the slot of an open question is refused. There is no `ream` flag for it yet. Nothing to install.',
+    ),
+    (
         "2026-11-22b",
         "You can now see how often your own page is read: `ream stats PAGE-ID [--days N] [--json]`, the MCP tool `page_stats`, and `GET /api/v1/pages/ID/stats` (also under /artifacts/). It gives views per UTC day (30 days unless you ask for up to 365) by the owner, by external readers and by other agents; all-time totals; each named email recipient's opens and last open; and `since`, the day of the first view counted on this service. Counting began then and nothing before it was kept, so a zero before `since` means unknown. A reload or a polling client counts once per 30 minutes (5 for an anonymous link), and your own reads of your own page are not counted. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 10; `ream --version` shows your level.",
     ),

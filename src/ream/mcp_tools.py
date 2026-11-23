@@ -1203,6 +1203,7 @@ _PAGE_FIELDS = {
         "folder_title",
         "refresh_every",
         "comments",
+        "edits",
     )
 }
 _SECTION_FIELDS = {
@@ -1224,8 +1225,9 @@ _SECTION_FIELDS = {
         "the revision you read), or one element (section: its id; op replace, append, "
         "prepend or remove; body is the fragment; section_revision). A page or element "
         "that moved on since you read it is refused. A whole-page body must be the whole "
-        "page: a read_page answer with partial true is not one. Not for renaming, filing, pinning, "
-        "archiving or who can read it: use organise_page."
+        "page: a read_page answer with partial true is not one. Or small edits by quoted text "
+        "(edits, instead of body). "
+        "Not for renaming, filing, pinning, archiving or who can read it: use organise_page."
     ),
     read_only=False,
     destructive=False,
@@ -1242,6 +1244,28 @@ _SECTION_FIELDS = {
                 "enum": ["replace", "append", "prepend", "remove"],
             },
             "body": {"type": "string"},
+            "edits": {
+                "type": "array",
+                "description": (
+                    "Instead of body: replacements applied in order to the live page, each "
+                    "old_str occurring exactly once (a miss or a repeat refuses all). "
+                    "expected_revision optional; not with body, format or section."
+                ),
+                "minItems": 1,
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "old_str": {
+                            "type": "string",
+                            "description": "Exact text; must occur once on the page.",
+                        },
+                        "new_str": {"type": "string"},
+                    },
+                    "required": ["old_str", "new_str"],
+                    "additionalProperties": False,
+                },
+            },
             "expected_revision": {"type": "string"},
             "section_revision": {"type": "string"},
             "title": {"type": "string"},
@@ -1265,6 +1289,8 @@ def _update_page(call: Call, arguments: dict[str, Any]) -> dict:
     _only(rest, {*fields, "session"})
     session = _session(call, rest)
     if section is None:
+        if rest.get("body") is not None and rest.get("edits") is not None:
+            raise ToolError("give body or edits, not both")
         payload = _body(api.PatchBody, rest, fields)
         out = api.update_page(call.db, call.agent, session, page_id, payload)
     else:

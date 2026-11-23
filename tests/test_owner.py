@@ -465,9 +465,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 17 Nov 2026: the window-high frame is 96px shorter on a touch or narrow screen, so a strip of the gallery stays reachable (one clause); skill.md and agent.json did not move.
 # skill.md re-taken on 17 Nov 2026: the HTML-in-Canvas rules bullet says which Chrome builds draw it (157+, or 147-156 with the `canvas-draw-element` flag), that the page must read as plain HTML elsewhere, and where the `canvas` template is fetched (the same bullet, no new one); agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 22 Nov 2026 for page stats (`ream stats`, `page_stats`, `GET /pages/{id}/stats`: a section in agents.txt, a short pointer in skill.md, and `page_stats` in the MCP tool list); agent.json did not move.
+# skill.md re-taken on 23 Nov 2026 for small edits by quoted text (one paragraph under "Changing one part of a live page": `edits` on PATCH and on update_page); agents.txt and agent.json did not move.
 GOLDEN = {
     "agents.txt": "24978d54f589f83fac05d61bd60952e1d222eff39cbc26099a161c273a24635c",
-    "skill.md": "2c9359a8d851c35dab90dfb25ce0f5bc728fe7fc172424e1c641484e2a9e55e9",
+    "skill.md": "c648287b4c482ef415442b448365e6700cb6fa73e451e0b3bc9a98051453dfc0",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

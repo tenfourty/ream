@@ -1419,6 +1419,102 @@ def patch_section(
     raise RevisionMismatch()  # unreachable: the loop returns or raises
 
 
+def _any_open(conn, artifact_id: str) -> bool:
+    return (
+        conn.execute(
+            "select 1 from decision where artifact_id = %s"
+            " and answer is null and closed_at is null limit 1",
+            (artifact_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def patch_edits(
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    edits: list[tuple[str, str]],
+    *,
+    expected_revision: str | None = None,
+    note: str | None = None,
+    session: str | None = None,
+    **kept,
+) -> tuple[Published, str]:
+    """Apply quoted-text edits (`quoteedit.apply`) to the LIVE page and store the whole
+    result as a new version, through `patch`, so the size limit, the is-a-page check, both
+    secret scanners and the review rounds run on the whole resulting page. All or nothing.
+
+    Optimistic like `patch_section`: if another update landed between the read and the
+    write, this re-reads and re-applies -- unless the caller pinned `expected_revision`
+    (the revision hash, a prefix of it, or the version number), in which case the page
+    moving IS the refusal it asked for (`PageChanged`). `kept` is `patch`'s title, folder,
+    folder_title, refresh_every and comments. Returns the write and the new body.
+
+    An edit that removes the slot of a question still open is refused
+    (`OpenDecisionDropped`), as a section update is: the page is read as a browser reads
+    it only while a question is open, and the same check runs again inside the write's
+    transaction under the artifact row lock.
+    """
+    from ream import quoteedit, sections
+
+    quoteedit.check(edits)
+    label = f"edits: {len(edits)}"
+    cleaned = page_note(note, agent=agent, artifact_id=artifact_id)
+    if cleaned:
+        label += " -- " + cleaned
+    scanned: set[str] = set()
+    for attempt in range(_SECTION_RETRIES):
+        live = get_body(db, agent, artifact_id)
+        if expected_revision is not None and not _matches_revision(
+            expected_revision, live.version, live.revision
+        ):
+            raise PageChanged(expected_revision)
+        body = quoteedit.apply(live.body, edits)
+        dropped: frozenset = frozenset()
+        read = False
+        if body != live.body:
+            with db.connect() as conn:
+                read = _any_open(conn, artifact_id)
+            if read:
+                dropped = sections.slots(live.body) - sections.slots(body)
+                with db.connect() as conn:
+                    still_open = _open_among(conn, artifact_id, dropped)
+                if still_open:
+                    raise OpenDecisionDropped(*still_open)
+
+        def guard(conn, dropped=dropped, read=read):
+            # A question opened after the page was read has no slots read for it: read
+            # again against the new live page.
+            if not read and _any_open(conn, artifact_id):
+                raise RevisionMismatch()
+            found = _open_among(conn, artifact_id, dropped)
+            if found:
+                raise OpenDecisionDropped(*found)
+
+        try:
+            published = patch(
+                db,
+                agent,
+                artifact_id,
+                body,
+                live.revision,
+                session=session,
+                note=label,
+                guard=guard,
+                scanned=scanned,
+                **kept,
+            )
+        except RevisionMismatch:
+            # With a pinned revision the next pass finds the page moved and says so
+            # (`PageChanged`); a pass that finds it unmoved retries the write.
+            if attempt == _SECTION_RETRIES - 1:
+                raise
+            continue
+        return published, body
+    raise RevisionMismatch()  # unreachable: the loop returns or raises
+
+
 def get_owned(
     db: Database, agent: str, artifact_id: str, *, as_reader: bool = False
 ) -> ArtifactRow:

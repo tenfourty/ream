@@ -1115,6 +1115,22 @@ outside the section and be refused (the warpgate maintainer, 7 Oct 2026). The
 same goes for a <p>: put rows or paragraphs inside a <div> or <section>. Republish
 the whole page only when you regenerate it whole from its real source.
 
+To change a sentence or a number with no id to address, send quoted edits: the exact text to
+replace and the text that replaces it, applied to the live page (over MCP, `update_page` with
+`edits`):
+
+    PATCH {{base}}/api/v1/pages/<page-id>
+    {"edits": [{"old_str": "3 slices landed", "new_str": "4 slices landed"}], "note": "one more"}
+
+Up to 50 edits, each string at most 64 KiB, applied in order, each to the page as the edits before
+it left it. Each old_str must occur exactly once: a miss or a repeat refuses the whole update with
+422 and names the edit (`index`) and how many times it matched (`matches`), never the page's text;
+nothing is stored, so add words around a repeated quote until it is unique. Send `edits` instead
+of `body`, with no `format` and no `section`; `expected_revision` is optional (a page that moved
+since you read it is refused with 409), and without it the edits apply to the live page. The
+whole result is checked as a whole page is, and an edit that removes the slot of an open question
+is refused. The note in history reads "edits: N". The `ream` command has no flag for it yet.
+
 A page a script regenerates whole (a board on a timer) should say what moved
 and refuse to overwrite a hand edit made since its last publish:
 
