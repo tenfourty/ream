@@ -1068,8 +1068,11 @@ def update_page(
         )
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
-        thumbs.render_in_background(db, published.id, published.version, body)
-        partchanges.in_background(db, published.id, published.version)
+        if (
+            not published.volatile_ignored
+        ):  # the new bytes were not stored: nothing to draw
+            thumbs.render_in_background(db, published.id, published.version, body)
+            partchanges.in_background(db, published.id, published.version)
         return _saying_who_reads(
             {
                 **published.__dict__,
@@ -1223,6 +1226,7 @@ def update_page_section(
             "section_revision": result.section_revision,
             "version": published.version,
             "unchanged": published.unchanged,
+            "volatile_ignored": published.volatile_ignored,
             "section": result.label,
             "page_url": published.page_url,
             "bytes": published.bytes,

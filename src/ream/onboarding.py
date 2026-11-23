@@ -1141,6 +1141,14 @@ and refuse to overwrite a hand edit made since its last publish:
 case, or a version number). An
 unchanged page makes no version, so the note is only stored when something moved.
 
+A timer that retypes a time or a counter on every redraw would otherwise mint a version each round.
+Wrap that text in <!--ream:volatile--> ... <!--/ream:volatile-->: an update whose body differs from
+the live page ONLY inside such spans makes no version (the answer says `unchanged` and
+`volatile_ignored`, both true), and a rename, a refresh promise and a check still apply. The reader
+keeps the OLD volatile text until a real change lands, and the new text is neither scanned nor
+stored. Spans must be balanced and not nested, at most 200 per page; otherwise the bytes decide and
+every difference makes a version.
+
 Say how often you promise to keep it current, and vouch for it on a round where nothing changed:
 
     ream publish board.html --update <page-id> --refresh-every 30m   # also 2h, 1d, or seconds

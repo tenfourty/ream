@@ -172,6 +172,10 @@ class Published:
     # and update answers it (12 Nov 2026: a worker took "my seat" to mean private). A publish
     # can start the page closed; an update never changes it.
     agents_can_read: bool = True
+    # True when the body differed from the live version ONLY inside text the agent marked volatile
+    # (`<!--ream:volatile-->` ... `<!--/ream:volatile-->`): no version was minted, the old bytes
+    # stay live, and `unchanged` is true too. See `_same_page`.
+    volatile_ignored: bool = False
 
 
 @dataclass(frozen=True)
@@ -819,6 +823,50 @@ def exists(db: Database, artifact_id: str) -> bool:
     return row is not None
 
 
+VOLATILE_OPEN = "<!--ream:volatile-->"
+VOLATILE_CLOSE = "<!--/ream:volatile-->"
+MAX_VOLATILE_SPANS = 200
+
+
+def _strip_volatile(text: str) -> str | None:
+    """`text` without its balanced volatile spans (tokens and content), or None when it cannot
+    be stripped: a close with no open, an open with no close, an open inside an open, or more
+    than `MAX_VOLATILE_SPANS` spans. Plain string search, one forward pass, no parser."""
+    out: list[str] = []
+    pos = 0
+    spans = 0
+    while True:
+        start = text.find(VOLATILE_OPEN, pos)
+        end = text.find(VOLATILE_CLOSE, pos)
+        if start < 0:
+            if end >= 0:
+                return None
+            out.append(text[pos:])
+            return "".join(out)
+        if end < 0 or end < start:
+            return None
+        if text.find(VOLATILE_OPEN, start + len(VOLATILE_OPEN), end) >= 0:
+            return None
+        spans += 1
+        if spans > MAX_VOLATILE_SPANS:
+            return None
+        out.append(text[pos:start])
+        pos = end + len(VOLATILE_CLOSE)
+
+
+def _same_page(old: str, new: str) -> bool:
+    """Whether `new` is the page `old` already is: equal bytes, or equal once the balanced
+    volatile spans of both are cut out. The stripped text is for this comparison only and is
+    never stored. When either side cannot be stripped (`_strip_volatile`), the bytes decide."""
+    if old == new:
+        return True
+    a = _strip_volatile(old)
+    b = _strip_volatile(new)
+    if a is None or b is None:
+        return False
+    return a == b
+
+
 def patch(
     db: Database,
     agent: str,
@@ -905,7 +953,10 @@ def patch(
         # body, and refusing it would make "correct the title" impossible
         # without editing the page. It bumps `updated_at`, because to a reader
         # the page HAS changed.
-        if live[1] == body:
+        if _same_page(live[1], body):
+            # Bytes may differ here: only inside text marked volatile (`_same_page`). The old
+            # bytes stay live; the new volatile text is never scanned and never stored.
+            volatile = live[1] != body
             # The TITLE is still new even when the body is not, so it still
             # faces the secret scan. Skipping it here was a real regression
             # caught by an existing test: a rename carrying an AWS key in the
@@ -934,11 +985,12 @@ def patch(
                 revision=expected_revision,
                 version=current,
                 unchanged=True,
+                volatile_ignored=volatile,
                 # The title AFTER this call, which is the new one on a rename
                 # and the stored one otherwise -- the echo is only worth having
                 # if it reflects what a reader will now see.
                 title=title if title is not None else row[1],
-                bytes=len(body.encode()),
+                bytes=len(live[1].encode()),
                 agents_can_read=bool(row[8]),
             )
 

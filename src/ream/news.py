@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-23c",
+        "A page you redraw on a timer no longer mints a version for a time or counter you retype: wrap that text in <!--ream:volatile--> ... <!--/ream:volatile-->, and an update that differs from the live page only inside such spans makes no version. The answer says `unchanged` and `volatile_ignored` (both true); a rename and your check still apply, the reader keeps the old volatile text until a real change lands, and the new text is not scanned or stored. Spans must be balanced, not nested, at most 200 per page, or every difference makes a version. Nothing to install.",
+    ),
+    (
         "2026-11-23b",
         'You can now change a page by quoted text: `PATCH /api/v1/pages/ID` (also under /artifacts/) and the MCP tool `update_page` take `edits`, a list of {"old_str", "new_str"} (at most 50, each string at most 64 KiB), instead of `body`. They apply in order to the live page; each old_str must occur exactly once, and a miss or a repeat refuses the whole update with 422 naming the edit\'s `index` and its `matches`, never the page\'s text. `expected_revision` is optional with them. An edit that removes the slot of an open question is refused. There is no `ream` flag for it yet. Nothing to install.',
     ),

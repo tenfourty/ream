@@ -1406,3 +1406,34 @@ address. The version note reads "edits: N". The `ream` command has no flag for i
   for MCP.
 
 **Evidence:** unconfirmed (an agent's design call in its own lane); `tests/test_quote_edits.py`.
+
+## A redraw that changes only text the agent marked volatile mints no version (23 Nov 2026)
+
+**Chosen:** an agent may wrap text it retypes on every redraw (a time, a counter) in
+`<!--ream:volatile-->` ... `<!--/ream:volatile-->`. An update whose body differs from the live page
+only inside such spans mints no version: the old bytes stay live, the new volatile text is never
+scanned or stored, a rename and the check still apply, and the answer says `unchanged` and
+`volatile_ignored`. Spans must be balanced, not nested, at most 200 per page; otherwise the bytes
+decide. Why: boards on a timer republished whole pages whose only change was a time they typed
+themselves, so one page had thousands of versions.
+
+**Not chosen:**
+- Excluding the server's own markers (`<!--artifacts:updated-->`): already done, they are stored
+  verbatim and filled at serve time, so they cause no churn.
+- Pruning old versions (retention): split off into its own item; versions are delta-packed, so the
+  cost of a long history is small next to the cost of minting it.
+
+**Evidence:** `tests/test_volatile_regions.py`.
+
+## Taking in the Ream vs Claude artifacts comparison (23 Nov 2026)
+
+**Chosen:** triage every proposal in the comparison (keep, already planned, or decline with why),
+publish a verdict page, and ask Jeremy only about the data store and typed pages. Build now the
+three small ones (volatile redraws, quote edits, screenshots of readable pages), then build every
+small or medium missing MCP twin the triage finds without asking again.
+
+**Not chosen:**
+- Only filing the proposals for later.
+- Waiting for his pick on every MCP fix.
+
+**Evidence:** Jeremy decided this on 23 Nov 2026.
