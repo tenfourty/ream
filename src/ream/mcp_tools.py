@@ -14,7 +14,7 @@ Which fields are which (section 15):
   (26 lowercase base32), revisions and key ids (hex of their length), times (ISO), the
   fixed words of kind (a comment anchor's too), visibility, urgency, check_status,
   author_kind, quote_state, anchor_state, home, answer_source, a page's comments setting
-  (on, off) and an image's content_type, agent names (`keys.AGENT_NAME`, never a Slack
+  (on, off) and an image's image_id and content_type, agent names (`keys.AGENT_NAME`, never a Slack
   question's asking office), folder slugs (`folders.SLUG`), and a page's `url` and
   `page_url` while each is exactly the address Ream makes for the id beside it. Numbers,
   booleans and null are always bare.
@@ -38,6 +38,7 @@ Which fields are which (section 15):
 
 from __future__ import annotations
 
+import base64
 import re
 import time
 from collections.abc import Callable
@@ -55,6 +56,8 @@ from ream import (
     decisions,
     events,
     folders,
+    image_store,
+    images,
     keys,
     mcp_apps,
     onboarding,
@@ -212,6 +215,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "moved",
             "missing",
             "decision_id",
+            "image_id",
         ),
         _ID,
     ),
@@ -1129,6 +1133,7 @@ _NEXT_UPDATE = (
     "render_findings."
 )
 _NEXT_DELETE = "organise_page with action restore puts it back."
+_NEXT_IMAGE = "Name image_id in images on a comment within the hour."
 _NEXT_ASK = (
     "The answer reaches you in whats_new; wait_for_answer waits for it. To withdraw "
     "the question: close_question."
@@ -1141,6 +1146,8 @@ def _next_comment(arguments: dict[str, Any]) -> str | None:
         return "Replies reach you in whats_new; wait_for_answer waits for one."
     if action == "delete":
         return "action restore takes it back within ten minutes."
+    if action == "upload_image":
+        return _NEXT_IMAGE
     return None
 
 
@@ -1412,7 +1419,40 @@ def _delete_page(call: Call, arguments: dict[str, Any]) -> dict:
     return jsonable_encoder(api.delete_page(call.db, call.agent, page_id))
 
 
-_COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kind")}
+_COMMENT_FIELDS = {
+    k: k for k in ("body", "quote", "anchor", "thread_root", "kind", "images")
+}
+_COMMENT_ACTIONS = ("comment", "resolve", "reopen", "delete", "restore", "upload_image")
+
+
+def _picture_bytes(arguments: dict[str, Any]) -> bytes:
+    """The picture in `data`: base64, strictly. A string longer than the base64 of the
+    route's cap is refused with the route's own sentence before it is decoded; the cap
+    itself is then checked on the decoded bytes (`images.inspect`)."""
+    data = arguments.get("data")
+    if not isinstance(data, str):
+        raise ToolError("data is required: the picture, base64-encoded")
+    if len(data) > 4 * -(-images.MAX_BYTES // 3):
+        raise HTTPException(413, {"field": "image", "detail": images.too_big().detail})
+    try:
+        return base64.b64decode(data, validate=True)
+    except ValueError:
+        raise ToolError("data must be valid base64") from None
+
+
+def _upload_image(call: Call, arguments: dict[str, Any]) -> dict:
+    """POST /pages/{id}/comment-images: the page must be one the caller may read (checked
+    before any decoding), then the route's own staging."""
+    _only(arguments, {"action", "page_id", "data"})
+    page_id = _str(arguments, "page_id", required=True)
+    _page(call, page_id)
+    data = _picture_bytes(arguments)
+    try:
+        return image_store.stage_data(call.db, page_id, call.agent, data)
+    except images.ImageRefused as exc:
+        raise HTTPException(
+            exc.status, {"field": exc.field, "detail": exc.detail}
+        ) from exc
 
 
 @tool(
@@ -1423,7 +1463,10 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
         "under a thread; anchor {kind: text, quote, section?} pins it to a passage), "
         "resolve or reopen a thread on your own page (comment_id), or delete a comment "
         "you wrote (action delete) and take that back within ten minutes (action "
-        "restore). Not for putting a choice to the person: use ask."
+        "restore). To add pictures: action upload_image with page_id and data (one "
+        "PNG, JPEG or WebP, base64, at most 5 MB once decoded) answers an image_id; "
+        "name up to four of them in images on a comment within the hour. Not for "
+        "putting a choice to the person: use ask."
     ),
     read_only=False,
     destructive=False,
@@ -1439,7 +1482,7 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
         {
             "action": {
                 "type": "string",
-                "enum": ["comment", "resolve", "reopen", "delete", "restore"],
+                "enum": list(_COMMENT_ACTIONS),
             },
             "page_id": PAGE_ID,
             "comment_id": {
@@ -1451,14 +1494,24 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
             "anchor": {"type": "object"},
             "thread_root": {"type": "string"},
             "kind": {"type": "string"},
+            "images": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": images.PER_COMMENT,
+                "description": "Ids from action upload_image, at most four, named within the hour (action comment).",
+            },
+            "data": {
+                "type": "string",
+                "description": "The picture, base64-encoded (action upload_image).",
+            },
             "session": SESSION,
         }
     ),
 )
-def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
-    action = _choice(
-        arguments, "action", ("comment", "resolve", "reopen", "delete", "restore")
-    )
+def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput | dict:
+    action = _choice(arguments, "action", _COMMENT_ACTIONS)
+    if action == "upload_image":
+        return _upload_image(call, arguments)
     if action != "comment":
         _only(arguments, {"action", "comment_id"})
         comment_id = _str(arguments, "comment_id", required=True)

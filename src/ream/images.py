@@ -75,6 +75,13 @@ class Inspected:
     sha256: str
 
 
+def too_big() -> ImageRefused:
+    """The refusal for a picture over `MAX_BYTES` (413), the one sentence every reader uses."""
+    return ImageRefused(
+        f"the image is over {MAX_BYTES // (1024 * 1024)} MB", status=413
+    )
+
+
 def _refuse(detail: str) -> ImageRefused:
     return ImageRefused(detail)
 
@@ -407,9 +414,7 @@ def inspect(data: bytes) -> Inspected:
     """Decide the type from the bytes, read the size from the header, walk the file to its end
     and return it REWRITTEN. Raises `ImageRefused` (413 over the size cap, else 422)."""
     if len(data) > MAX_BYTES:
-        raise ImageRefused(
-            f"the image is over {MAX_BYTES // (1024 * 1024)} MB", status=413
-        )
+        raise too_big()
     if not data:
         raise _refuse("the file is empty")
     content_type, walk = _KINDS[_sniff(data)]

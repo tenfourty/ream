@@ -103,6 +103,12 @@ def stage(db: Database, artifact_id: str, author: str, found: Inspected) -> dict
     }
 
 
+def stage_data(db: Database, artifact_id: str, author: str, data: bytes) -> dict:
+    """Inspect one picture's bytes and stage it for `author`: the one path the agent route
+    and the MCP tool share. Raises `ImageRefused`."""
+    return stage(db, artifact_id, author, images.inspect(data))
+
+
 async def stage_upload(
     request: Request, db: Database, artifact_id: str, author: str
 ) -> dict:
@@ -111,9 +117,7 @@ async def stage_upload(
     then lifted, inspected and staged off the event loop (walking a hostile file is CPU work).
     The one reader for the agent route and the gallery twin. Raises `ImageRefused`."""
     cap = images.MAX_BYTES + images.BODY_SLACK
-    too_big = ImageRefused(
-        f"the image is over {images.MAX_BYTES // (1024 * 1024)} MB", status=413
-    )
+    too_big = images.too_big()
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > cap:
         raise too_big
@@ -127,8 +131,7 @@ async def stage_upload(
         request.headers.get("content-type"),
         bytes(received),
     )
-    found = await run_in_threadpool(images.inspect, file)
-    return await run_in_threadpool(stage, db, artifact_id, author, found)
+    return await run_in_threadpool(stage_data, db, artifact_id, author, file)
 
 
 def attach(
