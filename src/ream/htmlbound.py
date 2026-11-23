@@ -220,6 +220,11 @@ class BoundedParser(HTMLParser):
         self._tag_budget = budget if budget is not None else meter
         super().__init__(convert_charrefs=convert_charrefs)
 
+    def reset(self):
+        # `HTMLParser.__init__` calls this, so it is also where the offset starts.
+        super().reset()
+        self._absolute = 0
+
     def goahead(self, end):
         # `feed` and `close` both read through here. A reference of too many digits is
         # a page the parser cannot read, as a tag of too many attributes is: TooComplex.
@@ -233,7 +238,15 @@ class BoundedParser(HTMLParser):
     def updatepos(self, i, j):
         if self._meter is not None:
             self._meter.step()
+        self._absolute += max(j - i, 0)
         return super().updatepos(i, j)
+
+    @property
+    def absolute_position(self) -> int:
+        """The offset in everything fed so far that the parser has read up to. A
+        handler runs before the `updatepos` that follows its token, so inside one
+        it is where that token starts. (`getpos` is a line and column.)"""
+        return self._absolute
 
     def check_for_whole_start_tag(self, i):
         if not _TAG_END_NEEDS_A_GT:

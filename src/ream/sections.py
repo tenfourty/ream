@@ -192,10 +192,6 @@ class _Walker(BoundedParser):
         self.target = target
         # Many ids in one pass (`locate_many`): every match carries its "id".
         self.wanted = wanted
-        # Absolute offset of each line's first character, for getpos().
-        self._lines = [0]
-        for m in re.finditer("\n", src):
-            self._lines.append(m.end())
         # A fragment checked for a section inside SVG starts in that context:
         # a base entry the fragment must never close.
         self._base = ["svg", 0, 0, False, False] if foreign else None
@@ -210,8 +206,7 @@ class _Walker(BoundedParser):
         self._heading: dict | None = None  # capturing the target's first heading
 
     def _pos(self) -> int:
-        line, col = self.getpos()
-        return self._lines[line - 1] + col
+        return self.absolute_position
 
     # -- closing --------------------------------------------------------------
     # Stack entries: [tag, start, inner_start, is_target, is_heading]

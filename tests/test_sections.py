@@ -852,3 +852,93 @@ def test_first_heading_inside_a_target_is_still_captured():
     body = '<div id="a"><h2>Title <b>one</b></h2><h2>two</h2></div>'
     found = sections.locate(body, "a")
     assert found.label == "Title one"
+
+
+def _old_positions(src: str) -> list[int]:
+    """Where each tag starts, by the line table `_Walker` once made."""
+    import re
+    from html.parser import HTMLParser
+
+    starts = [0]
+    starts += [m.end() for m in re.finditer("\n", src)]
+    found: list[int] = []
+
+    class Old(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            line, col = self.getpos()
+            found.append(starts[line - 1] + col)
+
+    parser = Old(convert_charrefs=False)
+    parser.feed(src)
+    parser.close()
+    return found
+
+
+def test_a_tag_is_placed_where_the_line_table_placed_it_on_any_line_ending():
+    import random
+
+    rng = random.Random(5)
+    pieces = [
+        "\n",
+        "\r\n",
+        "\r",
+        "\x0b",
+        "\x0c",
+        "\x85",
+        "\u2028",
+        "text",
+        " ",
+        "&amp;",
+    ]
+    pieces += ["<b>", "<i id=x>", "</b>", "<br/>", "<!-- c\n-->", "<p\nid=y>"]
+    for _ in range(300):
+        src = "".join(rng.choice(pieces) for _ in range(rng.randrange(1, 60)))
+        walker = sections._Walker(src)
+        seen: list[int] = []
+        original = walker.handle_starttag
+
+        def record(tag, attrs, seen=seen, walker=walker, original=original):
+            seen.append(walker._pos())
+            original(tag, attrs)
+
+        walker.handle_starttag = record
+        walker.handle_startendtag = record
+        walker.feed(src)
+        walker.close()
+        assert sorted(seen) == sorted(_old_positions(src)), repr(src)
+
+
+def test_an_end_tag_is_placed_where_it_starts_on_any_line_ending():
+    for brk in ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x85", "\u2028"]:
+        src = f'a{brk}<div id="x">{brk}t</div>{brk}</p>z'
+        walker = sections._Walker(src)
+        ends: list[tuple[str, int]] = []
+        original = walker.handle_endtag
+
+        def record(tag, ends=ends, walker=walker, original=original):
+            ends.append((tag, walker._pos()))
+            original(tag)
+
+        walker.handle_endtag = record
+        walker.feed(src)
+        walker.close()
+        assert ends == [
+            ("div", src.index("</div>")),
+            ("p", src.index("</p>")),
+        ], repr(brk)
+
+
+def test_a_section_on_a_page_of_newlines_is_found_in_no_list():
+    import tracemalloc
+
+    count = 8 * 1024 * 1024 - 100
+    body = "\n" * count + '<div id="log">x</div>\n'
+    tracemalloc.start()
+    try:
+        where = sections.locate(body, "log")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert where.start == count
+    assert where.inner(body) == "x"
+    assert peak < 40 * 1024 * 1024, "no per-line list is made"
