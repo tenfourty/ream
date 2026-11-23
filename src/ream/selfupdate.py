@@ -606,6 +606,22 @@ def _host(address: str) -> str | None:
         return None
 
 
+_LEVEL = re.compile(r"[0-9]{1,9}")
+
+
+def _levels(headers) -> str:
+    """The parenthesis every out-of-date notice carries: "(level 8; the service asks for level
+    10)". The wanted level is the response's `X-Ream-Client-Min`, and only when that is a plain
+    non-negative integer; a missing or odd header is never echoed, the notice says the service
+    asks for a newer one."""
+    wanted = (headers.get(clientlevel.MIN_HEADER.lower()) or "").strip()
+    if not _LEVEL.fullmatch(wanted):
+        return "(the service asks for a newer one)"
+    return (
+        f"(level {clientlevel.CLIENT_LEVEL}; the service asks for level {int(wanted)})"
+    )
+
+
 def _manual_line(headers, api_url: str | None, extras: Extras | None = None) -> str:
     """The line for a tool with no fixed source, or whose plug-ins cannot be installed
     again. The server's note is printed for a person to run once, and only when it names the
@@ -613,7 +629,7 @@ def _manual_line(headers, api_url: str | None, extras: Extras | None = None) -> 
     note alone would drop them); nothing here executes it. The note is a git address, so what
     it installs is named by that repository, `ream-artifacts` now."""
     extras = extras or Extras()
-    line = "this tool is out of date (the service asks for a newer one). "
+    line = f"this tool is out of date {_levels(headers)}. "
     if extras.blocked:
         line += (
             f"It was installed with {', '.join(extras.blocked)}, whose source cannot be "
@@ -656,21 +672,29 @@ def on_response(method: str, headers, api_url: str | None = None) -> None:
         return
     command = command_for(source, extras)
     line = " ".join(command)
+    levels = _levels(headers)
     if _disabled():
-        _say(f"this tool is out of date. To update it run: {line}")
+        _say(f"this tool is out of date {levels}. To update it run: {line}")
         return
     if os.environ.get(_GUARD):
-        _say(f"this tool is still out of date after an update. Run by hand: {line}")
+        _say(
+            f"this tool is still out of date {levels} after an update. "
+            f"Run by hand: {line}"
+        )
         return
     if shutil.which("uv") is None:
-        _say(f"this tool is out of date and uv is not installed. Run by hand: {line}")
+        _say(
+            f"this tool is out of date {levels} and uv is not installed. "
+            f"Run by hand: {line}"
+        )
         return
     if not _attempt_allowed():
         _say(
-            f"this tool is out of date; an update was tried within the hour. Run: {line}"
+            f"this tool is out of date {levels}; an update was tried within the hour. "
+            f"Run: {line}"
         )
         return
-    _say("this tool is out of date; updating ...")
+    _say(f"this tool is out of date {levels}; updating ...")
     result = None
     try:
         result = _run(command)

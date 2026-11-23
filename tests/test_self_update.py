@@ -241,6 +241,53 @@ def test_with_no_source_it_prints_a_line_and_installs_nothing(updater, monkeypat
     assert "out of date" in updater.out.getvalue()
 
 
+def test_the_notice_names_the_installed_level_and_the_one_the_service_asks_for(
+    updater, monkeypatch
+):
+    monkeypatch.delenv("REAM_INSTALL_SOURCE")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent")
+    monkeypatch.setattr(clientlevel, "CLIENT_LEVEL", 8)
+    selfupdate.on_response("GET", {**STALE, "x-ream-client-min": "10"})
+    assert updater.run.calls == []
+    assert updater.out.getvalue().startswith(
+        "ream: this tool is out of date (level 8; the service asks for level 10). "
+    )
+
+
+def test_the_notice_with_the_wanted_level_in_each_message_of_the_updater(
+    updater, monkeypatch
+):
+    monkeypatch.setattr(clientlevel, "CLIENT_LEVEL", 8)
+    monkeypatch.setenv("REAM_NO_SELF_UPDATE", "1")
+    selfupdate.on_response("GET", {**STALE, "x-ream-client-min": "10"})
+    assert (
+        "this tool is out of date (level 8; the service asks for level 10). "
+        "To update it run: " in updater.out.getvalue()
+    )
+    assert updater.run.calls == []
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [None, "", "soon", "-3", "1.5", "10; rm -rf /", "١٠", "1" * 40, "\x1b[31m10"],
+)
+def test_a_missing_or_odd_minimum_says_only_that_the_service_asks_for_a_newer_one(
+    updater, monkeypatch, sent
+):
+    monkeypatch.delenv("REAM_INSTALL_SOURCE")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/nonexistent")
+    headers = dict(STALE)
+    if sent is not None:
+        headers["x-ream-client-min"] = sent
+    selfupdate.on_response("GET", headers)
+    text = updater.out.getvalue()
+    assert text.startswith(
+        "ream: this tool is out of date (the service asks for a newer one). "
+    )
+    if sent:
+        assert sent not in text, "a raw header value is never echoed"
+
+
 def test_a_call_that_changes_something_is_not_repeated(updater):
     selfupdate.on_response("POST", STALE)
     assert len(updater.run.installs) == 1
