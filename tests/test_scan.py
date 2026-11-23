@@ -1283,7 +1283,9 @@ def _control_scan(text, monkeypatch):
     process-wide is exactly the exposure this module exists to avoid in
     production, which is why the real fix cannot be "lift the limit"."""
     monkeypatch.setattr(
-        scan, "_defang_huge_decimal_charrefs", lambda detagged: detagged
+        scan,
+        "_defang_huge_decimal_charrefs",
+        lambda detagged, deadline=None: detagged,
     )
     original_limit = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(0)
@@ -1554,3 +1556,39 @@ def test_the_one_line_ending_view_of_a_big_non_ascii_page_is_fast():
     assert timed["non-ascii"] < 5 * timed["ascii"] + 0.05, (
         f"non-ascii {timed['non-ascii']:.3f}s, ascii {timed['ascii']:.3f}s"
     )
+
+
+def _past_deadline() -> "scan._Deadline":
+    deadline = scan._Deadline(10.0, 10.0)
+    deadline.cpu_until = 0.0  # the thread clock is long past it
+    return deadline
+
+
+def test_a_past_deadline_stops_the_text_view_of_an_entity_heavy_page(monkeypatch):
+    # No shapes: the only place left to notice the deadline is building the views, so a
+    # ScanTimeout here comes from `_one_line_ending` / `_text_view`, not from a shape.
+    monkeypatch.setattr(scan, "SHAPES", [])
+    page = "<p>" + "&#65;" * 50_000 + "</p>"
+    with pytest.raises(scan.ScanTimeout):
+        scan._scan(page, deadline=_past_deadline())
+    assert scan._scan(page) == []  # the same page, with no deadline, is scanned
+
+
+def test_a_past_deadline_stops_the_numeric_reference_rewrite():
+    with pytest.raises(scan.ScanTimeout):
+        scan._text_view("&#65;" * 1000, _past_deadline())
+    assert scan._text_view("&#65;" * 3) == "AAA"
+
+
+def test_a_past_deadline_stops_a_page_of_named_entities_after_the_unescape():
+    with pytest.raises(scan.ScanTimeout):
+        scan._text_view("&amp;" * 1000, _past_deadline())
+
+
+def test_a_past_deadline_stops_the_line_ending_rewrite():
+    for text in ("a\r\nb", "a\rb", "a b"):
+        with pytest.raises(scan.ScanTimeout):
+            scan._one_line_ending(text, _past_deadline())
+    assert scan._one_line_ending("a\r\nb\rc") == "a\nb\nc"
+    # nothing to rewrite, so nothing to check
+    assert scan._one_line_ending("a\nb", _past_deadline()) == "a\nb"

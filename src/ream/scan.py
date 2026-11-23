@@ -687,8 +687,13 @@ _MAX_LEGIT_DECIMAL_CHARREF_DIGITS = 7
 _DECIMAL_CHARREF = re.compile(r"&#([0-9]+)(;?)")
 
 
-def _defang_huge_decimal_charrefs(detagged: str) -> str:
+def _defang_huge_decimal_charrefs(
+    detagged: str, deadline: "_Deadline | None" = None
+) -> str:
     def _replace(match: re.Match) -> str:
+        # One read of the clocks per reference: a page of very many of them is a Python
+        # call each, so this is where a slow host passes the bound if nothing looks.
+        _check_deadline(deadline)
         digits, semicolon = match.group(1), match.group(2)
         significant = digits.lstrip("0") or "0"
         if len(significant) <= _MAX_LEGIT_DECIMAL_CHARREF_DIGITS:
@@ -705,20 +710,25 @@ _ENCODED_NEWLINE = re.compile(
 )
 
 
-def _text_view(raw_view: str) -> str:
+def _text_view(raw_view: str, deadline: "_Deadline | None" = None) -> str:
     """The raw view with tags deleted, entities unescaped, and soft-hyphen/
     zero-width characters removed -- what exposes a credential that markup,
     an HTML entity, or an invisible line-wrap hint runs through. Entities
     are unescaped before the zero-width strip, not after, because an entity
     such as `&shy;` decodes TO a zero-width character in the first place.
+
+    With a `deadline`, the clocks are read at each numeric reference the defang
+    rewrites and once after `html.unescape` (whose own work is not interruptible),
+    so a page of very many entities raises `ScanTimeout` here, not only at the first shape.
     """
-    detagged = _defang_huge_decimal_charrefs(_detag(raw_view))
+    detagged = _defang_huge_decimal_charrefs(_detag(raw_view), deadline)
     # An ENCODED line break becomes a space, not a line (homelab-ij8.8):
     # unescaped to a real "\n" it gave the text view a line the raw body does
     # not have, and every finding after it was reported one line too far down.
     # A space separates exactly as the newline would, so nothing hides behind it.
     detagged = _ENCODED_NEWLINE.sub(" ", detagged)
     text_view = html.unescape(detagged)
+    _check_deadline(deadline)
     if not text_view.isascii():
         for char in _INVISIBLE:
             text_view = text_view.replace(char, "")
@@ -843,14 +853,18 @@ _OTHER_LINE_ENDS = (
 )
 
 
-def _one_line_ending(text: str) -> str:
+def _one_line_ending(text: str, deadline: "_Deadline | None" = None) -> str:
     """`"\n".join(text.splitlines())` without the list of every line: each line
     end `splitlines` knows becomes "\n", and a last line end is dropped. Plain
     `replace` calls, each skipped when its character is absent: `str.translate`
-    with a table is many times slower on a page holding any non-ASCII text."""
+    with a table is many times slower on a page holding any non-ASCII text.
+    With a `deadline`, the clocks are read before each `replace` that runs."""
+    if "\r\n" in text:
+        _check_deadline(deadline)
     joined = text.replace("\r\n", "\n")
     for char in _OTHER_LINE_ENDS:
         if char in joined:
+            _check_deadline(deadline)
             joined = joined.replace(char, "\n")
     if text and (text[-1] == "\n" or text[-1] in _OTHER_LINE_ENDS):
         return joined[:-1]
@@ -994,8 +1008,8 @@ def scan(text: str) -> list[Finding]:
 
 def _scan(text: str, deadline: "_Deadline | None" = None) -> list[Finding]:
     """`scan` without the slot: the views, the shapes, the bounds, and (when given) the deadline."""
-    raw_view = _one_line_ending(text)
-    text_view = _text_view(raw_view)
+    raw_view = _one_line_ending(text, deadline)
+    text_view = _text_view(raw_view, deadline)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
     views = [(view, _lower_ascii(view)) for view in view_texts]
 
