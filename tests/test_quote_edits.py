@@ -98,8 +98,7 @@ def with_slot(db, aid):
 # --- the pure function ------------------------------------------------------
 
 
-def test_overlapping_occurrences_count():
-    assert quoteedit.occurrences("aaa", "aa") == 2
+def test_overlapping_occurrences_are_ambiguous():
     with pytest.raises(quoteedit.EditError) as caught:
         quoteedit.apply("aaa", [("aa", "b")])
     assert (caught.value.index, caught.value.matches) == (0, 2)
@@ -171,7 +170,7 @@ def test_an_ambiguous_quote_is_refused_with_its_count(client, db, page):
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["index"] == 0
     assert r.json()["detail"]["matches"] == 2
-    assert r.json()["detail"]["detail"] == "old_str occurs 2 times"
+    assert r.json()["detail"]["detail"] == "old_str occurs more than once"
     assert live(db, aid).body == PAGE
 
 
@@ -437,3 +436,21 @@ def test_a_page_too_large_to_read_for_slots_is_edited_while_no_question_is_open(
     r = edit(client, aid, token, [pair("two words", "three words")])
     assert r.status_code == 422, r.text
     assert r.json()["detail"]["field"] == "edits"
+
+
+def test_a_null_format_beside_edits_is_absent(client, db, page):
+    aid, token = page
+    r = edit(client, aid, token, [pair("build one", "b1")], format=None)
+    assert r.status_code == 200, r.text
+    assert "<li>b1</li>" in live(db, aid).body
+
+
+def test_a_count_stops_at_the_second_match(client, db):
+    token, _ = keys.mint(db, agent="ci-seat")
+    body = "<!doctype html><html><body>" + "<p>x</p>" * 50 + "</body></html>"
+    aid = client.post(
+        "/api/v1/pages", json={"title": "t", "body": body}, headers=auth(token)
+    ).json()["id"]
+    r = edit(client, aid, token, [pair("<p>x</p>", "y")])
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["matches"] == 2

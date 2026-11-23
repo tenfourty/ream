@@ -22,7 +22,7 @@ MAX_STR_BYTES = 64 * 1024
 
 class EditError(Exception):
     """An edit was refused. `index` is the edit's place in the list (None when the list as a
-    whole is), `matches` how many times its old_str occurs when that is why."""
+    whole is), `matches` 0 (it is not there) or 2 (it is there more than once) when that is why."""
 
     def __init__(
         self, detail: str, index: int | None = None, matches: int | None = None
@@ -62,16 +62,6 @@ def check(edits: list[tuple[str, str]]) -> None:
                 raise EditError(f"{name} is over {MAX_STR_BYTES // 1024} KiB", index)
 
 
-def occurrences(text: str, needle: str) -> int:
-    """How many times `needle` occurs in `text`, overlapping ones included."""
-    count = 0
-    at = text.find(needle)
-    while at != -1:
-        count += 1
-        at = text.find(needle, at + 1)
-    return count
-
-
 def apply(body: str, edits: list[tuple[str, str]]) -> str:
     """`body` with each (old_str, new_str) applied in order to the text so far. Raises
     EditError, naming the first failing index, when an old_str is empty or does not occur
@@ -82,7 +72,7 @@ def apply(body: str, edits: list[tuple[str, str]]) -> str:
         if first == -1:
             raise EditError("old_str occurs 0 times", index, 0)
         if body.find(old, first + 1) != -1:
-            found = occurrences(body, old)
-            raise EditError(f"old_str occurs {found} times", index, found)
+            # The second hit is enough: the count is not counted further.
+            raise EditError("old_str occurs more than once", index, 2)
         body = body[:first] + new + body[first + len(old) :]
     return body

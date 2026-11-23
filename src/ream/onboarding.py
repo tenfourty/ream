@@ -1124,12 +1124,13 @@ replace and the text that replaces it, applied to the live page (over MCP, `upda
 
 Up to 50 edits, each string at most 64 KiB, applied in order, each to the page as the edits before
 it left it. Each old_str must occur exactly once: a miss or a repeat refuses the whole update with
-422 and names the edit (`index`) and how many times it matched (`matches`), never the page's text;
-nothing is stored, so add words around a repeated quote until it is unique. Send `edits` instead
+422 and names the edit (`index`) and whether it matched none (`matches` 0) or more than once (`matches` 2),
+never the page's text; nothing is stored, so add words around a repeated quote until it is unique. Send `edits` instead
 of `body`, with no `format` and no `section`; `expected_revision` is optional (a page that moved
 since you read it is refused with 409), and without it the edits apply to the live page. The
 whole result is checked as a whole page is, and an edit that removes the slot of an open question
-is refused. The note in history reads "edits: N". The `ream` command has no flag for it yet.
+is refused; a page over 512 KiB with an open question can't take edits, so send the whole body
+instead. The note in history reads "edits: N". The `ream` command has no flag for it yet.
 
 A page a script regenerates whole (a board on a timer) should say what moved
 and refuse to overwrite a hand edit made since its last publish:

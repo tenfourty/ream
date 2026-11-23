@@ -273,6 +273,19 @@ class PatchBody(BaseModel):
     # instead of `body`, and with no `format`. `expected_revision` is optional with them.
     edits: list[EditItem] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _null_format_is_absent(cls, data):
+        # `format: null` beside `edits` says nothing, as an omitted `format` says nothing.
+        if (
+            isinstance(data, dict)
+            and data.get("edits") is not None
+            and "format" in data
+            and data["format"] is None
+        ):
+            data = {k: v for k, v in data.items() if k != "format"}
+        return data
+
     @model_validator(mode="after")
     def _body_or_edits(self):
         if self.edits is None:
