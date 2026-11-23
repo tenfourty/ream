@@ -1272,6 +1272,22 @@ def move_to_folder(db: Database, agent: str, payload: MoveBody) -> dict:
     return {"moved": moved, "missing": missing, "folder": filed}
 
 
+def transfer_page(db: Database, agent: str, artifact_id: str, to: str) -> dict:
+    """POST /pages/{id}/transfer, for the route and the MCP `transfer_page` tool."""
+    try:
+        old = store.transfer(db, artifact_id, to.strip(), agent=agent)
+    except store.NoSuchAgent:
+        raise HTTPException(
+            422,
+            f"{to!r} is not a connected machine with a working key. "
+            "Use the agent's name as the page list shows it (homelab-ops); "
+            "the vault's seat name (homelab_ops) is also accepted.",
+        ) from None
+    if old is None:
+        raise HTTPException(404, "no such page")
+    return {"id": artifact_id, "from": old, "to": store.owner(db, artifact_id)}
+
+
 def rename_folder(
     db: Database, agent: str, slug: str, payload: FolderRenameBody
 ) -> dict:
@@ -2772,18 +2788,7 @@ def agent_router(
         """Give this agent's own page to another agent, same address
         (homelab-ij8.87). One-way: afterwards this key cannot see it to give it
         back, unless the page is open to agents -- and even then only to read."""
-        try:
-            old = store.transfer(db, artifact_id, payload.to.strip(), agent=agent)
-        except store.NoSuchAgent:
-            raise HTTPException(
-                422,
-                f"{payload.to!r} is not a connected machine with a working key. "
-                "Use the agent's name as the page list shows it (homelab-ops); "
-                "the vault's seat name (homelab_ops) is also accepted.",
-            ) from None
-        if old is None:
-            raise HTTPException(404, "no such page")
-        return {"id": artifact_id, "from": old, "to": store.owner(db, artifact_id)}
+        return transfer_page(db, agent, artifact_id, payload.to)
 
     @router.post("/artifacts/{artifact_id}/agents")
     def agents_can_read(

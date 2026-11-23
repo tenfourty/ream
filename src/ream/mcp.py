@@ -255,6 +255,9 @@ class Tool:
     # The other fixed sentences a handler may put in `ToolOutput.next` instead of
     # `next_step`. Any other `next` is refused, so stored text can never reach it unfenced.
     next_alternatives: tuple[str, ...] = ()
+    # Offered to a key only: a signed-in app is not told of it and calling it answers as for
+    # a tool that does not exist.
+    keys_only: bool = False
 
     def listing(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -296,13 +299,14 @@ def tool(
     fences: Fences | None,
     next_step: str | Callable[[dict[str, Any]], str | None] | None = None,
     next_alternatives: tuple[str, ...] = (),
+    keys_only: bool = False,
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every hint is given explicitly: a client reads a missing
     `destructiveHint` as true and a missing `openWorldHint` as true. `fences` has no
     default either: a tool says how its result is fenced, or that it holds no text an
     agent wrote (None). `next_step` is the hint its answer ends with (`Tool.next_step`);
     `next_alternatives` the other fixed sentences its handler may answer with
-    (`Tool.next_alternatives`)."""
+    (`Tool.next_alternatives`); `keys_only` keeps it from a signed-in app (`Tool.keys_only`)."""
 
     def register(handler: Handler) -> Handler:
         if name in TOOLS:
@@ -329,6 +333,7 @@ def tool(
             fences=fences,
             next_step=next_step,
             next_alternatives=next_alternatives,
+            keys_only=keys_only,
         )
         return handler
 
@@ -678,6 +683,10 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
     name = params.get("name")
     arguments = params.get("arguments", {})
     found = TOOLS.get(name) if isinstance(name, str) else None
+    if found is not None and found.keys_only and call.app is not None:
+        found = (
+            None  # a signed-in app is told no more than it would be of any unknown name
+        )
     if found is None:
         raise _Refusal(200, INVALID_PARAMS, f"Unknown tool: {name}", id=id)
     if not isinstance(arguments, dict):
@@ -904,7 +913,8 @@ def _dispatch_one(call: Call, message: dict) -> tuple[int, dict]:
             "tools": [
                 t.listing()
                 for t in TOOLS.values()
-                if t.permission is None or t.permission in call.permissions
+                if (t.permission is None or t.permission in call.permissions)
+                and not (t.keys_only and call.app is not None)
             ]
         }
     elif method == "tools/call":

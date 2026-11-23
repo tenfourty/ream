@@ -468,7 +468,7 @@ reach and behave exactly as before.
 | Consent box | OAuth scope | Tools it allows |
 |---|---|---|
 | Read pages, comments and questions | `ream:read` | `whoami`, `list_pages`, `read_page`, `get_template`, `comments`, `questions`, `whats_new`, `wait_for_answer`; every resource and prompt |
-| Publish, comment and ask | `ream:write` | `publish_page`, `update_page`, `organise_page`, `organise_folder`, `delete_page`, `comment`, `ask`, `close_question` |
+| Publish, comment and ask | `ream:write` | `publish_page`, `update_page`, `organise_page`, `organise_folder`, `delete_page`, `transfer_page` (keys only), `comment`, `ask`, `close_question` |
 | Pass on your answers | `ream:relay` | `record_answer` |
 
 `whoami` is always listed. Claude.ai asks for every scope in `scopes_supported`; the person
@@ -479,7 +479,7 @@ handling of a second consent is unconfirmed). A key holds all three, within its 
 
 Each tool calls the module functions its route calls, with the caller's reach, never the route
 over HTTP; secret scanning, size limits and events are therefore the same. Annotations:
-`readOnlyHint` on reads, `destructiveHint` on `delete_page`, `idempotentHint` where true.
+`readOnlyHint` on reads, `destructiveHint` on `delete_page` and `transfer_page`, `idempotentHint` where true.
 
 | Tool | What it does | Today's route |
 |---|---|---|
@@ -492,6 +492,7 @@ over HTTP; secret scanning, size limits and events are therefore the same. Annot
 | `organise_page` | rename, pin, archive, file in a folder, restore | `POST /pages/{id}/rename`, `/pin`, `/archive`, `POST /pages/move`, `/restore` |
 | `organise_folder` | rename, archive (two steps), unarchive a folder | `POST /folders/{slug}/rename`, `/archive` |
 | `delete_page` | delete, restorable | `DELETE /pages/{id}` |
+| `transfer_page` | give a page to another agent (keys only) | `POST /pages/{id}/transfer` |
 | `comments` | a page's comments | `GET /pages/{id}/comments` |
 | `comment` | comment, reply, resolve, reopen | `POST /pages/{id}/comments`, `/comments/{id}/resolve`, `/reopen` |
 | `ask` | a question with lettered options | `POST /pages/{id}/decisions` |

@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-23i",
+        "Two more MCP tools. `organise_folder` renames a folder (`new_slug` and/or `title`; the old slug keeps working), archives it (`confirm` true archives every live page in it and sets its open questions aside; without it, it only says what it would do) or unarchives it, as `POST /api/v1/folders/SLUG/rename` and `/archive` do. `transfer_page` gives one of your pages to another agent for good, as `POST /api/v1/pages/ID/transfer` does (an agent key only: a connected app does not get it; you can read the page afterwards only while it is open to agents). Another agent's folder or page answers `no such folder` or `no such page`, as an unknown one does. Nothing to install.",
+    ),
+    (
         "2026-11-23h",
         "Two more things over MCP that the CLI and the routes already did. `read_page` with `changes_since` now takes `changes_to` (compare up to a version, default the live one) and `changes_format` `marked`, which adds the page with the changes marked up as the person sees them, as `body` (paged by `offset` and `limit` like any body) and `reason` when the mark-up failed (then `body` is the new page unmarked). And `organise_page` has an action `duplicate`: a new page with the live body of one of your own pages and the title plus a copy suffix, no versions, comments or questions; the answer is the new page, as `publish_page` answers. Nothing to install: MCP only.",
     ),

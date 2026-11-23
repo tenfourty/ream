@@ -1115,6 +1115,7 @@ SPEC_TOOLS = {
     "organise_page": mcp.WRITE,
     "organise_folder": mcp.WRITE,
     "delete_page": mcp.WRITE,
+    "transfer_page": mcp.WRITE,
     "comment": mcp.WRITE,
     "ask": mcp.WRITE,
     "close_question": mcp.WRITE,
@@ -1140,9 +1141,11 @@ def test_the_tools_are_spec_11_3s_table_and_no_more(client, on, token):
     for name in WRITE_TOOLS:
         hints = next(t for t in listed if t["name"] == name)["annotations"]
         assert hints["readOnlyHint"] is False, name
-        assert hints["destructiveHint"] is (name == "delete_page"), name
+        assert hints["destructiveHint"] is (name in ("delete_page", "transfer_page")), (
+            name
+        )
         assert hints["openWorldHint"] is False, name
-        idempotent = name in ("delete_page", "close_question")
+        idempotent = name in ("delete_page", "close_question", "transfer_page")
         assert hints["idempotentHint"] is idempotent, name
 
 

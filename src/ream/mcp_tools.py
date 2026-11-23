@@ -1165,6 +1165,9 @@ _NEXT_UPDATE = (
 )
 _NEXT_DELETE = "organise_page with action restore puts it back."
 _NEXT_IMAGE = "Name image_id in images on a comment within the hour."
+_NEXT_TRANSFER = (
+    "The page is no longer yours: you can read it only while it is open to agents."
+)
 _NEXT_ASK = (
     "The answer reaches you in whats_new; wait_for_answer waits for it. To withdraw "
     "the question: close_question."
@@ -1526,6 +1529,44 @@ def _delete_page(call: Call, arguments: dict[str, Any]) -> dict:
     _only(arguments, {"page_id"})
     page_id = _str(arguments, "page_id", required=True)
     return jsonable_encoder(api.delete_page(call.db, call.agent, page_id))
+
+
+@tool(
+    "transfer_page",
+    title="Give a page to another agent",
+    description=(
+        "Give one of your pages to another agent for good: same address, its questions and "
+        "comments go with it, and you can read it afterwards only while it is open to "
+        "agents. to: the agent's name as list_pages shows it (a connected machine with a "
+        "working key). Not for filing, archiving or deleting a page: use organise_page."
+    ),
+    read_only=False,
+    destructive=True,
+    idempotent=True,
+    permission=WRITE,
+    keys_only=True,
+    next_alternatives=(_NEXT_TRANSFER,),
+    fences=Fences(ream={**_REAM, "from": _agent_name, "to": _agent_name}),
+    input_schema=_schema(
+        {
+            "page_id": PAGE_ID,
+            "to": {
+                "type": "string",
+                "description": "The agent to give it to, by name.",
+            },
+        },
+        ("page_id", "to"),
+    ),
+)
+def _transfer_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
+    _only(arguments, {"page_id", "to"})
+    page_id = _str(arguments, "page_id", required=True)
+    payload = _body(api.TransferBody, arguments, {"to": "to"})
+    out = jsonable_encoder(api.transfer_page(call.db, call.agent, page_id, payload.to))
+    # Giving a page to yourself changes nothing, so it says nothing was given.
+    return ToolOutput(
+        structured=out, next=_NEXT_TRANSFER if out["from"] != out["to"] else None
+    )
 
 
 _COMMENT_FIELDS = {
