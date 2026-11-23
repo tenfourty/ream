@@ -1068,9 +1068,11 @@ def update_page(
         )
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
-        if (
-            not published.volatile_ignored
-        ):  # the new bytes were not stored: nothing to draw
+        if published.volatile_ignored:
+            # The new bytes were not stored: nothing to draw, and the warnings are about the
+            # page as it stands.
+            body = store.get_body(db, agent, artifact_id).body
+        else:
             thumbs.render_in_background(db, published.id, published.version, body)
             partchanges.in_background(db, published.id, published.version)
         return _saying_who_reads(

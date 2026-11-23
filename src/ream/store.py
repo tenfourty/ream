@@ -1462,6 +1462,16 @@ def patch_section(
             if if_revision is not None or attempt == _SECTION_RETRIES - 1:
                 raise
             continue
+        if published.volatile_ignored:
+            # Nothing was stored: answer for the LIVE page, so the section revision the
+            # caller chains on (`if_section`) is the one that is really there.
+            where = sections.locate(live.body, element_id)
+            return SectionResult(
+                published=published,
+                section_revision=sections.section_revision(where.outer(live.body)),
+                label=where.label,
+                body=live.body,
+            )
         return SectionResult(
             published=published,
             section_revision=applied.section_revision,

@@ -1852,7 +1852,13 @@ def _print_published(result: dict) -> None:
         else:
             print(f"in folder '{_printable(filed['slug'])}'", file=sys.stderr)
     _say_who_reads(result)
-    if result.get("unchanged"):
+    if result.get("volatile_ignored"):
+        print(
+            "unchanged -- only text marked volatile changed; no new version. "
+            "The page is exactly as it was.",
+            file=sys.stderr,
+        )
+    elif result.get("unchanged"):
         print(
             "unchanged -- the body was identical, so no new version was minted. "
             "The page is exactly as it was.",

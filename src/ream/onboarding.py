@@ -1147,7 +1147,9 @@ the live page ONLY inside such spans makes no version (the answer says `unchange
 `volatile_ignored`, both true), and a rename, a refresh promise and a check still apply. The reader
 keeps the OLD volatile text until a real change lands, and the new text is neither scanned nor
 stored. Spans must be balanced and not nested, at most 200 per page; otherwise the bytes decide and
-every difference makes a version.
+every difference makes a version. The tokens match anywhere in the page, so never put the literal
+tokens inside quoted content (a code sample or a comment); on a section update, removing an open
+question or breaking a form inside a volatile span is still refused.
 
 Say how often you promise to keep it current, and vouch for it on a round where nothing changed:
 

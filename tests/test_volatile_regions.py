@@ -248,3 +248,36 @@ def test_the_mcp_update_page_answer_carries_volatile_ignored(client, on, token, 
     assert not error, out
     assert unfence_all(out)["volatile_ignored"] is True
     assert versions(db, pid) == 1
+
+
+def test_a_volatile_only_section_update_answers_for_the_live_page(db):
+    pid = put(db, page("10:00"))
+    first = store.patch_section(
+        db, AGENT, pid, "clock", "replace", f"{OPEN}10:05{CLOSE}"
+    )
+    assert first.published.volatile_ignored
+    # The revision and body are the live page's, not the unstored new section's.
+    _, live_section, live = store.get_section(db, AGENT, pid, "clock")
+    assert first.section_revision == live_section
+    assert first.body == live.body == page("10:00")
+    # Chaining on it lands: no false conflict.
+    second = store.patch_section(
+        db,
+        AGENT,
+        pid,
+        "clock",
+        "replace",
+        f"{OPEN}10:06{CLOSE}x",
+        if_section=first.section_revision,
+    )
+    assert not second.published.unchanged
+    assert versions(db, pid) == 2
+
+
+def test_the_cli_says_only_volatile_text_changed(capsys):
+    from ream import client
+
+    client._print_published({"unchanged": True, "volatile_ignored": True})
+    err = capsys.readouterr().err
+    assert "only text marked volatile changed; no new version" in err
+    assert "body was identical" not in err
