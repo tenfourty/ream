@@ -52,8 +52,10 @@ DEFAULT_GALLERY_ORIGIN = "http://localhost:8000"
 DEFAULT_SCAN_SLOTS = 4
 DEFAULT_BIND_HOST = "127.0.0.1"
 # The port the image's CMD serves the main listener on: it mirrors the Dockerfile CMD's
-# `--port` (`tests/test_internal_port.py` fails when they differ). The internal port may
-# not be this one.
+# `--port` (`tests/test_internal_port.py` fails when they differ). The settings check
+# refuses the internal port when it is this one. A main listener started on any other
+# `--port` is not known here: a clash with it stops start-up when the internal
+# listener binds (`internal_port.InternalListener`).
 MAIN_PORT = 8000
 # The command-line tools' endpoint when `REAM_API` is unset. This is OUR house's address,
 # kept here so the many agents on several machines that run the tools with no variable set
@@ -463,7 +465,8 @@ class Settings:
                 )
             elif int(raw_port) == MAIN_PORT:
                 found.append(
-                    f"{_ENV['internal_port']} must differ from the main port ({MAIN_PORT})"
+                    f"{_ENV['internal_port']} must differ from the main port the image"
+                    f" serves ({MAIN_PORT})"
                 )
         for field_name in (
             "mcp_access_token_ttl_secs",

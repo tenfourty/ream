@@ -104,9 +104,12 @@ ENV REAM_BIND_HOST=0.0.0.0
 # read capability token in the path, and an access log would put it on disk.
 # --timeout-graceful-shutdown is a BACKSTOP, not the mechanism: held /events
 # requests end themselves the moment SIGTERM arrives (ream.serve), so
-# uvicorn should find nothing to wait for. If something ever does hold on, 15
-# seconds is well inside Kubernetes' 30-second default grace period, so the
-# process exits on its own terms rather than being killed mid-answer.
+# uvicorn should find nothing to wait for. If something ever does hold on, each
+# listener waits at most 15 seconds: the main one's wait comes first and the
+# internal port's (REAM_INTERNAL_PORT, also 15) starts after it, so with both held
+# on the process takes up to 30 seconds, the whole of Kubernetes' default grace
+# period. A deployment that sets the internal port and wants margin raises
+# terminationGracePeriodSeconds above 30.
 # tini is PID 1 so orphaned processes (a browser's helpers, where an image has a browser) are
 # reaped instead of piling up as zombies (homelab-o88p). -g forwards signals to the whole
 # group, so SIGTERM still reaches uvicorn for its graceful shutdown.

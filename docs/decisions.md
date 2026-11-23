@@ -1368,3 +1368,17 @@ probes and the partner to the internal port. Recommended number for the deployme
 
 **Evidence:** `tests/test_internal_port.py` (404 for the gallery, API, content and MCP requests on the
 internal app; the real socket answers only `/healthz`); the main app is covered by the existing suite.
+
+## Release both embargoed fixes together (23 Nov 2026)
+
+Two fixes were held in the private repository: the internal port (22 Nov 2026, above) and a parse
+budget for the scan's line counting. Once security's production retest of the second one passed,
+both were made public together: public `main` was fast-forwarded to `600e91d` on 23 Nov 2026.
+
+**Chosen:** release both at once, once the retest of the second had passed.
+
+**Not chosen:** releasing the first fix alone, which would have let the next public deploy drop the
+second; and holding the release until Jeremy had read both retest results himself.
+
+**Evidence:** Jeremy decided this on 23 Nov 2026; security's approvals are on the two private pull
+requests, and public `main` at `600e91d` carries both changes.
