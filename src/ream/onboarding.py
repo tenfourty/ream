@@ -190,10 +190,10 @@ is "Top of the page". `ream publish --update` prints `changed: Running now, Resu
 version is in; `ream changes <page-id> [--from N] [--to M]` lists each part as `added`, `changed` or
 `removed` with its id and name (exit 3 with the reason when Ream could not read the page: a page
 drawn by its script, or too large, never gets an empty list). Over HTTP it is `GET
-/pages/<id>/changes?from=N[&to=M][&format=marked]`; over MCP, `read_page` with `changes_since`;
-`GET /pages/<id>/versions` lists the parts each round changed. A span of several versions is one
-comparison between its two ends. A change to markup with no visible text (a class, a style) is not
-a changed part.
+/pages/<id>/changes?from=N[&to=M][&format=marked]`; over MCP, `read_page` with `changes_since` (and
+`changes_to`, or `changes_format marked` for the marked-up page); `GET /pages/<id>/versions` lists
+the parts each round changed. A span of several versions is one comparison between its two ends. A
+change to markup with no visible text (a class, a style) is not a changed part.
 
 ## The loop
 

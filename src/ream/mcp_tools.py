@@ -61,6 +61,7 @@ from ream import (
     keys,
     mcp_apps,
     onboarding,
+    pagediff,
     pageviews,
     partdiff,
     sections,
@@ -351,7 +352,10 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
     description=(
         "A page's stored HTML: the live version, one version (version), one element "
         "(section), its history (history), or which parts changed since a version "
-        "(changes_since). The live version carries Ream's render report: render_verdict "
+        "(changes_since, up to changes_to, default the live version; changes_format "
+        "marked adds the page with the changes marked up as a person sees them, as body, "
+        "paged like any body, and reason when it could not: then body is the new page "
+        "unmarked). The live version carries Ream's render report: render_verdict "
         "(ok, broken or unchecked) and render_findings. A large page comes in parts "
         f"(offset, limit; default {api.READ_PART_DEFAULT} characters) with size and "
         "next_offset; partial true is not the whole page: never update a page with it. "
@@ -375,10 +379,20 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
             "section": {"type": "string", "description": "An element's id."},
             "history": {"type": "boolean"},
             "changes_since": {"type": "integer", "minimum": 1},
+            "changes_to": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "With changes_since: the version to compare to (default the live one).",
+            },
+            "changes_format": {
+                "type": "string",
+                "enum": ["parts", "marked"],
+                "description": "With changes_since: parts (default), or marked to add the marked-up body.",
+            },
             "offset": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Where to start, in characters (the live page or a version).",
+                "description": "Where to start, in characters (the live page, a version, or the marked changes body).",
             },
             "limit": {
                 "type": "integer",
@@ -396,6 +410,12 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     section = _str(arguments, "section")
     history = _bool(arguments, "history")
     since = _int(arguments, "changes_since", None, 1, 2**31 - 1)
+    changes_to = _int(arguments, "changes_to", None, 1, 2**31 - 1)
+    marked = False
+    if "changes_format" in arguments:
+        marked = _choice(arguments, "changes_format", ("parts", "marked")) == "marked"
+    if since is None and ("changes_to" in arguments or "changes_format" in arguments):
+        raise ToolError("changes_to and changes_format go with changes_since")
     if sum((version is not None, section is not None, history, since is not None)) > 1:
         raise ToolError(
             "give at most one of version, section, history and changes_since"
@@ -403,24 +423,38 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     offset = _int(arguments, "offset", None, 0, api.READ_PART_MAX)
     limit = _int(arguments, "limit", None, 1, api.READ_PART_MAX)
     if (offset is not None or limit is not None) and (
-        section is not None or history or since is not None
+        section is not None or history or (since is not None and not marked)
     ):
         raise ToolError("offset and limit read the live page or one version only")
     page = _page(call, page_id)
     if since is not None:
         try:
             end, old, new, stored = store.changes_pair(
-                call.db, call.agent, page_id, since, as_reader=True
+                call.db, call.agent, page_id, since, changes_to, as_reader=True
             )
-        except (store.NotFound, store.BadSpan):
+        except store.NotFound:
             raise ToolError("no such page or version") from None
+        except store.BadSpan:
+            raise ToolError("from must not be after to") from None
         if stored is not None:
             found = {k: v for k, v in stored.items() if k != "from"}
         elif since == end:
             found = {"parts": [], "more": 0, "unknown_reason": None}
         else:
             found = partdiff.changes_safely(old, new)
-        return ToolOutput({"from": since, "to": end, **found}, written_by=page.agent)
+        out = {"from": since, "to": end, **found}
+        if marked:
+            shown, reason = pagediff.render_changes_safely(old, new)
+            try:
+                part = api.body_part(
+                    shown,
+                    offset or 0,
+                    api.READ_PART_DEFAULT if limit is None else limit,
+                )
+            except api.PastTheEnd as exc:
+                raise ToolError(str(exc)) from None
+            out |= {**part, "reason": reason}
+        return ToolOutput(out, written_by=page.agent)
     if history:
         rows = store.list_versions(call.db, call.agent, page_id, as_reader=True)
         out = jsonable_encoder([row.__dict__ for row in rows])
