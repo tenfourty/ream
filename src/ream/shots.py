@@ -1,9 +1,12 @@
-"""A screenshot of an agent's own page, on demand (runcove-uap8t, slice 3).
+"""A screenshot of any page the caller can read, on demand (runcove-uap8t, slice 3).
 
-`take` is what every surface calls (the HTTP route today; MCP and the CLI later): it
-reads the page's body as its own agent may (never as a reader of another agent's
-page), takes the picture where a render would be taken, and keeps nothing.
-Nothing is stored and nothing is cached (docs/decisions.md, 15 Nov 2026).
+`take` is what every surface calls (the HTTP route, MCP and the CLI): it reads the
+page's body as a reader (`as_reader=True`: the caller's own pages, other agents' pages
+open to agents, and for a signed-in app every page not deleted, closed ones included;
+a page the caller cannot read is "no such page", exactly as one that is not there),
+takes the picture where a render would be taken, and keeps nothing. Nothing is stored
+and nothing is cached, and a screenshot is never a page view (docs/decisions.md,
+15 Nov 2026, widened 23 Nov 2026).
 
 Where the picture is taken follows `thumbs.render_report` exactly: with a renderer
 set (`REAM_RENDERER_URL`) the page goes to it (`renderwire.call_shot`) and no browser
@@ -11,7 +14,7 @@ starts here, whatever REAM_BROWSER says; a renderer with no usable answer is a 5
 never a picture taken here instead. With none set, the browser runs in this process
 (`rendercore.shoot`), inside the render's envelope and its one slot.
 
-One shot per agent runs at a time (`one_per_agent`, a second gets 429). The count is
+One shot per calling agent runs at a time (`one_per_agent`, a second gets 429). The count is
 held in memory, so the limit is per server process: a deployment running several
 processes lets an agent run one shot in each.
 
@@ -40,8 +43,8 @@ UNAVAILABLE = "the renderer gave no usable answer: try again later"
 FAILED = "the screenshot failed on the server's side"
 
 # A page id is minted by `ids.new_id`; this refuses only what no page id can be, so
-# a malformed id is a field error, while a well-formed one that is not yours or not
-# there is the 404 every other route gives.
+# a malformed id is a field error, while a well-formed one that you may not read or
+# that is not there is the 404 every other route gives.
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _VERSION_RE = re.compile(r"[0-9]{1,9}")
 _WIDTH_RE = re.compile(r"[0-9]{1,5}")
@@ -138,13 +141,16 @@ def take(
     version: int | None,
     request: renderwire.ShotRequest,
 ) -> tuple[int, renderwire.Shot]:
-    """(the version shot, the `Shot`, whose outcome is `shot`) of `agent`'s own page,
-    or ShotRefused / ShotBusy. "Not yours" answers exactly as "not there"."""
+    """(the version shot, the `Shot`, whose outcome is `shot`) of a page `agent` may
+    read, or ShotRefused / ShotBusy. A page it may not read answers exactly as "not
+    there". The turn (`one_per_agent`) is the caller's, whoever wrote the page."""
     try:
         if version is None:
-            stored = store.get_body(db, agent, artifact_id)
+            stored = store.get_body(db, agent, artifact_id, as_reader=True)
         else:
-            stored = store.get_version_body(db, agent, artifact_id, version)
+            stored = store.get_version_body(
+                db, agent, artifact_id, version, as_reader=True
+            )
     except store.NotFound:
         raise ShotRefused(
             404, "no such page" if version is None else "no such page or version"

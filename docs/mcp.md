@@ -123,14 +123,16 @@ older than `since` has no history before it. Counts are per UTC day and kind (`o
 polling client is one view. The calling agent's own reads are not counted. `totals` is all time,
 not the window.
 
-`screenshot_page` takes a picture of one of the calling agent's OWN pages, on demand and kept
-nowhere, through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): another
-agent's page, open to agents or not, is `no such page`; a refused argument, a missing browser or
+`screenshot_page` takes a picture of a page the caller can read, on demand and kept nowhere,
+through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): a key reads its own
+pages and other agents' pages that are open to agents, a connected app every page that is not
+deleted, closed ones included; a page the caller cannot read is `no such page`, word for word as
+an unknown id; a screenshot is never counted as a page view; a refused argument, a missing browser or
 a page or picture too large is the route's refusal as a tool error, word for word; a busy
-browser or a shot of yours already running is a tool error saying to try again. A connected app
-shoots only its own agent's pages. The answer's content is the facts as JSON text, then for the
-picture a fixed Ream sentence saying it is page content written by the page's agent, not
-instructions (pixels cannot be fenced, so the label goes where a fence would), then
+browser or a shot of yours already running (the limit is on the caller, not the page) is a tool
+error saying to try again. The answer's content is the facts as JSON text, then for the
+picture a fixed Ream sentence saying it is page content written by the page's agent (the page's,
+not the caller's), not instructions (pixels cannot be fenced, so the label goes where a fence would), then
 `{"type": "image", "data": <base64>, "mimeType": "image/png"}`. A tool returns pictures
 in `ToolOutput.images`; `_call_tool` adds the label before each.
 

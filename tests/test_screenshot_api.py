@@ -1,5 +1,5 @@
-"""`GET /api/v1/pages/{id}/screenshot`: a picture of an agent's OWN page, on demand
-(runcove-uap8t, slice 3). Runs on both databases (the `db` fixture).
+"""`GET /api/v1/pages/{id}/screenshot`: a picture of a page the caller can read, on demand
+(runcove-uap8t, slice 3; widened from own pages on 23 Nov 2026). Runs on both databases (the `db` fixture).
 
 The browser and the renderer are fakes here: `rendercore.shoot` is replaced, or a stub
 renderer answers `/v1/shot`. What the real browser makes of a page is held by
@@ -157,26 +157,52 @@ def test_a_key_is_needed(api, page, browser):
     assert browser.calls == []
 
 
-# --- scope: your own page only ------------------------------------------------------
+# --- scope: any page the caller can read -------------------------------------------
 
 
-def test_not_yours_answers_exactly_as_no_such_page(api, other, page, browser):
-    """The page is open to agents (other may read its body) and still not theirs to shoot."""
+def test_another_agents_open_page_is_shot_as_the_reader_it_is(
+    api, other, page, browser
+):
+    """The page is open to agents (other may read its body), so other may shoot it."""
     assert api.get(f"/api/v1/pages/{page}/body", headers=other).status_code == 200
+    got = get(api, page, other)
+    assert got.status_code == 200
+    assert got.content == png(1280, 900)
+    assert got.headers["cache-control"] == "private, no-store"
+    assert got.headers["x-ream-shot-version"] == "2"
+    assert "two" in browser.calls[-1][1]
+
+
+def test_another_agents_older_version_is_shot(api, other, page, browser):
+    got = get(api, page, other, version="1")
+    assert got.status_code == 200
+    assert got.headers["x-ream-shot-version"] == "1"
+    html = browser.calls[-1][1]
+    assert "one" in html and "two" not in html
+
+
+def test_a_closed_page_answers_exactly_as_an_unknown_id(
+    api, seat, other, db, page, browser
+):
+    store.set_agents_can_read(db, page, False, agent="seat")
+    assert api.get(f"/api/v1/pages/{page}/body", headers=other).status_code == 404
     theirs = get(api, page, other)
     missing = get(api, "abcdefghijklmnopqrstuvwxyz", other)
     assert theirs.status_code == missing.status_code == 404
     assert theirs.content == missing.content == b'{"detail":"no such page"}'
-    assert browser.calls == []
+    # Its own agent still shoots it: closed means closed to OTHER agents.
+    assert get(api, page, seat).status_code == 200
+    assert len(browser.calls) == 1
 
 
-def test_a_version_not_yours_or_not_there_answers_alike(
-    api, seat, other, page, browser
+def test_a_version_of_a_closed_page_answers_as_a_version_not_there(
+    api, seat, other, db, page, browser
 ):
-    theirs = get(api, page, other, version="1")
+    store.set_agents_can_read(db, page, False, agent="seat")
+    closed = get(api, page, other, version="1")
     beyond = get(api, page, seat, version="9")
     missing = get(api, "abcdefghijklmnopqrstuvwxyz", seat, version="1")
-    for got in (theirs, beyond, missing):
+    for got in (closed, beyond, missing):
         assert got.status_code == 404
         assert got.content == b'{"detail":"no such page or version"}'
     assert browser.calls == []
@@ -352,6 +378,10 @@ def test_a_page_too_big_to_render_is_413_and_no_browser_starts(
 def test_one_shot_in_flight_per_agent(api, seat, other, page, browser, db):
     theirs = store.publish(db, "other", "Theirs", PAGE)
     with shots.one_per_agent("seat"):
+        # The turn is the caller's, not the page's: seat's turn does not stop another
+        # agent shooting seat's page, and seat shooting theirs is held like any shot.
+        assert get(api, page, other).status_code == 200
+        assert get(api, theirs.id, seat).status_code == 429
         got = get(api, page, seat)
         assert got.status_code == 429
         assert got.headers["retry-after"] == str(shots.IN_FLIGHT_RETRY_AFTER_SECONDS)
@@ -383,7 +413,10 @@ def test_no_browser_and_no_renderer_is_a_clean_501(api, seat, page, monkeypatch)
     assert got.json() == {"detail": {"renderer": False, "detail": shots.NO_BROWSER}}
 
 
-def test_no_browser_still_says_not_yours_first(api, other, page, monkeypatch):
+def test_no_browser_still_says_no_such_page_first_for_a_closed_page(
+    api, other, db, page, monkeypatch
+):
+    store.set_agents_can_read(db, page, False, agent="seat")
     monkeypatch.setenv("REAM_BROWSER", "/nonexistent/browser")
     monkeypatch.delenv("REAM_RENDERER_URL", raising=False)
     monkeypatch.delenv("ARTIFACTS_RENDERER_URL", raising=False)

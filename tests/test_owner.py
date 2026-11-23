@@ -465,10 +465,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 17 Nov 2026: the window-high frame is 96px shorter on a touch or narrow screen, so a strip of the gallery stays reachable (one clause); skill.md and agent.json did not move.
 # skill.md re-taken on 17 Nov 2026: the HTML-in-Canvas rules bullet says which Chrome builds draw it (157+, or 147-156 with the `canvas-draw-element` flag), that the page must read as plain HTML elsewhere, and where the `canvas` template is fetched (the same bullet, no new one); agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 22 Nov 2026 for page stats (`ream stats`, `page_stats`, `GET /pages/{id}/stats`: a section in agents.txt, a short pointer in skill.md, and `page_stats` in the MCP tool list); agent.json did not move.
-# skill.md re-taken on 23 Nov 2026 for small edits by quoted text (one paragraph under "Changing one part of a live page": `edits` on PATCH and on update_page; re-taken again for the review: `matches` is 0 or 2, and a page over 512 KiB with an open question takes no edits), and again for volatile text (`<!--ream:volatile-->` spans: one paragraph under the timer-board notes); agents.txt and agent.json did not move.
+# skill.md re-taken on 23 Nov 2026 for small edits by quoted text (one paragraph under "Changing one part of a live page": `edits` on PATCH and on update_page; re-taken again for the review: `matches` is 0 or 2, and a page over 512 KiB with an open question takes no edits), and again for volatile text (`<!--ream:volatile-->` spans: one paragraph under the timer-board notes); and agents.txt and skill.md re-taken again on 23 Nov 2026 for screenshots of any page the caller can read (the agents.txt section and the skill.md paragraph said "your own page"); agent.json did not move.
 GOLDEN = {
-    "agents.txt": "24978d54f589f83fac05d61bd60952e1d222eff39cbc26099a161c273a24635c",
-    "skill.md": "ab98746b72563260ded6decfdbb165e2df0c5a9f798a4a983a7595538f086fbe",
+    "agents.txt": "e3a3e1487584575c6a532ec4bf1da583358208cd9ef18faf29a6f5a9fcf6b1f3",
+    "skill.md": "46e99b142ada0f82581fc4f4a69b5a7f0ad3dce66fc515339e755a26e065e4ef",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

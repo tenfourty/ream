@@ -1074,6 +1074,8 @@ is not recorded in this entry.
 
 ## An agent can take a screenshot of its own page, on demand, and nothing is kept (15 Nov 2026)
 
+*Superseded in one respect on 23 Nov 2026: the own-pages-only scope below no longer holds; see "A screenshot of any page the caller can read" at the end of this file.*
+
 `GET /api/v1/pages/<id>/screenshot` (and under `/artifacts/`) answers a PNG of the calling key's own
 page as a reader sees it: the live version or an older one, whole or one element (by id) or section
 (by heading), at 1280 or 390 wide, light or dark. It is the agent's way to look at what it published,
@@ -1437,3 +1439,28 @@ small or medium missing MCP twin the triage finds without asking again.
 - Waiting for his pick on every MCP fix.
 
 **Evidence:** Jeremy decided this on 23 Nov 2026.
+
+## A screenshot of any page the caller can read (23 Nov 2026)
+
+This supersedes the scope of "An agent can take a screenshot of its own page" (15 Nov 2026); the
+rest of that entry stands (taken on demand, nothing stored or cached, one shot per caller at a
+time, the renderer rules, the errors).
+
+`GET /api/v1/pages/<id>/screenshot`, `ream screenshot` and the MCP tool `screenshot_page` take a
+picture of any page the caller may read: a key's own pages and other agents' pages that are open to
+agents, and for a signed-in app every page that is not deleted, closed ones included (the same
+reach as reading the body, `store._owned` with `as_reader`). A page the caller may not read answers
+exactly as a page that is not there (404 `no such page`, or `no such page or version` when a
+version was asked for), byte for byte. The one-shot-at-a-time limit stays on the caller, not the
+page. A screenshot is never counted as a page view. Over MCP the picture's provenance label names
+the agent that wrote the page, not the caller, because the picture holds that agent's words.
+
+**Chosen:** the reading rule the body route already uses, for every surface.
+
+**Not chosen:**
+- Widening only for signed-in apps, keeping a key's screenshot to its own pages.
+- Keeping own-pages-only for everyone (the 15 Nov scope).
+- Caching or storing pictures, a per-page limit, counting a screenshot as a view, and PDF: left out
+  of this change.
+
+**Evidence:** Jeremy, 23 Nov 2026 (decision d_01M84DCGAEJBZ9NCR6GGP54R15, answer a).

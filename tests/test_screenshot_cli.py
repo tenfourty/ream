@@ -95,9 +95,20 @@ def test_ream_screenshot_runs_it(
     assert "screenshot" in cli._help()
 
 
-def test_another_agents_page_prints_the_refusal_and_writes_nothing(
+def test_another_agents_open_page_is_written(live, db, page, browser, tmp_path):
+    token, _ = keys.mint(db, agent="other")
+    other = tmp_path / "other-key"
+    other.write_text(token)
+    other.chmod(0o600)
+    out = tmp_path / "s.png"
+    assert run(other, page, "--out", str(out)) == 0
+    assert out.read_bytes() == png(1280, 900)
+
+
+def test_a_page_closed_to_agents_prints_the_refusal_and_writes_nothing(
     live, db, page, browser, tmp_path, capsys
 ):
+    store.set_agents_can_read(db, page, False, agent="ops-seat")
     token, _ = keys.mint(db, agent="other")
     other = tmp_path / "other-key"
     other.write_text(token)

@@ -482,14 +482,15 @@ MCP_SHOT_MAX_BYTES = 3_750_000
 
 @tool(
     "screenshot_page",
-    title="Screenshot your page",
+    title="Screenshot a page",
     description=(
-        "A PNG of one of YOUR OWN pages as a reader sees it, taken now and kept nowhere: "
-        "live or one version, whole or one element (element) or section (a heading's "
-        "words), width 1280 or 390, light or dark. A tall page is cut (truncated true, "
-        "page_height); a ream-frame viewport page, to one window: name an element or "
-        "section for the rest (its window may grow for that part, so it can differ). "
-        "Not for another agent's page (no such page) or a page's text: use read_page."
+        "A PNG of a page you can read (yours, or another agent's open to agents) as a "
+        "reader sees it, taken now and kept nowhere: live or one version, whole or one "
+        "element (element) or section (a heading's words), width 1280 or 390, light or "
+        "dark. A tall page is cut (truncated true, page_height); a ream-frame viewport "
+        "page, to one window: name an element or section for the rest (its window may "
+        "grow for that part, so it can differ). A page you cannot read is no such page. "
+        "Not for a page's text: use read_page."
     ),
     read_only=True,
     destructive=False,
@@ -526,6 +527,17 @@ def _screenshot_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
             arguments.get("width"),
             arguments.get("theme"),
         )
+        # The picture holds the page's words, so it is labelled with the page's agent,
+        # never the caller's. Read as a reader, as `_page` does but with the route's
+        # own words for a miss (`shots.take` says "or version" when one was asked
+        # for), after the route's field checks: a page the caller may not read is "no
+        # such page" before any browser starts, closed and unknown alike.
+        try:
+            page = store.get_owned(call.db, call.agent, page_id, as_reader=True)
+        except store.NotFound:
+            raise HTTPException(
+                404, "no such page" if n is None else "no such page or version"
+            ) from None
         shown, shot = shots.take(call.db, call.agent, page_id, n, request)
     except shots.ShotRefused as exc:
         raise HTTPException(exc.status, exc.detail) from None
@@ -548,7 +560,7 @@ def _screenshot_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
             "truncated": shot.truncated,
             "page_height": shot.page_height,
         },
-        written_by=call.agent,
+        written_by=page.agent,
         images=(("image/png", shot.png),),
     )
 

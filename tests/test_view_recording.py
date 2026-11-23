@@ -156,6 +156,22 @@ def test_a_screenshot_does_not_count(db, page, monkeypatch, tmp_path):
     assert _rows(db, page.id) == [] and _days(db, page.id) == []
 
 
+def test_a_screenshot_of_another_agents_page_does_not_count(
+    db, page, monkeypatch, tmp_path
+):
+    binary = tmp_path / "chromium"
+    binary.write_text("")
+    monkeypatch.setattr(rendercore, "shoot", lambda path, html, request, **kw: a_shot())
+    token, _ = keys.mint(db, agent="reader")
+    with settings.override(browser=str(binary), renderer_url=""):
+        got = TestClient(create_gallery_app(db)).get(
+            f"/api/v1/pages/{page.id}/screenshot",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert got.status_code == 200
+    assert _rows(db, page.id) == [] and _days(db, page.id) == []
+
+
 def test_a_thumbnail_does_not_count(db, gallery, page):
     gallery.get(f"/thumb/{page.id}.png")  # 200 or 404 by whether a picture exists
     assert _rows(db, page.id) == []

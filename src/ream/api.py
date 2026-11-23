@@ -2497,11 +2497,12 @@ def agent_router(
         theme: str | None = None,
         agent: str = Depends(caller),
     ):
-        """A PNG of YOUR OWN page as a reader sees it (runcove-uap8t): the live version
-        or `version`, whole or one `element` (by id) or `section` (by heading), at
-        `width` 1280 or 390 and `theme` light or dark. Taken on demand and kept
-        nowhere. Owner-scoped: another agent's page, open to agents or not, answers
-        exactly as a page that is not there. The picture's facts ride in headers:
+        """A PNG of a page you can read, as a reader sees it (runcove-uap8t): the live
+        version or `version`, whole or one `element` (by id) or `section` (by heading),
+        at `width` 1280 or 390 and `theme` light or dark. Taken on demand and kept
+        nowhere, and never counted as a view. Your own pages and other agents' pages
+        open to agents; a page closed to agents answers exactly as a page that is not
+        there. The picture's facts ride in headers:
         `x-ream-shot-version`, `-width`, `-height`, `-truncated` (cut to the tallest
         picture; for a page declaring `<meta name="ream-frame" content="viewport">`,
         cut to one window, as its frame shows it) and `-page-height`. An `element` or

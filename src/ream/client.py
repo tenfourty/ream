@@ -2955,8 +2955,9 @@ def build_screenshot_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog=prog_name("ream screenshot"),
         description=(
-            "Save a PNG of one of YOUR OWN pages as a reader sees it, taken now and kept "
-            "nowhere on the server (GET /api/v1/pages/ID/screenshot). Prints "
+            "Save a PNG of a page you can read (yours, or another agent's open to "
+            "agents) as a reader sees it, taken now and kept nowhere on the server "
+            "(GET /api/v1/pages/ID/screenshot). Prints "
             "`FILE WIDTHxHEIGHT vVERSION`; warns when a tall page was cut."
         ),
     )

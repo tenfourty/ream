@@ -16,6 +16,7 @@ from test_mcp import (  # noqa: F401
     refusal,
     token,
 )
+from test_mcp_organise import _app, _as, _as_key, _tool
 from test_screenshot_api import a_shot, browser, png  # noqa: F401
 
 from ream import keys, mcp, renderwire, shots, store
@@ -134,15 +135,51 @@ def test_the_label_names_the_agent_sanitised():
 # --- scope and refusals, as the route answers them ----------------------------------
 
 
-def test_not_yours_answers_as_no_such_page(client, on, token, other, page, browser):
+def test_a_closed_page_answers_as_no_such_page(
+    client, on, db, token, other, page, browser
+):
+    store.set_agents_can_read(db, page, False, agent="mcp-seat")
     assert error_text(shoot(client, other, page_id=page)) == "no such page"
     assert error_text(shoot(client, token, page_id=MISSING)) == "no such page"
     assert refusal(route(client, other, page)) == "no such page"
+    assert (
+        error_text(shoot(client, other, page_id=page, version=1))
+        == error_text(shoot(client, other, page_id=MISSING, version=1))
+        == "no such page or version"
+    )
     assert (
         error_text(shoot(client, token, page_id=page, version=9))
         == "no such page or version"
     )
     assert browser.calls == []
+
+
+def test_another_agents_open_page_is_shot_and_labelled_with_its_agent(
+    client, on, token, other, page, browser
+):
+    result = shoot(client, other, page_id=page, version=1)
+    assert result["isError"] is False, result
+    _, label, image = result["content"]
+    assert label == {"type": "text", "text": mcp.image_label("mcp-seat")}
+    assert "'mcp-seat'" in label["text"] and "'other'" not in label["text"]
+    assert image["type"] == "image"
+    assert "one" in browser.calls[-1][1]
+
+
+def test_a_signed_in_app_shoots_a_closed_page_labelled_with_its_agent(db, browser):
+    app = _app(db)
+    page = store.publish(db, "office", "Closed", PAGE)
+    store.set_agents_can_read(db, page.id, False, agent="office")
+    shot = _tool(_as(db, app), "screenshot_page", page_id=page.id)
+    assert shot["isError"] is False, shot
+    _, label, image = shot["content"]
+    assert label == {"type": "text", "text": mcp.image_label("office")}
+    assert app.agent not in label["text"]
+    assert image["type"] == "image"
+    # A key's reach widens nothing: the same page is missing to another key.
+    refused = _tool(_as_key(db, "seat"), "screenshot_page", page_id=page.id)
+    assert error_text(refused) == "no such page"
+    assert len(browser.calls) == 1
 
 
 @pytest.mark.parametrize(
