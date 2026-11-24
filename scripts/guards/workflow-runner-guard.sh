@@ -1437,6 +1437,9 @@ selftest() {
   deep=$(printf '(%.0s' $(seq 50))a$(printf ')%.0s' $(seq 50))
   pubwf "$d" ci.yml "if: \"$G && $deep\""
   case_ "50 nested parentheses are accepted" 0 "$d" "1 jobs"
+  deep=$(printf '(%.0s' $(seq 51))a$(printf ')%.0s' $(seq 51))
+  pubwf "$d" ci.yml "if: \"$G && $deep\""
+  case_ "51 nested parentheses are refused by the named limit" 1 "$d" "more than 50 parentheses"
   # (3) the gate must be the FIRST top-level conjunct
   d=$tmp/f3
   pubwf "$d" ci.yml "if: \"fromJSON('x') && ($G)\""
