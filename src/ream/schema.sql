@@ -1462,3 +1462,40 @@ begin
         end if;
     end if;
 end $$;
+
+-- PER-PERSON ANSWERS AND RECEIPTS (24 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 3).
+-- `decision.addressed_to` is the one person a question is for (null: the page's owners, today the
+-- owner). `form_answer` holds each person's own record of a form, keyed (decision_id, person); the
+-- decision's own `answer_record` stays what the agent reads and is kept in step. `receipt.person` is
+-- the person whose answer the receipt is about (the decision's `answered_by` when it was written).
+-- Rows that exist take the owner id `service_meta` records, and a database that holds such rows and
+-- records none is refused. SQLite does the same as its schema step 38. The backfill runs once: its
+-- test is the `receipt.person` column, so a start never refills a record that was changed since.
+alter table decision add column if not exists addressed_to text;
+create table if not exists form_answer (
+    decision_id   text        not null references decision(id) on delete cascade,
+    person        text        not null,
+    answer_record jsonb       not null,
+    answered_at   timestamptz not null,
+    primary key (decision_id, person)
+);
+do $$
+begin
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'receipt'
+          and column_name = 'person'
+    ) then
+        alter table receipt add column person text;
+        if (exists (select 1 from receipt)
+            or exists (select 1 from decision where answer_record is not null))
+           and not exists (select 1 from service_meta where key = 'owner_id') then
+            raise exception 'people slice 3: receipts or form answers exist but service_meta records no owner id';
+        end if;
+        update receipt set person = (select value from service_meta where key = 'owner_id');
+        insert into form_answer (decision_id, person, answer_record, answered_at)
+            select id, (select value from service_meta where key = 'owner_id'), answer_record,
+                   coalesce(answered_at, created_at)
+            from decision where answer_record is not null;
+    end if;
+end $$;

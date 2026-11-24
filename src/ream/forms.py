@@ -732,6 +732,25 @@ def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> Non
         + conn.for_update(" of decision"),
         (decision_id,),
     ).fetchone()
+    # Each person's own record (`form_answer`) is brought onto the new version the same way.
+    for person, mine in conn.execute(
+        "select person, answer_record from form_answer where decision_id = %s",
+        (decision_id,),
+    ).fetchall():
+        if mine.get("version") == version_n:
+            continue
+        carried = formrecord.reconcile(
+            mine,
+            _fields(conn, decision_id, mine.get("version") or 0),
+            form.fields,
+            version_n,
+            form.complete_all,
+        )
+        conn.execute(
+            "update form_answer set answer_record = %s"
+            " where decision_id = %s and person = %s",
+            (jsonb(carried), decision_id, person),
+        )
     record = row[0] if row else None
     if not record or record.get("version") == version_n:
         return

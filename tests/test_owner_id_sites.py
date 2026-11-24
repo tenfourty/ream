@@ -7,7 +7,7 @@ of three things, and a new call fails this test until someone says which:
   still reads settings has no request to ask yet and moves when its caller is threaded (slice 2/3).
 * PAGE_OWNER: the owner standing for the page's owner, or for the one person who answers (an MCP
   owner-only tool, a relayed or partner answer, the owner's own comment label). Step 4 of the
-  design (page ownership) and slice 3 (per-person answers) revisit each.
+  design (page ownership) and slice 3b (agent-visible per-person answers) revisit each.
 * SEED: the deployment's own owner by setting (a CLI listing, a fallback for a stored record that
   names nobody). It stays the setting.
 
@@ -32,7 +32,7 @@ SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("comments.py", "reopen"): (REQUEST, 1),
     ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 2),
     ("formanswer.py", "submit"): (REQUEST, 1),
-    ("formanswer.py", "relay"): (PAGE_OWNER, 3),
+    ("formanswer.py", "relay"): (PAGE_OWNER, 1),
     ("formrecord.py", "source_of"): (SEED, 1),
     ("mcp.py", "comment_image_label"): (PAGE_OWNER, 1),
     ("mcp_tools.py", "_comment_writer"): (PAGE_OWNER, 1),

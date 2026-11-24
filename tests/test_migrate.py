@@ -212,7 +212,7 @@ def _seed(database: Database) -> None:
                 " answer_note, answered_at, answered_by, created_at, answer_source,"
                 " recorded_by, said_at, session, kind, review_mode, context, topic_id,"
                 " topic_title, depends_on, replaces, replaced_by, urgency, blocked_on,"
-                " needed_by, for_offices"
+                " needed_by, for_offices, addressed_to"
             ),
             [
                 "d1",
@@ -242,6 +242,7 @@ def _seed(database: Database) -> None:
                 "the deploy",
                 T1,
                 j(["beta", "gamma"]),
+                "jeremy",
             ],
         ),
         (
@@ -256,6 +257,11 @@ def _seed(database: Database) -> None:
                 " form_name"
             ),
             ["d3", "a1", 2, "Rollout ☃", j([]), T0, "form", "rollout"],
+        ),
+        (
+            "form_answer",
+            "decision_id, person, answer_record, answered_at",
+            ["d3", "jeremy", j({"answers": {"region": "Zürich"}}), T1],
         ),
         (
             "decision_form",
@@ -282,7 +288,7 @@ def _seed(database: Database) -> None:
             "receipt",
             (
                 "id, subject_kind, subject_id, state, note, link, agent, session,"
-                " comment_id, created_at, expires_at, voided_at"
+                " comment_id, created_at, expires_at, voided_at, person"
             ),
             [
                 "r1",
@@ -297,6 +303,7 @@ def _seed(database: Database) -> None:
                 T1,
                 T1,
                 None,
+                "jeremy",
             ],
         ),
         (

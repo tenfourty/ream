@@ -31,6 +31,10 @@ def _old_shape(db) -> None:
             + ")"
         )
         if db.sqlite:
+            # slice 3's objects are newer than the shape this test rebuilds
+            conn.execute("drop table form_answer")
+            conn.execute("alter table decision drop column addressed_to")
+            conn.execute("alter table receipt drop column person")
             conn.execute("pragma user_version = 36")
 
 
@@ -130,6 +134,9 @@ def test_rows_with_no_recorded_owner_are_refused_and_nothing_changes(db):
         conn.execute("select key from human_pref")
     with pytest.raises(Exception), db.connect() as conn:  # noqa: B017 -- "no such column"
         conn.execute("select person from page_read")
+    # and the refusal left nothing of the slice behind: no pin table was made
+    with pytest.raises(Exception), db.connect() as conn:  # noqa: B017 -- "no such table"
+        conn.execute("select 1 from page_pin")
 
 
 @pytest.mark.usefixtures("fresh_schema")

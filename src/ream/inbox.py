@@ -141,9 +141,9 @@ def order(rows: list[Item], now: datetime) -> list[Item]:
 # Shared by the list and the count, so they cannot disagree about which replies
 # are waiting: a reply he has not seen, on a page that is neither archived nor
 # deleted.
-# Its one parameter, first, is the person whose read marks it asks about.
+# Its two parameters, first, are the person whose read marks and threads it asks about, twice.
 _REPLY_FROM_WHERE = (
-    " from comment c join artifact a on a.id = c.artifact_id"
+    f" from comment c{comments.ME_JOIN} join artifact a on a.id = c.artifact_id"
     " left join page_read pr on pr.artifact_id = c.artifact_id and pr.person = %s"
     " where a.deleted_at is null and a.archived_at is null"
     f"   and {comments.unseen_reply('pr.read_at')}"
@@ -194,7 +194,7 @@ def _reply_items(db: Database, limit: int, person: str) -> tuple[list[Item], boo
             "       coalesce(nullif(c.session, ''), c.author), c.body, c.created_at"
             f"{_REPLY_FROM_WHERE}"
             " order by c.created_at asc, c.id asc limit %s",
-            (person, limit),
+            (person, person, limit),
         ).fetchall()
     return [
         Item(
@@ -245,9 +245,10 @@ def count(
     from COUNT queries and ids only: no question text and no reply bodies."""
     limit = limit or _LIMIT
     reviews, questions, open_rows = decisions.open_counts(db)
+    me = person or folders.his()
     with db.connect() as conn:
         replies = conn.execute(
-            f"select count(*){_REPLY_FROM_WHERE}", (person or folders.his(),)
+            f"select count(*){_REPLY_FROM_WHERE}", (me, me)
         ).fetchone()[0]
     slacked = readside.count_waiting(db, limit)
     capped = open_rows >= limit or replies >= limit or slacked >= limit

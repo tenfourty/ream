@@ -306,6 +306,9 @@ COLUMNS = [
     ("human_pref", "person", ""),
     ("page_pin", "person", ""),
     ("frame_pass", "person", ""),
+    ("decision", "addressed_to", ""),
+    ("form_answer", "person", ""),
+    ("receipt", "person", ""),
 ]
 
 
@@ -357,6 +360,25 @@ def _populate(db):
             " options, state, answered_by, created_at, updated_at)"
             " values ('qd:q9', 1, 'warpgate', 't', %s, 'open', 'jeremy', %s, %s)",
             (jsonb(OPTIONS), datetime.now(UTC), datetime.now(UTC)),
+        )
+        # slice 3: a question addressed to him, his record of a form, a receipt about his answer
+        conn.execute(
+            "update decision set addressed_to = 'jeremy' where id = %s", (asked.id,)
+        )
+        conn.execute(
+            "insert into decision (id, artifact_id, version_n, question, options,"
+            " created_at, kind, form_name) values ('f1', %s, 1, 'f', %s, %s, 'form', 'rollout')",
+            (page.id, jsonb([]), datetime.now(UTC)),
+        )
+        conn.execute(
+            "insert into form_answer (decision_id, person, answer_record, answered_at)"
+            " values ('f1', 'jeremy', %s, %s)",
+            (jsonb({"answers": {}}), datetime.now(UTC)),
+        )
+        conn.execute(
+            "insert into receipt (id, subject_kind, subject_id, state, agent, created_at,"
+            " person) values ('rc1', 'decision', %s, 'working', 'bosun', %s, 'jeremy')",
+            (asked.id, datetime.now(UTC)),
         )
     return page
 

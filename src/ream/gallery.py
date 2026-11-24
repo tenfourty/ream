@@ -1601,7 +1601,7 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 # reply to him leaves a read page looking read. Yields who wrote it (the session
 # label when there is one, so the tile can name the office, else the author).
 # `pr` and `pp` are the request person's `page_read` and `page_pin` rows, left-joined to the
-# page (`_PERSON_JOINS`, two parameters, the person each); every wall query carries them.
+# page (`_PERSON_JOINS`, three parameters, the person each); every wall query carries them.
 # The rule itself lives in `comments.unseen_reply` so his inbox asks the same
 # question the wall does.
 _WALL_REPLIED_BY = (
@@ -1613,11 +1613,12 @@ _WALL_UNREAD = (
     "(a.current_version > coalesce(pr.read_version, 0)"
     f"  or {_WALL_REPLIED_BY} is not null)"
 )
-# The joins `pr` and `pp` need, one `%s` each: the request person's id, twice. They come right
+# The joins `pr`, `pp` and `me` need, one `%s` each: the request person's id, three times. They come right
 # after `from artifact a`, so their parameters precede the where clause's.
 _PERSON_JOINS = (
     " left join page_read pr on pr.artifact_id = a.id and pr.person = %s"
     " left join page_pin pp on pp.artifact_id = a.id and pp.person = %s"
+    + comments.ME_JOIN
 )
 
 
@@ -4911,6 +4912,7 @@ def _render_decisions(
     prev_read_at: datetime | str | None = None,
     routes: dict[str, listening.Route] | None = None,
     app_hosts: dict[str, str] | None = None,
+    person: str | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -5277,7 +5279,11 @@ def _render_decisions(
             # ago, which is the failure this whole listener arc exists to end. So the
             # summary line carries a mark only in the bad case -- an answer sitting
             # uncollected -- and the opened card says plainly who took it and when.
-            if row.receipt:
+            if person is not None and row.answered_by not in (None, person):
+                # What an agent did with SOMEONE ELSE's answer (receipts, pickup) is not said
+                # to you (people design, slice 3: a receipt is about one person's answer).
+                unread = pickup = ""
+            elif row.receipt:
                 # The agent has declared what it did with the answer: the strip
                 # replaces the pickup line (receipts design 4.3), and anything it
                 # declared means it took the answer up, so no "not picked up".
@@ -5550,7 +5556,7 @@ def gallery_router(db: Database) -> APIRouter:
             f"          {_WALL_UNREAD} desc,"
             # One more than a page, to know whether an older page exists.
             f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
-            (person, person, not archived, *extra, *after_params),
+            (person, person, person, not archived, *extra, *after_params),
         ).fetchall()
         rows = _WallRows(fetched[:_WALL_PAGE])
         if len(fetched) > _WALL_PAGE:
@@ -5575,7 +5581,7 @@ def gallery_router(db: Database) -> APIRouter:
             "  from artifact a join folder f on f.id = a.folder_id"
             + _PERSON_JOINS
             + " where a.deleted_at is null",
-            (person, person),
+            (person, person, person),
         ).fetchall()
 
     def _folder_items(pages, archived: bool) -> list:
@@ -7102,6 +7108,7 @@ def gallery_router(db: Database) -> APIRouter:
         }
         asks_above, settled_below = _render_decisions(
             shown_rows,
+            person=person.id,
             note_threads=note_threads,
             prev_read_at=prev_read_at,
             round_view=round_view,
@@ -7205,7 +7212,7 @@ def gallery_router(db: Database) -> APIRouter:
                 f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
                 # No Submit bar on a page that is archived or binned: nothing there can
                 # take an answer.
-                f"{'' if row[3] is not None or row[7] is not None else forms_ui.block(db, artifact_id)}"
+                f"{'' if row[3] is not None or row[7] is not None else forms_ui.block(db, artifact_id, person.id)}"
                 # AFTER the page, with the settled decisions. A conversation
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
@@ -7880,6 +7887,7 @@ def gallery_router(db: Database) -> APIRouter:
                 by=person.id,
                 round=asked_round,
                 version=shown_version,
+                person=person,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc

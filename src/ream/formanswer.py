@@ -211,6 +211,29 @@ def _on_latest(conn, decision_id, record, latest, fields, complete):
     return formrecord.reconcile(record, old, fields, latest, complete)
 
 
+def person_record(conn, decision_id: str, person: str) -> dict | None:
+    """One person's own record of a form (`form_answer`), or None when they have none."""
+    row = conn.execute(
+        "select answer_record from form_answer where decision_id = %s and person = %s",
+        (decision_id, person),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def put_person_record(
+    conn, decision_id: str, person: str, record: dict, at: datetime
+) -> None:
+    """Store `record` as `person`'s record of the form. The decision's own `answer_record`
+    (what the agent reads) is written by the caller beside it, in the same transaction."""
+    conn.execute(
+        "insert into form_answer (decision_id, person, answer_record, answered_at)"
+        " values (%s, %s, %s, %s)"
+        " on conflict (decision_id, person) do update set"
+        " answer_record = excluded.answer_record, answered_at = excluded.answered_at",
+        (decision_id, person, jsonb(record), at),
+    )
+
+
 def submit(
     db,
     decision_id: str,
@@ -218,16 +241,22 @@ def submit(
     version: int,
     values,
     by: str | None = None,
+    person=None,
 ) -> dict:
     """Record one submit of a form and return the merged record. `store.NotFound` for
     a form that does not exist or is closed (its agent said it is no longer needed);
     `SubmitRefused` for a batch the stored field list does not allow, including a
     `version` that is no longer the form's latest (409: he answered a question that
-    has since changed, and nothing is carried silently)."""
-    by = by or settings.owner_id()
+    has since changed, and nothing is carried silently).
+
+    `person` (a `people.Person`, the gallery's) is who submits and must be allowed to
+    (`decisions.may_answer`): anyone else gets `store.NotFound`, as for a form that is not
+    there. Their record is `form_answer`'s row for them; the decision's `answer_record`,
+    what the agent reads, is set to it too (several people answering one form is slice 3b)."""
+    by = by or (person.id if person is not None else settings.owner_id())
     with db.connect() as conn:
         row = conn.execute(
-            "select d.artifact_id, d.form_name, d.session, d.answer_record,"
+            "select d.artifact_id, d.form_name, d.session, d.addressed_to,"
             " a.agent, a.title from decision d"
             " join artifact a on a.id = d.artifact_id"
             " where d.id = %s and d.kind = 'form' and d.closed_at is null"
@@ -236,7 +265,9 @@ def submit(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, form_name, asking_session, _record, owner, title = row
+        artifact_id, form_name, asking_session, addressed_to, owner, title = row
+        if person is not None and not decisions.addressed_ok(person, addressed_to):
+            raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
             (decision_id,),
@@ -288,7 +319,14 @@ def submit(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
+        previous = _on_latest(
+            conn,
+            decision_id,
+            person_record(conn, decision_id, by),
+            latest,
+            fields,
+            complete,
+        )
         now = datetime.now(UTC)
         submit_id = ids.new_id()
         grown = formrecord.apply_submit(
@@ -326,6 +364,7 @@ def submit(
             " where id = %s and closed_at is null",
             (jsonb(record), now, by, decision_id),
         )
+        put_person_record(conn, decision_id, by, record, now)
         receipts.void(conn, decision_id)
         answered = len(fields) - len(total_blank)
         summary = f"form {form_name}: {answered} of {len(fields)} answered"
@@ -435,6 +474,7 @@ def relay(
                     "looks like it contains a secret", field=name
                 ) from exc
 
+    his = settings.owner_id()  # a relay is the owner's: what he said elsewhere
     with db.connect() as conn, conn.transaction():
         decisions._require_live_page(conn, decision_id, artifact_id)
         current = conn.execute(
@@ -445,7 +485,15 @@ def relay(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
+        # A relay is the owner's (the answer he gave elsewhere): it merges into his own record.
+        previous = _on_latest(
+            conn,
+            decision_id,
+            person_record(conn, decision_id, his),
+            latest,
+            fields,
+            complete,
+        )
         now = datetime.now(UTC)
         grown, applied, skipped = formrecord.apply_relay(
             previous,
@@ -463,7 +511,7 @@ def relay(
             "submit_id": ids.new_id(),
             "version": latest,
             "kind": "relay",
-            "answered_by": settings.owner_id(),
+            "answered_by": his,
             "source": source,
             "recorded_by": recorded_by,
             "answered_at": _stamp(now),
@@ -483,7 +531,7 @@ def relay(
             "kind": "form",
             "form": form_name,
             "content_hash": content_hash[0] if content_hash else None,
-            "answered_by": settings.owner_id(),
+            "answered_by": his,
             "sent": [],
             **{k: v for k, v in (previous or {}).items() if k not in grown},
             **grown,
@@ -498,6 +546,11 @@ def relay(
                     "update decision set answer_record = %s where id = %s",
                     (jsonb(record), decision_id),
                 )
+                conn.execute(
+                    "update form_answer set answer_record = %s"
+                    " where decision_id = %s and person = %s",
+                    (jsonb(record), decision_id, his),
+                )
             return {"record": record, "applied": [], "skipped": skipped}
         record["answered_at"] = entry["answered_at"]
         record["submit_id"] = entry["submit_id"]
@@ -510,13 +563,14 @@ def relay(
             (
                 jsonb(record),
                 now,
-                settings.owner_id(),
+                his,
                 source,
                 recorded_by,
                 said_at,
                 decision_id,
             ),
         )
+        put_person_record(conn, decision_id, his, record, now)
         receipts.void(conn, decision_id)
         answered = len(fields) - len(record["blank"])
         summary = (

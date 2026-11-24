@@ -233,24 +233,29 @@ def office_of(label: str | None) -> str:
 
 
 # THE ONE RULE FOR "A REPLY HE HAS NOT SEEN", as a SQL condition on a comment
-# aliased `c`: a live agent comment under a thread in which he wrote an earlier
-# message (or under the note he left on a decision, which is his by being
-# there), made after he last opened the page. The wall's unread mark and his
+# aliased `c`: a live agent comment under a thread in which the READER wrote an earlier
+# message (or under the note someone left on a decision, which is theirs by being
+# there), made after they last opened the page. The wall's unread mark and the
 # inbox both read it, so they can never disagree about what is new.
 # `c.artifact_id` is the page; `read_at` is the SQL of when the reader last
 # opened it: the caller joins `page_read` for the request's person (people
 # design, slice 2: a read mark is one person's) and names its `read_at` column,
-# which is NULL when they never have. Plain SQL on both drivers: `created_at`
-# compares as the one stored format.
+# which is NULL when they never have. `me.person` is that same person (slice 3: a
+# thread is one person's, so a reply under Ann's comment is not Jeremy's to
+# see); the caller joins `(select cast(%s as text) as person) me` beside it.
+# Plain SQL on both drivers: `created_at` compares as the one stored format.
 _HIS_THREAD = (
     "(exists (select 1 from comment h"
     "  where h.artifact_id = c.artifact_id"
     "    and coalesce(h.thread_root, h.id) = c.thread_root"
-    "    and h.author_kind = 'human' and h.withdrawn_at is null"
+    "    and h.author_kind = 'human' and h.author = me.person"
+    "    and h.withdrawn_at is null"
     "    and h.deleted_at is null"
     "    and h.created_at < c.created_at)"
     "  or c.anchor->>'kind' = 'decision')"
 )
+# The join that names `me`: one `%s`, the person.
+ME_JOIN = " cross join (select cast(%s as text) as person) me"
 
 
 def unseen_reply(read_at: str) -> str:

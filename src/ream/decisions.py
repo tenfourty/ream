@@ -135,7 +135,7 @@ _COLUMNS = (
     ' as "archived_at [TIMESTAMPTZ]",'
     " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
     ' as "deleted_at [TIMESTAMPTZ]",'
-    " decision.answer_record, decision.asked_by"
+    " decision.answer_record, decision.asked_by, decision.addressed_to"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -145,6 +145,7 @@ _KIND_IDX = 18
 _ANSWER_SOURCE_IDX = 14
 _REVIEW_MODE_IDX = 19
 _ASKED_BY_IDX = 34
+_ADDRESSED_TO_IDX = 35
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,23 @@ class DecisionRow:
     # not own (MCP design 11.4). None: the page's agent, as every question was before. The
     # answer goes to this agent, and only this agent may close the question.
     asked_by: str | None = None
+    # The one person this question is for (people design, slice 3); None: the page's owners.
+    # Never sent to an agent (`public` drops it).
+    addressed_to: str | None = None
+
+
+def may_answer(person, d) -> bool:
+    """Whether `person` (a `people.Person`) may answer decision `d` (a `DecisionRow`): the person
+    it is addressed to, or, when it is addressed to no one, the page's owners (today the owner:
+    page ownership is single-owner until step 4 of the people design)."""
+    return addressed_ok(person, d.addressed_to)
+
+
+def addressed_ok(person, addressed_to: str | None) -> bool:
+    """`may_answer` for a caller that holds only the stored `addressed_to`."""
+    if addressed_to is not None:
+        return addressed_to == person.id
+    return person.is_owner
 
 
 # Whose question it is, in SQL: the asker where an app asked on someone else's page, else the
@@ -230,6 +248,9 @@ def public(row: DecisionRow) -> dict:
     `for_offices` under its contract name `audience`, and under the old name `for`
     too, for one release (core-and-plugins design, section 6)."""
     out = dict(row.__dict__)
+    out.pop(
+        "addressed_to"
+    )  # the gallery's concern: no agent reads whom a question is for
     out["audience"] = out["for"] = out.pop("for_offices")
     return out
 
@@ -583,6 +604,7 @@ def _row_to_decision(row) -> DecisionRow:
         **_set_aside_fields(row),
         answer_record=row[33],
         asked_by=row[34],
+        addressed_to=row[_ADDRESSED_TO_IDX],
     )
 
 
@@ -1984,6 +2006,7 @@ def answer(
     source: str = "page",
     recorded_by: str | None = None,
     in_transaction: Callable[[Connection], None] | None = None,
+    person=None,
 ) -> DecisionRow:
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
@@ -2017,6 +2040,9 @@ def answer(
     and the outbound `answered` included. `in_transaction`, when given, is
     called with the connection inside the answer's own transaction, so the
     caller's own records commit or roll back with it.
+
+    `person` (a `people.Person`, the gallery's) must be allowed to answer this decision
+    (`may_answer`): anyone else gets `store.NotFound`, as for a decision that is not there.
     """
     # His tap, or an inbound answer a plug-in vouches for ('slack', or a source a
     # plug-in registered); never one of the four an agent may relay.
@@ -2064,6 +2090,8 @@ def answer(
         # SET ASIDE (open, its page archived or binned): he cannot answer it, from the
         # page or from Slack. Indistinguishable from "no such decision", as closed is.
         if _set_aside_fields(row)["set_aside"]:
+            raise store.NotFound()
+        if person is not None and not addressed_ok(person, row[_ADDRESSED_TO_IDX]):
             raise store.NotFound()
 
         letters = {option["letter"] for option in options}

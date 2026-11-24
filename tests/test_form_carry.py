@@ -453,6 +453,10 @@ def test_a_record_left_on_an_older_version_is_reconciled_at_the_next_submit(
             "update decision set answer_record = %s where id = %s",
             (jsonb(legacy), made["id"]),
         )
+        conn.execute(
+            "update form_answer set answer_record = %s where decision_id = %s",
+            (jsonb(legacy), made["id"]),
+        )
     rec = submit(db, made, version=2, region="a", count=5)
     assert rec["version"] == 2 and rec["answers"]["count"] == 5
     assert rec["answers"]["region"] == "a"

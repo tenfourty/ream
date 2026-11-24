@@ -48,6 +48,11 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("human_pref.person", ""),
     ("page_pin.person", ""),
     ("frame_pass.person", ""),
+    # Per-person answers and receipts (slice 3): whom a question is addressed to, each person's
+    # own record of a form, and whose answer a receipt is about.
+    ("decision.addressed_to", ""),
+    ("form_answer.person", ""),
+    ("receipt.person", ""),
 )
 
 

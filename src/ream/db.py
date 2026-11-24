@@ -669,6 +669,36 @@ def _people_slice_2(conn) -> None:
     conn.execute("update frame_pass set person = %s", (owner,))
 
 
+def _people_slice_3(conn) -> None:
+    """SQLite schema step 38 (people design, slice 3); schema.sql does the same on Postgres.
+
+    Fills `form_answer` from each `decision.answer_record` (kept) and sets `receipt.person`,
+    both to the owner id `service_meta` records; a database that holds such rows and records
+    none is refused, because rows given a guessed owner would be read as a stranger's."""
+    owner = conn.execute(
+        "select value from service_meta where key = 'owner_id'"
+    ).fetchone()
+    owner = owner[0] if owner else None
+    held = conn.execute("select count(*) from receipt").fetchone()[0]
+    held += conn.execute(
+        "select count(*) from decision where answer_record is not null"
+    ).fetchone()[0]
+    if held and owner is None:
+        raise RuntimeError(
+            "schema step 38 found receipts or form answers but service_meta records no"
+            " owner id: start the service once on the previous version, or record it"
+        )
+    if owner is None:
+        return
+    conn.execute("update receipt set person = %s", (owner,))
+    conn.execute(
+        "insert into form_answer (decision_id, person, answer_record, answered_at)"
+        " select id, %s, answer_record, coalesce(answered_at, created_at) from decision"
+        " where answer_record is not null",
+        (owner,),
+    )
+
+
 # Step 1 is `schema_sqlite.sql`, run whole on a fresh file. Every later change is
 # a numbered step here, run statement by statement, never an edit to that file.
 _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
@@ -1168,6 +1198,22 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " primary key (person, artifact_id))"
         ),
         _people_slice_2,
+    ),
+    # 24 Nov 2026: per-person answers and receipts, people design slice 3 (see schema.sql).
+    # `form_answer` is created by the plain statement (so the table lists find it); the
+    # function fills it and `receipt.person` from what `service_meta` records.
+    38: (
+        "alter table decision add column addressed_to text",
+        (
+            "create table form_answer ("
+            " decision_id text not null references decision(id) on delete cascade,"
+            " person text not null,"
+            " answer_record jsonb not null,"
+            " answered_at timestamptz not null,"
+            " primary key (decision_id, person))"
+        ),
+        "alter table receipt add column person text",
+        _people_slice_3,
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
