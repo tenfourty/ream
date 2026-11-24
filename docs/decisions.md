@@ -1472,3 +1472,29 @@ and Jeremy chose the wider reach (23 Nov 2026).
   of this change.
 
 **Evidence:** Jeremy, 23 Nov 2026 (decision d_01M84DCGAEJBZ9NCR6GGP54R15, answer a).
+
+## The forge repo moves to runcove/ream; runcove/artifacts stays reserved as a redirect for good (24 Nov 2026)
+
+Step 5 of the Ream rename (design: the expand, migrate, contract plan, 24 Nov 2026). The forge
+repo `runcove/artifacts` is renamed to `runcove/ream`, and the old name is kept for good as the
+redirect Forgejo leaves behind: no repo is ever created under `runcove/artifacts` again, because
+creating one replaces the redirect (only runcove org owners can, so the guard is this rule and the
+owner set). The rename is the last step, made by homelab as forge admin once the earlier steps are
+proven: the CI gate and the runner guard accept both names (step 2), images are pushed under both
+names (step 3), homelab's pin lander, renderer-pod guard and access and runner-scope scripts accept
+both (step 4), and homelab's throwaway-repo probe of the live forge has passed. Security's
+conditions hold: after the rename, one sync to `runcove-sec/artifacts-sec` is shown, failing loudly
+if it cannot reach the source; both image names get every build until the contract step, which
+starts only after a check shows no deployment, pin or chart names an old image.
+
+**Chosen:** rename once the earlier steps are proven, and reserve `runcove/artifacts` as a
+redirect for good. This is a one-way door: a fetch, install or job address that names the old repo
+keeps working only while the name stays reserved.
+
+**Not chosen:**
+- Keeping the repo as `runcove/artifacts` (the name the project left on 7 Nov 2026).
+- Renaming without reserving the old name, which would let a later repo take the address every
+  old clone, install receipt and pin still names.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts; security and homelab raised no
+hold (rename thread in #bot-artifacts, 24 Nov 2026).
