@@ -10,7 +10,7 @@ hand-escaped field.
 No in-app identity check: Authelia gates this host at the ingress. `/api/v1` does not
 special-case a `Remote-User` header either -- it simply ignores one, since identity
 there comes only from the verified key. Nothing in this module reads it either, which is
-exactly why answering a decision hardcodes `by=settings.owner_id()` (see `answer_decision` below)
+exactly why answering a decision takes `by=person.id` from `people.current` (see `answer_decision` below)
 rather than trusting any identity header: Authelia admits exactly one subject to this
 host, but nothing here proves the ingress strips an inbound copy of such a header before
 a request reaches this app, so the one subject it ever admits is named outright instead
@@ -54,6 +54,7 @@ from ream import (
     pagediff,
     pageviews,
     partner,
+    people,
     readside,
     rename,
     settings,
@@ -7360,14 +7361,18 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/machines", response_class=HTMLResponse)
-    def machines_page(revoke: str = "", revoke_app: str = "") -> HTMLResponse:
+    def machines_page(
+        revoke: str = "",
+        revoke_app: str = "",
+        person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
         return HTMLResponse(
             _shell(
                 "Machines and keys",
                 _machines_page(
                     keys.machines(db),
                     confirm=revoke,
-                    apps=mcp_apps.listed(db, settings.owner_id()),
+                    apps=mcp_apps.listed(db, person.id),
                     confirm_app=revoke_app,
                 ),
             ),
@@ -7383,12 +7388,16 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse("/machines", status_code=303)
 
     @router.post("/machines/{key_id}/revoke", response_class=HTMLResponse)
-    def machine_revoke(key_id: str, request: Request) -> HTMLResponse:
+    def machine_revoke(
+        key_id: str,
+        request: Request,
+        person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
         """Immediate and permanent for that key; the machine can connect again
         with a new code. His pages and its pages are untouched."""
         _same_origin_write(request)
         done = keys.revoke(
-            db, key_id, actor=settings.owner_id(), reason="revoked on the Machines page"
+            db, key_id, actor=person.id, reason="revoked on the Machines page"
         )
         note = (
             "Revoked. That key no longer works."
@@ -7401,12 +7410,16 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.post("/machines/apps/{app_id}/revoke", response_class=HTMLResponse)
-    def machine_app_revoke(app_id: str, request: Request) -> HTMLResponse:
+    def machine_app_revoke(
+        app_id: str,
+        request: Request,
+        person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
         """Ends the app at once: its tokens go, so its next call fails, and its
         remembered consent goes with it. Only the owner's own apps."""
         _same_origin_write(request)
         found = mcp_apps.app(db, app_id)
-        if found is None or found.person != settings.owner_id():
+        if found is None or found.person != person.id:
             raise HTTPException(404, "no such app")
         if found.revoked_at is None:
             oauth.end_app(db, app_id, "owner", datetime.now(UTC))
@@ -7419,7 +7432,7 @@ def gallery_router(db: Database) -> APIRouter:
                 _machines_page(
                     keys.machines(db),
                     note=note,
-                    apps=mcp_apps.listed(db, settings.owner_id()),
+                    apps=mcp_apps.listed(db, person.id),
                 ),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -7728,6 +7741,7 @@ def gallery_router(db: Database) -> APIRouter:
         # "inbox" when the form was drawn on his inbox: he goes back there. Any
         # other value is ignored, so this is never an open redirect.
         next_field: str = Form("", alias="next"),
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         # The round the form was drawn for. A form with none was drawn before
@@ -7738,7 +7752,7 @@ def gallery_router(db: Database) -> APIRouter:
             shown_version = int(version_field) if version_field else None
         except ValueError as exc:
             raise HTTPException(422, "round and version are numbers") from exc
-        # `by=settings.owner_id()` is hardcoded, not read from any header -- see the module
+        # `by=person.id` (today always the owner's id) is not read from any header -- see the module
         # docstring for why: Authelia admits exactly one subject to this host, and
         # nothing here proves the ingress strips an inbound copy of an identity
         # header before this app ever sees the request.
@@ -7748,7 +7762,7 @@ def gallery_router(db: Database) -> APIRouter:
                 decision_id,
                 letter=letter,
                 note=note,
-                by=settings.owner_id(),
+                by=person.id,
                 round=asked_round,
                 version=shown_version,
             )
@@ -7859,7 +7873,7 @@ def gallery_router(db: Database) -> APIRouter:
     # asked for rather than guessed at.
     #
     # Same shape as the answer form above and for the same reasons: a plain
-    # POST with the same-origin guard, `author=settings.owner_id()` hardcoded rather than
+    # POST with the same-origin guard, `author=person.id` (the owner's id today) rather than
     # read from any header, and a 303 back to the page so a refresh does not
     # repost.
     @router.post("/c/{artifact_id}")
@@ -7877,6 +7891,7 @@ def gallery_router(db: Database) -> APIRouter:
         kind: str = Form("comment"),
         # Pictures staged through POST /c/{id}/image, one repeated field each.
         image: Annotated[list[str] | None, Form()] = None,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         # A reply is always talk (comments.add forces its kind to `comment`), so
@@ -7894,7 +7909,7 @@ def gallery_router(db: Database) -> APIRouter:
                 db,
                 artifact_id=artifact_id,
                 author_kind="human",
-                author=settings.owner_id(),
+                author=person.id,
                 body=body,
                 thread_root=thread_root or None,
                 quote=quote[:500],
@@ -7968,6 +7983,7 @@ def gallery_router(db: Database) -> APIRouter:
     async def add_comment_image(
         artifact_id: str,
         request: Request,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         """Stage one picture for a comment he is writing on this page: multipart, one
@@ -7977,9 +7993,7 @@ def gallery_router(db: Database) -> APIRouter:
         if not await run_in_threadpool(store.exists, db, artifact_id):
             raise HTTPException(404, "no such page")
         try:
-            return await image_store.stage_upload(
-                request, db, artifact_id, settings.owner_id()
-            )
+            return await image_store.stage_upload(request, db, artifact_id, person.id)
         except images.ImageRefused as exc:
             raise HTTPException(
                 exc.status, {"field": exc.field, "detail": exc.detail}
@@ -7988,13 +8002,14 @@ def gallery_router(db: Database) -> APIRouter:
     @router.post("/c/{comment_id}/resolve")
     def resolve_comment(
         comment_id: str,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         try:
             # agent=None: the gallery owns nothing in the `agent` column's
             # sense, and Jeremy owns everything in the sense that matters. Same
             # call `add` already makes for writing.
-            row = comments.resolve(db, comment_id, by=settings.owner_id(), agent=None)
+            row = comments.resolve(db, comment_id, by=person.id, agent=None)
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
@@ -8002,11 +8017,12 @@ def gallery_router(db: Database) -> APIRouter:
     @router.post("/c/{comment_id}/reopen")
     def reopen_comment(
         comment_id: str,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         try:
             # agent=None, as for resolve: the gallery acts for Jeremy.
-            row = comments.reopen(db, comment_id, agent=None, by=settings.owner_id())
+            row = comments.reopen(db, comment_id, agent=None, by=person.id)
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
@@ -8020,12 +8036,11 @@ def gallery_router(db: Database) -> APIRouter:
     def delete_comment(
         request: Request,
         comment_id: str,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         try:
-            row = comments.delete(
-                db, comment_id, author_kind="human", author=settings.owner_id()
-            )
+            row = comments.delete(db, comment_id, author_kind="human", author=person.id)
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return _delete_answer(request, row)
@@ -8034,11 +8049,12 @@ def gallery_router(db: Database) -> APIRouter:
     def restore_comment(
         request: Request,
         comment_id: str,
+        person: people.Person = people.CURRENT,
         _guard: None = Depends(_same_origin_write),
     ):
         try:
             row = comments.restore(
-                db, comment_id, author_kind="human", author=settings.owner_id()
+                db, comment_id, author_kind="human", author=person.id
             )
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc

@@ -1073,6 +1073,22 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " primary key (artifact_id, kind, viewer))"
         ),
     ),
+    # 24 Nov 2026: the person table, people design slice 1 (see schema.sql). `owner.check`
+    # seeds person #1; nothing reads it yet.
+    36: (
+        (
+            "create table person ("
+            " id text primary key,"
+            " issuer text,"
+            " subject text,"
+            " email text,"
+            " name text,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " last_seen_at timestamptz,"
+            " disabled_at timestamptz,"
+            " unique (issuer, subject))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

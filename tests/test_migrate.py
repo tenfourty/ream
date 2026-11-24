@@ -406,6 +406,7 @@ def _seed(database: Database) -> None:
             "artifact_id, day, kind, views",
             ["a1", "2026-10-15", "owner", 3],
         ),
+        ("person", "id, issuer, subject, name", ["jeremy", "https://idp", "s1", "J"]),
         (
             "page_viewer",
             "artifact_id, kind, viewer, views, last_at, counted_at",

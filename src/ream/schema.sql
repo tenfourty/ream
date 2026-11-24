@@ -1372,3 +1372,21 @@ create table if not exists page_viewer (
     counted_at  timestamptz not null,
     primary key (artifact_id, kind, viewer)
 );
+
+-- PEOPLE (24 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 1). One row per person
+-- who may sign in to the gallery. `id` is the stored id (`REAM_OWNER_ID` for person #1, the owner,
+-- seeded by `owner.check`). A person is keyed on (issuer, subject), never on the email; both are
+-- null until the owner's first OIDC sign-in pins them (copied from the `oidc_owner_sub`
+-- `service_meta` key when it exists). Nothing reads the table yet: `people.current` answers the
+-- owner from settings. SQLite does the same as its schema step 36.
+create table if not exists person (
+    id           text        primary key,
+    issuer       text,
+    subject      text,
+    email        text,
+    name         text,
+    created_at   timestamptz not null default now(),
+    last_seen_at timestamptz,
+    disabled_at  timestamptz,
+    unique (issuer, subject)
+);

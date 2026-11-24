@@ -299,6 +299,7 @@ COLUMNS = [
     ("folder_alias", "owner", ""),
     ("comment_image", "staged_by", ""),
     ("partner_question", "answered_by", ""),
+    ("person", "id", ""),
 ]
 
 

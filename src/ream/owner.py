@@ -10,7 +10,8 @@ recorded once in `service_meta`, and every start compares:
 * recorded and different: `OwnerMismatch`, and the service does not start.
 
 `artifacts-admin change-owner` is the one way to move a database to another id: it rewrites
-every column below in one transaction and records the new id.
+every column below in one transaction and records the new id. The `person` table holds the
+owner as person #1 (`seed_person`); its row moves with the id.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("comment_image.staged_by", ""),
     ("folder.owner", ""),
     ("folder_alias.owner", ""),
+    # Person #1, the owner (people design, slice 1). The other people's ids are not the owner's.
+    ("person.id", ""),
 )
 
 
@@ -81,9 +84,30 @@ def check(db: Database, configured: str) -> str:
         row = conn.execute(
             "select value from service_meta where key = %s", (META_KEY,)
         ).fetchone()
+        if row[0] == configured:
+            seed_person(conn, configured)
     if row[0] != configured:
         raise OwnerMismatch(row[0], configured)
     return configured
+
+
+def seed_person(conn, owner_id: str) -> None:
+    """Person #1: the owner's row in `person`, made if it is not there. The issuer and subject
+    come from the pin the owner's first OIDC sign-in wrote (`oidc.PIN_KEY`, "<issuer> <sub>"),
+    when there is one; a row that already exists is left as it is."""
+    conn.execute(
+        "insert into person (id) values (%s) on conflict (id) do nothing", (owner_id,)
+    )
+    pin = conn.execute(
+        "select value from service_meta where key = %s", ("oidc_owner_sub",)
+    ).fetchone()
+    if pin and " " in pin[0]:
+        issuer, subject = pin[0].rsplit(" ", 1)
+        conn.execute(
+            "update person set issuer = %s, subject = %s"
+            " where id = %s and issuer is null and subject is null",
+            (issuer, subject, owner_id),
+        )
 
 
 def change_owner(db: Database, new: str, *, dry_run: bool) -> dict[str, int]:
