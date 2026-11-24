@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slice 1 built; slices 2 to 4 designed, not built. Written up from the
+Status: slices 1 and 2 built; slices 3 and 4 designed, not built. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -24,9 +24,15 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   (issuer, subject), never on email. `owner.check` seeds the owner (insert on conflict do nothing) and
   copies issuer and subject from the `service_meta` pin `oidc_owner_sub` ("<issuer> <sub>") when
   there is one. `owner._COLUMNS` gains `person.id`, so `change-owner` moves the row.
-- Slice 2: `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
-  `page_pin(person, artifact_id, pinned_at)` filled from `artifact.pinned_at` (kept, unread);
-  `frame_pass.person`. Migrated rows take the `service_meta` owner id.
+- Slice 2 (built): `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
+  `page_pin(person, artifact_id, pinned_at)` filled once from `artifact.pinned_at` (kept, neither read
+  nor written); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
+  Migrated rows take the `service_meta` owner id; a database that holds such rows and records no
+  owner is refused rather than guessed. SQLite does it in step 37 (a function: rebuilds and copies);
+  Postgres at the end of `schema.sql`, each part guarded by its own "already done" test (the column or
+  the table), because `schema.sql` runs at every start and a pin the owner removed must not return.
+  Postgres adds `person` as the last column and swaps the primary key; SQLite rebuilds the tables
+  with `person` first; the copier matches columns by name.
 - Slice 3: `decision.addressed_to` (null = page owners); `decisions.may_answer(person, d)`;
   `form_answer(decision_id, person, answer_record, answered_at, pk(decision_id, person))` filled from
   `decision.answer_record` (kept); `receipt.person`; `answers[]` on form reads (agent-visible, so
@@ -89,8 +95,24 @@ Each lands alone and the homelab stays byte-identical until a setting is set.
 - Slice 4 must fill person #1's issuer and subject from `REAM_OIDC_OWNER_SUBJECT` when it is set
   (no `oidc_owner_sub` pin is written then, so `owner.check` finds nothing to copy).
 
+## Slice 2 as built
+
+The wall (`_wall`, `_folder_pages`) joins the request person's `page_read` (`pr`) and `page_pin` (`pp`)
+rows (`_PERSON_JOINS`, two parameters); the unread test, the pin order and the "Older pages" cursor read
+those. `comments.unseen_reply(read_at)` replaces the constant `UNSEEN_REPLY`: the wall passes `pr.read_at`,
+the inbox joins `page_read` for its person (`inbox.gather/count/items(person=)`). The detail page marks the
+page read for the request's person; the pin route stays owner-only (`require_owner`: access is single-owner)
+but writes `page_pin` for the person it was given; `/a/{id}/frame` and the page view mint passes with the
+person. `holds.get_mode/set_mode/set_review_mode` take a person (default the owner: an agent opening a review
+asks for the owner's preference). Agent routes and MCP read "has he read it" (`seen_version`, `seen_at`) and
+`pinned_at` from the owner's rows (`folders.his()`), and an agent's pin writes the owner's `page_pin`.
+Decision C holds: no route takes a person id and none reads or writes another person's state.
+Tests: `tests/test_per_person_state.py` (two people by overriding `people.current`, `OPEN_SIGN_IN`
+flipped), `tests/test_people_slice2_migration.py` (both backends), `tests/test_migrate.py`'s copy round
+trip, and `tests/test_owner.py` (`change-owner` moves the new columns).
+
 ## Not yet checked
 
-All `page_read` / `human_pref` / `pinned_at` call sites; today's CSRF handling; receipt-seen per
-reader; the Postgres schema of the rebuilt tables; `migrate.copy` column order. Slice 2 starts with
-that grep.
+Checked in slice 2: every `page_read` / `human_pref` / `pinned_at` call site (the grep is the list in
+"Slice 2 as built"), the Postgres schema of the rebuilt tables, and `migrate.copy`'s column handling
+(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (slice 3).
