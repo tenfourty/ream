@@ -1518,3 +1518,20 @@ revised design's approval.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the question asked on 23 Nov).
 Tracker item runcove-5t3oj.160.4.
+
+## Data behind a page: new rows replace the old without a new version (24 Nov 2026)
+
+**Chosen:** in the whole-company design, an agent can send rows to a named data set on its page and
+the page draws from the latest rows. New rows replace the old ones and make no new version; only a
+change to the page's layout makes a version, and the page shows when its data last changed. Why: a
+status board on a timer today republishes the whole page and builds up thousands of versions that
+no one reads.
+
+**Not chosen:**
+- Every update of rows makes a new version, as a whole republish does today: keeps old data
+  readable in history, but keeps the version churn the change is meant to end.
+- Keep the last few sets of rows per page, without versions: a second kind of history to explain
+  and store, for a need no one has asked for yet.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
+Tracker item runcove-5t3oj.160.4.
