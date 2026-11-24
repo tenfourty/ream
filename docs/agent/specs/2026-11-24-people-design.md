@@ -72,10 +72,16 @@ Each lands alone and the homelab stays byte-identical until a setting is set.
   signed-in app (step 3). This is the one place the "every human action has an agent equivalent"
   rule is met by the app, not by a key route.
 
-## Open questions (asked of the owner)
+## Decided later on 24 Nov 2026
 
-- D. The id for a new person: a readable slug (as the owner's id is) or an opaque one. Slice 1 does
-  not need it; slice 4 does.
+- D. The id of a new person is a readable id taken from their login, fixed once given and never
+  reused. People and agents share one name space: a person's id that an agent already holds is
+  refused, and an agent name that a person already holds is refused (the owner id's rule today,
+  extended to every person). A person is matched by (issuer, subject), never by email. Slice 4
+  builds this.
+
+## Open question (asked of the owner)
+
 - B. Whether the homelab turns on in-app sign-in after slice 4.
 
 ## Not yet checked
