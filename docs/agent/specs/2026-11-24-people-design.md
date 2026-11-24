@@ -143,9 +143,24 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
 - Tests: `tests/test_people_answers.py` (two people), `tests/test_people_slice3_migration.py` (both
   backends), `tests/test_migrate.py`'s copy round trip, `tests/test_owner.py`,
   `tests/test_per_person_state.py` (the thread is per person).
-- No image rollback for this slice either: an older image on a migrated database still runs (the new
-  columns and table are unread by it), but answers made meanwhile are in `decision.answer_record` only,
-  which the next upgrade does not copy again.
+- Rolling back is safe for answers: an older image on a migrated database still runs (the new
+  columns and table are unread by it) and writes only `decision.answer_record`, so a person's
+  `form_answer` row goes stale or is missing. The backfill does not run again, but the next submit or
+  relay on this image reads that record: when the decision's `answer_record` says `answered_by` is the
+  writer and the row is missing or names another `submit_id`, the decision's record is the base
+  (`formanswer._base_record`), and the row is repaired by the write. With one person this is the old
+  behaviour; with several it stays right because another person's record never names the writer.
+  Tests: `tests/test_people_answers.py` (an older image's write, stale and missing row, submit and relay).
+
+## Must be done before anything sets `addressed_to`
+
+Nothing writes `addressed_to` yet, so these two are latent:
+
+- A relay (`formanswer.relay`, `decisions.record_elsewhere`) always files under the owner, even when the
+  question is addressed to someone else. It must file under the person the question is addressed to.
+- `decisions.may_answer` is enforced on writes only: the page still draws answer buttons for a
+  question the reader may not answer, and `decisions.open_counts` still counts it. Both must follow
+  `may_answer`.
 
 ## Not yet checked
 

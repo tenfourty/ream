@@ -220,6 +220,23 @@ def person_record(conn, decision_id: str, person: str) -> dict | None:
     return row[0] if row else None
 
 
+def _base_record(conn, decision_id: str, person: str, decision_record) -> dict | None:
+    """The record a write by `person` merges into. Normally their `form_answer` row; but an
+    older image (a rollback, or a pod not yet replaced) writes only `decision.answer_record`,
+    which leaves the row stale or missing. When the decision's own record is `person`'s
+    (`answered_by`) and the row is missing or names another submit, the decision's record is
+    the newer one and is used, which repairs the row at this write. Another person's record
+    never says `answered_by: <person>`, so this stays right with several people."""
+    row = person_record(conn, decision_id, person)
+    if (
+        isinstance(decision_record, dict)
+        and decision_record.get("answered_by") == person
+        and (row is None or row.get("submit_id") != decision_record.get("submit_id"))
+    ):
+        return decision_record
+    return row
+
+
 def put_person_record(
     conn, decision_id: str, person: str, record: dict, at: datetime
 ) -> None:
@@ -322,7 +339,7 @@ def submit(
         previous = _on_latest(
             conn,
             decision_id,
-            person_record(conn, decision_id, by),
+            _base_record(conn, decision_id, by, current[0]),
             latest,
             fields,
             complete,
@@ -489,7 +506,7 @@ def relay(
         previous = _on_latest(
             conn,
             decision_id,
-            person_record(conn, decision_id, his),
+            _base_record(conn, decision_id, his, current[0]),
             latest,
             fields,
             complete,

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from ream import decisions, formanswer, people, receipts, store
 from ream.app import create_gallery_app
+from ream.db import jsonb
 
 SAME = {"sec-fetch-site": "same-origin"}
 FORM = """
@@ -237,3 +238,89 @@ def test_a_receipt_is_about_the_answer_of_the_person_who_gave_it(db, owner_wall)
     # the agent's own read of the receipt is as it was: no person in it
     with db.connect() as conn:
         assert all("person" not in r for r in receipts.history(conn, row.id))
+
+
+def test_another_persons_answer_shows_the_owner_no_receipt_and_no_pickup(
+    db, owner_wall, ann_wall
+):
+    page = store.publish(db, "ops", "T", "<p>x</p>")
+    row = decisions.ask(
+        db, agent="ops", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    _address(db, row.id, "ann")
+    answered = ann_wall.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers=SAME,
+        follow_redirects=False,
+    )
+    assert answered.status_code in (200, 303)
+    # Ann sees her own answer as not picked up; the owner sees nothing said of it
+    assert "not picked up yet" in ann_wall.get(f"/a/{page.id}").text
+    receipts.declare_on(db, None, "ops", row.id, state="working", note="on it")
+    seen_by_ann = ann_wall.get(f"/a/{page.id}").text
+    assert 'class="pickup rstrip' in seen_by_ann
+    seen_by_owner = owner_wall.get(f"/a/{page.id}").text
+    assert "not picked up yet" not in seen_by_owner
+    assert 'class="pickup rstrip' not in seen_by_owner
+    assert "picked this up" not in seen_by_owner
+
+
+def _older_image_writes(db, did, person, **changes):
+    """What an image from before slice 3 does after a migration: it writes only
+    `decision.answer_record` (a new submit, its history entry), never `form_answer`."""
+    with db.connect() as conn:
+        record = conn.execute(
+            "select answer_record from decision where id = %s", (did,)
+        ).fetchone()[0]
+        record = {
+            **record,
+            "answers": {**record["answers"], **changes},
+            "submit_id": "older-image-submit",
+            "history": [
+                *record["history"],
+                {"submit_id": "older-image-submit", "answered_by": person},
+            ],
+        }
+        conn.execute(
+            "update decision set answer_record = %s where id = %s",
+            (jsonb(record), did),
+        )
+    return record
+
+
+@pytest.mark.parametrize("row_is", ["stale", "missing"])
+@pytest.mark.parametrize("write", ["submit", "relay"])
+def test_an_answer_an_older_image_wrote_is_picked_up_by_the_next_write(
+    db, form, owner_wall, row_is, write
+):
+    page, did = form
+    assert _submit(owner_wall, page, {"region": "a", "why": "mine"}).status_code == 200
+    older = _older_image_writes(db, did, "jeremy", why="older")
+    if row_is == "missing":
+        with db.connect() as conn:
+            conn.execute("delete from form_answer where decision_id = %s", (did,))
+    if write == "submit":
+        formanswer.submit(db, did, version=1, values={"region": "b"}, by="jeremy")
+    else:
+        formanswer.relay(
+            db,
+            did,
+            fields_given={"why": "tg"},
+            note="n",
+            source="telegram",
+            recorded_by="ops",
+        )
+    (mine,) = _rows(
+        db, "select answer_record from form_answer where decision_id = %s", did
+    )
+    mine = mine[0]
+    kept = {h["submit_id"] for h in mine["history"]}
+    assert "older-image-submit" in kept and len(mine["history"]) == 3
+    if write == "submit":
+        assert mine["answers"]["why"] == "older" and mine["answers"]["region"] == "b"
+    else:
+        assert mine["answers"]["region"] == "a"
+    # the repaired row is what the agent reads too
+    assert decisions.get_owned(db, "ops", did).answer_record == mine
+    assert older["history"][:2] == mine["history"][:2]
