@@ -20,7 +20,13 @@
 #      to false outside the named repos, so these jobs do not run in the private copy. That holds only
 #      for an `if:` the expression parser can read (an error is not a false), so the whole `if:` is read
 #      with the evaluator's lexer (only space, tab, newline and carriage return are whitespace outside a
-#      string literal; a word is letters, digits and _ - . * +) and grammar, and one it cannot parse is refused. The gate is a conjunct, not just present: `gate || true`,
+#      string literal; a word is letters, digits and _ - . *) and grammar, and one it cannot parse is refused.
+#      A number is read as the lexer reads it: decimal `-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE]-?(0|[1-9][0-9]*))?` or
+#      hex `-?0x(0|[1-9a-fA-F][0-9a-fA-F]*)` (no `+` sign, not even in an exponent, no `0X`, no leading zero), and, as
+#      the parser reads it, an integer must fit 32 bits (-2147483648 to 2147483647, hex included) and a float must
+#      be finite. Any control character (0x00-0x1F, 0x7F) other than tab, newline and carriage return is refused
+#      anywhere in the value, a string literal included, and so is nesting deeper than 50 parentheses.
+#      The gate is a conjunct, not just present: `gate || true`,
 #      `!gate`, `(gate || x) && y` and the literal inside a string are all refused. And no job of
 #      such a file has `runs-on` naming runcove-sec (or an expression, which could): the public
 #      repo's jobs must not claim the dedicated runner.
@@ -436,11 +442,36 @@ def check_sec_job_supply(where, jid, job):
 # string literal only space, \t, \n and \r are whitespace, and a word is made of the characters below.
 # Anything else (another Unicode space, `"`, `@`, `;`, `#`, `$`, ...) is not a token: the evaluator
 # errors, and a job whose `if:` errors is sent to a runner (only a false result skips it).
-WORD_CHARS = re.compile(r"[A-Za-z0-9_.*+-]+")
+# actionlint v1.7.12 expr_lexer.go lexNum/lexHexInt and expr_parser.go parseInt/parseFloat: a number is
+# the two forms below; an integer (no fraction or exponent, hex included) must pass ParseInt(v, 0, 32),
+# a float ParseFloat(v, 64) without overflow to infinity. The lexer has no `+`, no `0X`, no leading zero.
+WORD_CHARS = re.compile(r"[A-Za-z0-9_.*-]+")
 IDENT = r"[A-Za-z_][A-Za-z0-9_-]*"
 WORD_PATH = re.compile(rf"{IDENT}(\.({IDENT}|\*))*")  # a context path, a function name, true/false/null
 WORD_DEREF = re.compile(rf"(\.({IDENT}|\*))+")  # `.name` or `.*` after a call or a parenthesis
-WORD_NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F]+)")
+WORD_HEX = re.compile(r"-?0x(0|[1-9a-fA-F][0-9a-fA-F]*)")
+WORD_DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE]-?(0|[1-9][0-9]*))?")
+INT32 = range(-(2**31), 2**31)
+MAX_DEPTH = 50  # nested parentheses; the recursive reader below uses about ten frames a level
+
+
+def number_problem(w):
+    """None if w is a number the evaluator reads, else why not. Raises nothing."""
+    if WORD_HEX.fullmatch(w):
+        is_int = True
+    elif WORD_DECIMAL.fullmatch(w):
+        is_int = not any(c in w for c in ".eE")
+    else:
+        return f"{w!r} is not a number the evaluator's lexer reads"
+    try:
+        if is_int:
+            if int(w, 0) not in INT32:
+                return f"the integer {w!r} does not fit 32 bits"
+        elif float(w) in (float("inf"), float("-inf")):
+            return f"the number {w!r} is not finite"
+    except ValueError:
+        return f"the number {w!r} is out of range"
+    return None
 
 
 def tokenize(s):
@@ -543,7 +574,10 @@ def check_grammar(toks):
                 raise ValueError("a missing )")
             deref()
         elif t[0] == "w":
-            if WORD_NUMBER.fullmatch(t[1]):
+            if WORD_HEX.fullmatch(t[1]) or WORD_DECIMAL.fullmatch(t[1]):
+                why = number_problem(t[1])
+                if why:
+                    raise ValueError(why)
                 return
             if not WORD_PATH.fullmatch(t[1]):
                 raise ValueError(f"{t[1]!r} is not a name or a number")
@@ -625,6 +659,9 @@ def conjuncts(toks):
 
 def gate_problem(expr):
     """None if expr has the gate as a top-level conjunct, else why not."""
+    for c in expr:
+        if (c < " " and c not in "\t\n\r") or c == "\x7f":
+            return f"the `if:` holds the control character U+{ord(c):04X} [rule: control characters]"
     s = expr  # as written: no strip, so text or whitespace outside ${{ }} is seen
     if "${{" in s or "}}" in s:
         m = re.fullmatch(r"\$\{\{(.*)\}\}", s, re.S)
@@ -635,6 +672,11 @@ def gate_problem(expr):
         return "the `if:` has whitespace or a newline before or after it"
     try:
         toks0 = tokenize(s)
+        depth = 0
+        for t in toks0:
+            depth += (t == ("op", "(")) - (t == ("op", ")"))
+            if depth > MAX_DEPTH:
+                raise ValueError(f"nested too deep: more than {MAX_DEPTH} parentheses")
         check_grammar(toks0)
         toks = strip_parens(toks0)
         if len(split_top(toks, "||")) > 1:
@@ -645,6 +687,8 @@ def gate_problem(expr):
         cs = conjuncts(toks)
     except ValueError as e:
         return f"the `if:` could not be read ({e})"
+    except RecursionError:
+        return "the `if:` could not be read (nested too deep)"
     ok = [is_gate_term(c) or is_gate_disjunction(c) for c in cs]
     if not any(ok):
         more = f" (or the same on {', '.join(GATE_REPOS[1:])}, or a parenthesised || of only such tests)" if len(GATE_REPOS) > 1 else ""
@@ -1364,6 +1408,35 @@ selftest() {
   pubwf "$d" ci.yml "if: $G && env.X" "if: $G && !contains(github.event.head_commit.message, 'a') && github.x.*.y == 1.5" \
     "if: \${{ $G && (a || b) && fromJSON('{}').x != -1 && 0x1F >= 2e3 && !!a }}" "if: $G && a<b"
   case_ "parseable later conjuncts stay accepted" 0 "$d" "4 jobs"
+  # (3a') numbers and control characters, read as the expression lexer and parser read them (actionlint
+  # v1.7.12 expr_lexer.go, expr_parser.go): one refusal row each
+  for probe in "$G && +1 == 1" "$G && x == 1e+5" "$G && x == 0X1F" "$G && x == 01" "$G && x == 00.5" "$G && x == -01" \
+    "$G && x == 1e05" "$G && x == 0x00" "$G && x == 2147483648" "$G && x == 0x80000000" "$G && x == 1e400" \
+    "$G && x == -2147483649" "$G && x == 1e+05" "$G && x == 0x" "$G && x == 1." "$G && x == .5" "$G && x == 1_0"; do
+    pubwf "$d" ci.yml "if: $probe"
+    case_ "number refused: ${probe#"$G && "}" 1 "$d" "could not be read"
+  done
+  pubwf "$d" ci.yml "if: $G && x == 1" "if: $G && x == 0" "if: $G && x == -1" "if: $G && x == 1.5" "if: $G && x == 0.5" \
+    "if: $G && x == 2e3" "if: $G && x == 1e-5" "if: $G && x == 0x1F" "if: $G && x == 0x0" "if: $G && x == 2147483647" \
+    "if: $G && x == -2147483648" "if: $G && x == -0x80000000" "if: $G && x == 0x7fffffff" "if: $G && x == 1e0"
+  case_ "numbers the lexer reads stay accepted (the int32 ends included)" 0 "$d" "14 jobs"
+  # a control character anywhere in the value, a string literal included (a YAML double-quoted scalar carries it)
+  for probe in 'a\0b' 'a\x01b' 'a\x1fb' 'a\x7fb' 'a\e' 'a\bb'; do
+    pubwf "$d" ci.yml "if: \"$G && contains('$probe', 'x')\""
+    case_ "control character refused in a string literal: $probe" 1 "$d" "control character"
+  done
+  pubwf "$d" ci.yml "if: \"$G && x\\0\""
+  case_ "control character refused outside a string literal: NUL" 1 "$d" "control character"
+  pubwf "$d" ci.yml "if: \"$G && contains('a\\tb\\nc\\rd', 'x')\""
+  case_ "tab, newline and carriage return stay accepted inside a string literal" 0 "$d" "1 jobs"
+  # nesting: the reader is recursive, so a bound with a named refusal (and RecursionError caught as well)
+  local deep
+  deep=$(printf '(%.0s' $(seq 400))a$(printf ')%.0s' $(seq 400))
+  pubwf "$d" ci.yml "if: \"$G && $deep\""
+  case_ "400 nested parentheses are refused by name" 1 "$d" "nested too deep"
+  deep=$(printf '(%.0s' $(seq 50))a$(printf ')%.0s' $(seq 50))
+  pubwf "$d" ci.yml "if: \"$G && $deep\""
+  case_ "50 nested parentheses are accepted" 0 "$d" "1 jobs"
   # (3) the gate must be the FIRST top-level conjunct
   d=$tmp/f3
   pubwf "$d" ci.yml "if: \"fromJSON('x') && ($G)\""
