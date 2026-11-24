@@ -1,0 +1,239 @@
+"""An answer and a receipt are one person's (people design, slice 3;
+docs/agent/specs/2026-11-24-people-design.md). Nobody but the owner can sign in yet, so a second
+person here is the `people.current` dependency overridden on the gallery app, with
+`people.OPEN_SIGN_IN` flipped the way step 4 will. What an agent reads over `/api/v1` is unchanged:
+`answer_record` is still the one record, and `addressed_to` is never sent."""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from ream import decisions, formanswer, people, receipts, store
+from ream.app import create_gallery_app
+
+SAME = {"sec-fetch-site": "same-origin"}
+FORM = """
+<form data-artifact-form="rollout">
+  <fieldset name="region"><legend>Region</legend>
+    <label><input type="radio" name="region" value="a" required> eu</label>
+    <label><input type="radio" name="region" value="b"> us</label>
+  </fieldset>
+  <label>Why <input type="text" name="why" maxlength="10"></label>
+</form>
+"""
+OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+ANN = people.Person(id="ann", name="Ann", is_owner=False)
+
+
+@pytest.fixture(autouse=True)
+def _sign_in_open(monkeypatch):
+    monkeypatch.setattr(people, "OPEN_SIGN_IN", True)
+
+
+@pytest.fixture()
+def owner_wall(db):
+    return TestClient(create_gallery_app(db))
+
+
+@pytest.fixture()
+def ann_wall(db):
+    other = create_gallery_app(db)
+    other.dependency_overrides[people.current] = lambda: ANN
+    return TestClient(other)
+
+
+@pytest.fixture()
+def form(db):
+    page = store.publish(
+        db,
+        "ops",
+        "Board",
+        "<!doctype html><html><head><title>P</title></head><body>"
+        + FORM
+        + "</body></html>",
+    )
+    (found,) = (d for d in _decisions(db, page.id) if d["kind"] == "form")
+    return page, found["id"]
+
+
+def _decisions(db, artifact_id):
+    with db.connect() as conn:
+        return [
+            {"id": r[0], "kind": r[1]}
+            for r in conn.execute(
+                "select id, kind from decision where artifact_id = %s", (artifact_id,)
+            ).fetchall()
+        ]
+
+
+def _rows(db, sql, *params):
+    with db.connect() as conn:
+        return [tuple(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def _address(db, decision_id, person):
+    with db.connect() as conn:
+        conn.execute(
+            "update decision set addressed_to = %s where id = %s", (person, decision_id)
+        )
+
+
+def _submit(wall, page, values, version=1):
+    return wall.post(
+        f"/a/{page.id}/forms/rollout",
+        json={"version": version, "values": values},
+        headers=SAME,
+    )
+
+
+def test_may_answer_is_the_person_it_is_addressed_to_else_the_owners(db):
+    owner = people.owner_person()
+    row = decisions.ask(
+        db,
+        agent="ops",
+        artifact_id=store.publish(db, "ops", "T", "<p>x</p>").id,
+        question="q?",
+        options=OPTIONS,
+    )
+    assert row.addressed_to is None
+    assert decisions.may_answer(owner, row) and not decisions.may_answer(ANN, row)
+    ann_s = decisions.DecisionRow(**{**row.__dict__, "addressed_to": "ann"})
+    assert decisions.may_answer(ANN, ann_s) and not decisions.may_answer(owner, ann_s)
+
+
+def test_an_agent_never_reads_whom_a_question_is_addressed_to(db):
+    page = store.publish(db, "ops", "T", "<p>x</p>")
+    row = decisions.ask(
+        db, agent="ops", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    _address(db, row.id, "ann")
+    assert "addressed_to" not in decisions.public(
+        decisions.get_owned(db, "ops", row.id)
+    )
+
+
+def test_each_person_keeps_their_own_record_of_a_form(db, form, owner_wall):
+    page, did = form
+    _address(db, did, None)
+    assert _submit(owner_wall, page, {"region": "a", "why": "mine"}).status_code == 200
+    formanswer.submit(db, did, version=1, values={"region": "b"}, by="ann")
+    got = {
+        r[0]: r[1] for r in _rows(db, "select person, answer_record from form_answer")
+    }
+    assert set(got) == {"jeremy", "ann"}
+    assert (
+        got["jeremy"]["answers"]["region"] == "a"
+        and got["jeremy"]["answers"]["why"] == "mine"
+    )
+    # Ann's record starts from nothing: it does not take Jeremy's answers
+    assert got["ann"]["answers"]["region"] == "b" and got["ann"]["answers"]["why"] == ""
+    assert len(got["jeremy"]["history"]) == 1 and len(got["ann"]["history"]) == 1
+    # a second submit by Jeremy merges with his own, not with Ann's
+    formanswer.submit(db, did, version=1, values={"region": "a"}, by="jeremy")
+    mine = _rows(db, "select answer_record from form_answer where person = 'jeremy'")[
+        0
+    ][0]
+    assert mine["answers"]["why"] == "mine" and len(mine["history"]) == 2
+
+
+def test_the_decisions_own_record_is_the_one_an_agent_reads_and_follows_the_owner(
+    db, form, owner_wall
+):
+    page, did = form
+    _submit(owner_wall, page, {"region": "a"})
+    agent_read = decisions.get_owned(db, "ops", did).answer_record
+    stored = _rows(db, "select answer_record from form_answer where person = 'jeremy'")
+    assert agent_read == stored[0][0]
+
+
+def test_only_the_person_a_form_is_addressed_to_may_submit_it(
+    db, form, owner_wall, ann_wall
+):
+    page, did = form
+    # unaddressed: the owner's
+    assert _submit(ann_wall, page, {"region": "a"}).status_code == 404
+    assert _rows(db, "select * from form_answer") == []
+    assert _submit(owner_wall, page, {"region": "a"}).status_code == 200
+    # addressed to Ann: hers, and no longer the owner's
+    _address(db, did, "ann")
+    assert _submit(owner_wall, page, {"region": "b"}).status_code == 404
+    assert _submit(ann_wall, page, {"region": "b"}).status_code == 200
+    assert sorted(r[0] for r in _rows(db, "select person from form_answer")) == [
+        "ann",
+        "jeremy",
+    ]
+
+
+def test_the_gallery_draws_the_form_with_the_readers_own_answers(
+    db, form, owner_wall, ann_wall
+):
+    page, did = form
+    _address(db, did, None)
+    _submit(owner_wall, page, {"region": "a"})
+    formanswer.submit(db, did, version=1, values={"region": "b"}, by="ann")
+    mine = owner_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
+    hers = ann_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
+    assert mine["carried"]["region"] == "a"
+    assert hers["carried"]["region"] == "b"
+    assert hers["answered"]["answered_by"] == "ann"
+
+
+def test_a_republish_carries_each_persons_record_onto_the_new_version(
+    db, form, owner_wall
+):
+    page, did = form
+    _submit(owner_wall, page, {"region": "a", "why": "keep"})
+    formanswer.submit(db, did, version=1, values={"region": "b"}, by="ann")
+    store.patch(
+        db,
+        "ops",
+        page.id,
+        "<!doctype html><html><head><title>P</title></head><body>"
+        + FORM.replace("Why <", "Because <")
+        + "</body></html>",
+        page.revision,
+    )
+    got = {
+        r[0]: r[1] for r in _rows(db, "select person, answer_record from form_answer")
+    }
+    assert got["jeremy"]["version"] == 2 and got["ann"]["version"] == 2
+    assert got["jeremy"]["answers"]["region"] == "a"
+    assert got["ann"]["answers"]["region"] == "b"
+
+
+def test_a_plain_question_is_answered_only_by_the_person_it_is_for(
+    db, owner_wall, ann_wall
+):
+    page = store.publish(db, "ops", "T", "<p>x</p>")
+    row = decisions.ask(
+        db, agent="ops", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    answer = lambda wall: wall.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers=SAME,
+        follow_redirects=False,
+    )
+    assert answer(ann_wall).status_code == 404
+    assert decisions.get_owned(db, "ops", row.id).answer is None
+    _address(db, row.id, "ann")
+    assert answer(owner_wall).status_code == 404
+    assert answer(ann_wall).status_code in (200, 303)
+    assert decisions.get_owned(db, "ops", row.id).answered_by == "ann"
+
+
+def test_a_receipt_is_about_the_answer_of_the_person_who_gave_it(db, owner_wall):
+    page = store.publish(db, "ops", "T", "<p>x</p>")
+    row = decisions.ask(
+        db, agent="ops", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    owner_wall.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers=SAME,
+        follow_redirects=False,
+    )
+    receipts.declare_on(db, None, "ops", row.id, state="working", note="on it")
+    assert _rows(db, "select person from receipt") == [("jeremy",)]
+    # the agent's own read of the receipt is as it was: no person in it
+    with db.connect() as conn:
+        assert all("person" not in r for r in receipts.history(conn, row.id))

@@ -186,16 +186,59 @@ def test_an_unseen_reply_is_unseen_per_person(db):
         thread_root=root.id,
         agent="seat",
     )
-    # Whose thread a reply is under (`comments._HIS_THREAD`) is still any human's, not the
-    # reading person's; slice 3 settles that, so this asserts only that the READ MARK is
-    # per person: one person opening the page never clears another's unseen reply.
+    # The thread is jeremy's (`comments._HIS_THREAD`), so the reply is his to see and no one
+    # else's; and the READ MARK is per person: one opening the page never clears another's.
     assert inbox.count(db, person="jeremy")[0] == 1
+    assert inbox.count(db, person="ann")[0] == 0
     store.mark_read(db, page.id, "ann")
     assert inbox.count(db, person="ann")[0] == 0
     assert inbox.count(db, person="jeremy")[0] == 1
     assert [i.kind for i in inbox.gather(db, person="jeremy")[0]] == ["reply"]
     store.mark_read(db, page.id, "jeremy")
     assert inbox.count(db, person="jeremy")[0] == 0
+
+
+def test_a_reply_is_under_the_thread_of_the_person_who_wrote_in_it(db):
+    """`comments._HIS_THREAD` asks whose thread it is: a reply under Ann's comment is Ann's to
+    see, not Jeremy's, though Jeremy has read nothing on the page."""
+    page = _publish(db, "Thread")
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="ann", body="hm"
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="answer",
+        thread_root=root.id,
+        agent="seat",
+    )
+    assert inbox.count(db, person="ann")[0] == 1
+    assert inbox.count(db, person="jeremy")[0] == 0
+    assert [i.kind for i in inbox.gather(db, person="ann")[0]] == ["reply"]
+    assert inbox.gather(db, person="jeremy")[0] == []
+
+
+def test_the_wall_marks_a_reply_unseen_for_the_thread_owner_only(
+    db, owner_wall, ann_wall
+):
+    page = _publish(db, "Thread")
+    for wall in (owner_wall, ann_wall):
+        wall.get(f"/a/{page.id}")
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="ann", body="hm"
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="answer",
+        thread_root=root.id,
+        agent="seat",
+    )
+    assert _unread(ann_wall) and not _unread(owner_wall)
 
 
 def test_a_frame_pass_records_who_it_was_minted_for(db, owner_wall, ann_wall):
