@@ -1,4 +1,4 @@
-"""Every call of `settings.owner_id()` in `src/ream` is classified here (people design, slice 1;
+"""Every read of the owner id (`settings.owner_id()`, `.owner_id` on a settings object, an import of `owner_id`) in `src/ream` is classified here (people design, slice 1;
 docs/agent/specs/2026-11-24-people-design.md), the way `test_scan_call_sites.py` classifies the
 scan's call sites. The owner is person #1; as more people can sign in, each call has to mean one
 of three things, and a new call fails this test until someone says which:
@@ -39,6 +39,17 @@ SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("partner_in.py", "answer_here"): (PAGE_OWNER, 3),
     ("readside.py", "answer_here"): (PAGE_OWNER, 2),
     ("gallery.py", "_bubble"): (REQUEST, 1),
+    # Attribute reads, not calls.
+    ("folders.py", "his"): (
+        PAGE_OWNER,
+        1,
+    ),  # the folder owner; the gallery's actor is person.id
+    ("keys.py", "reserved_agent_names"): (SEED, 1),
+    ("oidc.py", "owner_login"): (PAGE_OWNER, 1),
+    ("partner.py", "answered_body"): (PAGE_OWNER, 1),
+    ("textvars.py", "variables"): (SEED, 1),
+    ("people.py", "owner_person"): (SEED, 1),
+    ("serve.py", "app_from_env"): (SEED, 1),
 }
 
 
@@ -54,9 +65,14 @@ def _found() -> dict[tuple[str, str], int]:
             for child in ast.iter_child_nodes(node)
         }
         for node in ast.walk(tree):
+            # Every read of an `owner_id` attribute (`settings.owner_id()`, `settings.current()
+            # .owner_id`, `cfg.owner_id`) and every `from ... import owner_id`.
             if not (
-                isinstance(node, ast.Call)
-                and ast.unparse(node.func) == "settings.owner_id"
+                (isinstance(node, ast.Attribute) and node.attr == "owner_id")
+                or (
+                    isinstance(node, ast.ImportFrom)
+                    and any(a.name == "owner_id" for a in node.names)
+                )
             ):
                 continue
             up = node
@@ -84,3 +100,41 @@ def test_a_gallery_handler_takes_the_person_from_people_current():
     only remaining call is a render helper with no request to ask."""
     gallery = {k for k in _found() if k[0] == "gallery.py"}
     assert gallery == {("gallery.py", "_bubble")}
+
+
+def _writes_and_owner_only():
+    tree = ast.parse((SRC / "gallery.py").read_text())
+    routes = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for dec in node.decorator_list:
+            if (
+                isinstance(dec, ast.Call)
+                and isinstance(dec.func, ast.Attribute)
+                and ast.unparse(dec.func.value) == "router"
+            ):
+                routes.append(
+                    (dec.func.attr, ast.unparse(dec.args[0]), ast.unparse(node.args))
+                )
+    return routes
+
+
+# Routes that take no person, with why. None today: every write names its person.
+NO_PERSON_WRITES: dict[str, str] = {}
+# Reads that are the owner's alone (they show keys and consent), not just writes.
+OWNER_ONLY_READS = {"/machines", "/connect"}
+
+
+def test_every_gallery_write_names_its_person():
+    routes = _writes_and_owner_only()
+    assert any(m == "post" for m, _, _ in routes), "the walk is broken"
+    for method, path, args in routes:
+        if method in ("post", "put", "patch", "delete"):
+            ok = "people.CURRENT" in args or "people.REQUIRE_OWNER" in args
+            assert ok or path in NO_PERSON_WRITES, (
+                f"{method.upper()} {path} takes neither people.CURRENT nor"
+                " people.REQUIRE_OWNER: say whose act it is"
+            )
+        if method == "get" and path in OWNER_ONLY_READS:
+            assert "people.REQUIRE_OWNER" in args, path

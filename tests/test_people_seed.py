@@ -46,11 +46,11 @@ def test_the_pin_the_first_sign_in_wrote_is_copied_once(db):
     with db.connect() as conn:
         conn.execute(
             "insert into service_meta (key, value) values ('oidc_owner_sub', %s)",
-            ("https://idp.example/realm abc-123",),
+            ("https://idp.example/realm abc 123",),
         )
     owner.check(db, "jeremy")
     assert [tuple(r)[:3] for r in _rows(db)] == [
-        ("jeremy", "https://idp.example/realm", "abc-123")
+        ("jeremy", "https://idp.example/realm", "abc 123")
     ]
     owner.check(db, "jeremy")
     assert len(_rows(db)) == 1

@@ -102,7 +102,7 @@ def seed_person(conn, owner_id: str) -> None:
         "select value from service_meta where key = %s", ("oidc_owner_sub",)
     ).fetchone()
     if pin and " " in pin[0]:
-        issuer, subject = pin[0].rsplit(" ", 1)
+        issuer, subject = pin[0].split(" ", 1)
         conn.execute(
             "update person set issuer = %s, subject = %s"
             " where id = %s and issuer is null and subject is null",

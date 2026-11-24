@@ -6313,7 +6313,12 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.post("/a/{artifact_id}/archive")
-    def archive_page(artifact_id: str, request: Request, archived: str = Form("1")):
+    def archive_page(
+        artifact_id: str,
+        request: Request,
+        archived: str = Form("1"),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Take a page off the wall, or put it back.
 
         Jeremy, 20 Sep 2026: "I would also like the ability to archive so that
@@ -6337,7 +6342,12 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/agents")
-    def agents_page(artifact_id: str, request: Request, can_read: str = Form("1")):
+    def agents_page(
+        artifact_id: str,
+        request: Request,
+        can_read: str = Form("1"),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Open a page to every agent in his space, or close it to him and its
         publisher (homelab-ij8.105, his ruling). Same guard as every other state
         change made with his session."""
@@ -6347,7 +6357,12 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/pin")
-    def pin_page(artifact_id: str, request: Request, pinned: str = Form("1")):
+    def pin_page(
+        artifact_id: str,
+        request: Request,
+        pinned: str = Form("1"),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Pin a page to the front of the wall, or unpin it.
 
         Behind the same same-origin guard as the rest, for the same reason: a
@@ -6364,7 +6379,11 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse("/", status_code=303)
 
     @router.post("/a/{artifact_id}/duplicate")
-    def duplicate_page(artifact_id: str, request: Request):
+    def duplicate_page(
+        artifact_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Copy a page, and go straight to the copy.
 
         Straight to it, not back to the wall: the only reason to duplicate a
@@ -6381,7 +6400,11 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse(f"/a/{copy.id}", status_code=303)
 
     @router.post("/a/{artifact_id}/delete")
-    def delete_page(artifact_id: str, request: Request):
+    def delete_page(
+        artifact_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Delete a page. Recoverable for thirty days.
 
         Destroys nothing: the body, every version and every decision with his
@@ -6394,7 +6417,11 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse("/?filter=deleted", status_code=303)
 
     @router.post("/a/{artifact_id}/restore")
-    def restore_page(artifact_id: str, request: Request):
+    def restore_page(
+        artifact_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Put a deleted page back, with its address and its history intact."""
         _same_origin_write(request)
         if not store.set_deleted(db, artifact_id, False, agent=None):
@@ -6402,7 +6429,12 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/destroy")
-    def destroy_page(artifact_id: str, request: Request, confirm: str = Form("")):
+    def destroy_page(
+        artifact_id: str,
+        request: Request,
+        confirm: str = Form(""),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Remove a page and everything under it, for good.
 
         Takes a typed confirmation. Not because a second click is meaningful --
@@ -6419,7 +6451,12 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse("/?filter=deleted", status_code=303)
 
     @router.post("/a/{artifact_id}/rename")
-    def rename_page(artifact_id: str, request: Request, title: str = Form(...)):
+    def rename_page(
+        artifact_id: str,
+        request: Request,
+        title: str = Form(...),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Give a page a different name, without republishing it.
 
         Renaming has only ever been possible by sending the whole body again
@@ -6507,6 +6544,7 @@ def gallery_router(db: Database) -> APIRouter:
         request: Request,
         folder: str = Form(""),
         new_title: str = Form(""),
+        _person: people.Person = people.REQUIRE_OWNER,
     ):
         """File a page in a folder, make a new folder for it, or take it out (`folder` empty).
         Lands on the wall: the answer to "did that work?" is the page gone behind its folder."""
@@ -6566,6 +6604,7 @@ def gallery_router(db: Database) -> APIRouter:
         folder: str = Form(""),
         new_title: str = Form(""),
         back: str = Form("/"),
+        _person: people.Person = people.REQUIRE_OWNER,
     ):
         """What the ticked pages do. `do=choose` draws a page of choices and changes nothing;
         `do=out` takes them out of their folders; `do=move` files them in `folder` or in a
@@ -6690,7 +6729,12 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.post("/f/{folder_id}/rename")
-    def folder_rename(folder_id: str, request: Request, title: str = Form(...)):
+    def folder_rename(
+        folder_id: str,
+        request: Request,
+        title: str = Form(...),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         """Rename a folder's title. The slug, which agents type, is left alone."""
         _same_origin_write(request)
         _fid, owner, slug, _title, _archived = _folder_or_404(folder_id)
@@ -6704,7 +6748,9 @@ def gallery_router(db: Database) -> APIRouter:
         return RedirectResponse(f"/f/{folder_id}", status_code=303)
 
     @router.get("/f/{folder_id}/archive", response_class=HTMLResponse)
-    def folder_archive_sheet(folder_id: str):
+    def folder_archive_sheet(
+        folder_id: str, person: people.Person = people.REQUIRE_OWNER
+    ):
         """Archive folder asks first: the page count and the questions it will set aside, from
         the same preview the agent API uses. Nothing changes until the Archive button."""
         _fid, owner, slug, title, archived = _folder_or_404(folder_id)
@@ -6712,7 +6758,7 @@ def gallery_router(db: Database) -> APIRouter:
         if archived is not None:
             return RedirectResponse(f"/f/{folder_id}", status_code=303)
         preview = store.set_folder_archived(
-            db, owner, slug, True, confirm=False, actor=folders.his()
+            db, owner, slug, True, confirm=False, actor=person.id
         )
         if preview is None:
             raise HTTPException(404, "no such folder")
@@ -6748,6 +6794,7 @@ def gallery_router(db: Database) -> APIRouter:
         request: Request,
         archived: str = Form("1"),
         confirm: str = Form(""),
+        person: people.Person = people.REQUIRE_OWNER,
     ):
         """Archive a folder and its pages (questions set aside, agents told), or unarchive it.
         Archiving without `confirm` changes nothing and sends him to the sheet."""
@@ -6756,7 +6803,7 @@ def gallery_router(db: Database) -> APIRouter:
         if archived == "1" and confirm != "1":
             return RedirectResponse(f"/f/{folder_id}/archive", status_code=303)
         store.set_folder_archived(
-            db, owner, slug, archived == "1", confirm=True, actor=folders.his()
+            db, owner, slug, archived == "1", confirm=True, actor=person.id
         )
         return RedirectResponse("/", status_code=303)
 
@@ -7218,7 +7265,11 @@ def gallery_router(db: Database) -> APIRouter:
         return _share_response(artifact_id)
 
     @router.post("/a/{artifact_id}/share", response_class=HTMLResponse)
-    def share_start(artifact_id: str, request: Request) -> HTMLResponse:
+    def share_start(
+        artifact_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
         """His deliberate act, and only his: there is no agent route for it."""
         _same_origin_write(request)
         if store.start_sharing(db, artifact_id) is None:
@@ -7230,7 +7281,10 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.post("/a/{artifact_id}/share/email", response_class=HTMLResponse)
     def share_email(
-        artifact_id: str, request: Request, email: str = Form("")
+        artifact_id: str,
+        request: Request,
+        email: str = Form(""),
+        _person: people.Person = people.REQUIRE_OWNER,
     ) -> HTMLResponse:
         """His act only: send one person their own link (homelab-ij8.16)."""
         _same_origin_write(request)
@@ -7276,7 +7330,10 @@ def gallery_router(db: Database) -> APIRouter:
         "/a/{artifact_id}/share/email/{share_id}/withdraw", response_class=HTMLResponse
     )
     def share_email_withdraw(
-        artifact_id: str, share_id: str, request: Request
+        artifact_id: str,
+        share_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
     ) -> HTMLResponse:
         _same_origin_write(request)
         done = email_share.withdraw(db, artifact_id, share_id)
@@ -7290,7 +7347,11 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.post("/a/{artifact_id}/share/stop", response_class=HTMLResponse)
-    def share_stop(artifact_id: str, request: Request) -> HTMLResponse:
+    def share_stop(
+        artifact_id: str,
+        request: Request,
+        _person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
         _same_origin_write(request)
         stopped = store.stop_sharing(db, artifact_id)
         return _share_response(
@@ -7346,7 +7407,10 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.post("/a/{artifact_id}/move", response_class=HTMLResponse)
     def move_page_do(
-        artifact_id: str, request: Request, to: str = Form("")
+        artifact_id: str,
+        request: Request,
+        to: str = Form(""),
+        _person: people.Person = people.REQUIRE_OWNER,
     ) -> HTMLResponse:
         """His wall, any page (homelab-ij8.87): same operation the agents have."""
         _same_origin_write(request)
@@ -7380,7 +7444,12 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.post("/machines/{key_id}/rename")
-    def machine_rename(key_id: str, request: Request, label: str = Form("")):
+    def machine_rename(
+        key_id: str,
+        request: Request,
+        label: str = Form(""),
+        _person: people.Person = people.REQUIRE_OWNER,
+    ):
         _same_origin_write(request)
         cleaned = " ".join(label.split())[:60]
         if not keys.set_label(db, key_id, cleaned):
@@ -7463,7 +7532,9 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/connect", response_class=HTMLResponse)
-    def connect_page(code: str = "") -> HTMLResponse:
+    def connect_page(
+        code: str = "", _person: people.Person = people.REQUIRE_OWNER
+    ) -> HTMLResponse:
         """Step one (no code) and step two (a code he typed). homelab-ij8.102."""
         pending, message, alias_note, taken = None, "", "", ""
         if code.strip():
@@ -7498,6 +7569,7 @@ def gallery_router(db: Database) -> APIRouter:
         name: str = Form(""),
         choice: str = Form(""),
         _guard: None = Depends(_same_origin_write),
+        _person: people.Person = people.REQUIRE_OWNER,
     ) -> HTMLResponse:
         pending = connect.find(db, code)
         if pending is None or pending.id != request_id:
@@ -7595,6 +7667,7 @@ def gallery_router(db: Database) -> APIRouter:
         request_id: str = Form(...),
         code: str = Form(...),
         _guard: None = Depends(_same_origin_write),
+        _person: people.Person = people.REQUIRE_OWNER,
     ) -> HTMLResponse:
         pending = connect.find(db, code)
         if pending is not None and pending.id == request_id:
@@ -7720,6 +7793,7 @@ def gallery_router(db: Database) -> APIRouter:
         decision_id: str,
         mode: str = Form(...),
         _guard: None = Depends(_same_origin_write),
+        _person: people.Person = people.REQUIRE_OWNER,
     ):
         try:
             artifact_id, _released = holds.set_review_mode(db, decision_id, mode)
@@ -7825,6 +7899,7 @@ def gallery_router(db: Database) -> APIRouter:
         letter: str = Form(...),
         note: str = Form(""),
         _guard: None = Depends(_same_origin_write),
+        _person: people.Person = people.REQUIRE_OWNER,
     ):
         """He answers a question whose home is the partner. The answer is
         recorded as PENDING and sent to the home; it settles when the home says
