@@ -86,6 +86,7 @@ from ream.mcp import (
     ResourceTemplate,
     ToolError,
     ToolOutput,
+    comment_image_label,
     matches,
     one_of,
     tool,
@@ -749,8 +750,19 @@ def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     ),
 )
 def _comment_image(call: Call, arguments: dict[str, Any]) -> ToolOutput:
-    comment_id = _str(arguments, "comment_id", required=True)
-    image_id = _str(arguments, "image_id", required=True)
+    _only(arguments, {"comment_id", "image_id"})
+    # Any string is looked up, however long or odd: a bad id is `no such image`, as on the
+    # route, never a different sentence for its shape. Only a missing or non-string one is
+    # a malformed call.
+    ids = []
+    for name in ("comment_id", "image_id"):
+        value = arguments.get(name)
+        if value is None:
+            raise ToolError(f"{name} is required")
+        if not isinstance(value, str):
+            raise ToolError(f"{name} must be a string")
+        ids.append(value)
+    comment_id, image_id = ids
     # The route's own lookup (`GET /comments/{id}/images/{id}`): every refusal, an
     # unreadable page and an unknown id included, is the same sentence.
     found = image_store.for_reader_by(call.db, call.agent, comment_id, image_id)
@@ -775,6 +787,7 @@ def _comment_image(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         },
         written_by=author,
         images=((content_type, data),),
+        image_labeller=comment_image_label,
     )
 
 

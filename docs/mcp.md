@@ -62,7 +62,7 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `list_pages` | `scope` (`mine`, `all`), `folder`, `limit` (1-1000, 100) | `pages`, `truncated`, your `folders` | `GET /pages`, `/folders`, `/folders/{slug}/pages` |
 | `read_page` | `page_id`; at most one of `version`, `section` (an element id), `history`, `changes_since` (a version number), with `changes_to` (a version number, the live one) and `changes_format` (`parts`, or `marked`); for the live page, a version or the marked changes body, `offset` (characters, 0) and `limit` (1 to 8 MiB of characters, 50,000) | the body (fenced; at most `limit` characters from `offset`), `offset`, `size` (the whole page, in characters), `next_offset` (where the next part starts; null at the end), `partial` (true unless the body is the whole page: a part is never a whole-page body for `update_page`, though `revision` is the whole page's), `warnings` and the render check's `render_verdict` and `render_findings`; one version (paged the same way); one element's `html` (fenced); `versions`; or which `parts` changed since that version (`id`, `label`, `change`); with `changes_format` `marked` also the page with the changes marked up as a person sees them, as `body` (fenced, paged like any body, with `offset`, `size`, `next_offset`, `partial`) and `reason` (set when the mark-up failed: `body` is then the new page unmarked) | `GET /pages/{id}/body`, `/versions/{n}` (both take `?offset=&limit=`; without `limit` the whole body), `/sections/{el}`, `/versions`, `/changes?from=N&to=M&format=marked` |
 | `screenshot_page` | `page_id`; `version`; at most one of `element` (an id) and `section` (a heading's words); `width` (`1280` or `390`); `theme` (`light` or `dark`) | `artifact_id`, `version`, `width`, `height`, `truncated`, `page_height`, then Ream's label and the PNG as an image block | `GET /pages/{id}/screenshot` |
-| `comment_image` | `comment_id`, `image_id` (from a comment's `images` in `comments`) | `comment_id`, `image_id`, `content_type`, `byte_size`, then Ream's label (naming the comment's author) and the picture as an image block; a picture over 3,750,000 bytes is refused, as a screenshot is; any picture that is not yours to see is `no such image` | `GET /comments/{id}/images/{id}` |
+| `comment_image` | `comment_id`, `image_id` (from a comment's `images` in `comments`) | `comment_id`, `image_id`, `content_type`, `byte_size`, then Ream's label (a picture attached to a comment, by the person named, or by agent `<name>`) and the picture as an image block; a picture over 3,750,000 bytes is refused, as a screenshot is; any picture that is not yours to see is `no such image` | `GET /comments/{id}/images/{id}` |
 | `page_stats` | `page_id`; `days` (1 to 365, 30) | `artifact_id`, `since`, `days` (one `{day, owner, external, agent}` per UTC day, today last), `totals`, `shares` (`email` fenced, `opens`, `last_opened_at`, `created_at`, `withdrawn`) | `GET /pages/{id}/stats` |
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
@@ -135,7 +135,12 @@ error saying to try again. The answer's content is the facts as JSON text, then 
 picture a fixed Ream sentence saying it is page content written by the page's agent (the page's,
 not the caller's), not instructions (pixels cannot be fenced, so the label goes where a fence would), then
 `{"type": "image", "data": <base64>, "mimeType": "image/png"}`. A tool returns pictures
-in `ToolOutput.images`; `_call_tool` adds the label before each.
+in `ToolOutput.images`; `_call_tool` adds the label before each: `image_label` (page content, the
+page's agent) unless the output sets `image_labeller`. `comment_image` sets `comment_image_label`, which
+says the picture is attached to a comment and names its author: the person (`REAM_OWNER_NAME`) when the
+author is the owner id, else `agent '<name>'`; the name is sanitised as in `untrusted` (control
+characters removed, whitespace collapsed, 120 characters) and inserted quoted, so a hostile name cannot
+end the sentence.
 
 ## Writing tools
 

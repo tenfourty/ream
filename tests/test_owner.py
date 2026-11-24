@@ -468,8 +468,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 23 Nov 2026 for small edits by quoted text (one paragraph under "Changing one part of a live page": `edits` on PATCH and on update_page; re-taken again for the review: `matches` is 0 or 2, and a page over 512 KiB with an open question takes no edits), and again for volatile text (`<!--ream:volatile-->` spans: one paragraph under the timer-board notes); and agents.txt and skill.md re-taken again on 23 Nov 2026 for screenshots of any page the caller can read (the agents.txt section and the skill.md paragraph said "your own page"); agent.json did not move.
 # agents.txt re-taken on 23 Nov 2026 for the marked changes view over MCP (the changes paragraph says `read_page` takes `changes_to` and `changes_format marked`); skill.md and agent.json did not move. Re-taken again for the MCP organise_folder tool (its name in the MCP tool list). Re-taken again for the MCP organise_folder tool (its name in the MCP tool list).
 # agents.txt re-taken again on 23 Nov 2026 for the MCP transfer_page tool (its name in the MCP tool list); skill.md and agent.json did not move.
+# agents.txt re-taken on 24 Nov 2026: comment_image named in the MCP tool list; skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "25dbbfaf227a1794cf0ee57818410cfe03e44c99fa195b143fed9f869a38d589",
+    "agents.txt": "0850bd853e7bf5c30a6b1bcbae336e21b9b5c13ee0fb43d4c8b4fd2f2adfa6be",
     "skill.md": "46e99b142ada0f82581fc4f4a69b5a7f0ad3dce66fc515339e755a26e065e4ef",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
