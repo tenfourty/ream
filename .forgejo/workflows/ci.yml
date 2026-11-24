@@ -525,6 +525,76 @@ jobs:
           echo "ref=${renderer}@${digest}" >> "$GITHUB_OUTPUT"
           echo "PUBLISHED renderer image=${renderer} digest=${digest}"
 
+      # Each image above is also pushed under its Ream name (step 3 of the rename; the old names
+      # stay what this job outputs and what `core-lock` reads, until the contract step):
+      #   artifacts -> ream, artifacts-core -> ream-core, artifacts-renderer -> ream-renderer.
+      # Each is tagged from the exact digest the step above read back from the registry, pushed,
+      # and read back again; the job fails unless the new name's digest is the old name's. No
+      # `continue-on-error`: a Ream name that cannot be shown to hold the same image fails the job.
+      # The core image's Ream name must also differ from the full image's, as the core step
+      # requires of the old names. A re-run (nothing built by this run) pushes nothing, as above.
+      # The PUBLISHED lines carry the Ream name's label (`PUBLISHED ream`, `PUBLISHED ream-core`,
+      # `PUBLISHED ream-renderer`), so none matches `PUBLISHED image=`, `PUBLISHED core` or
+      # `PUBLISHED renderer`, which the pin lander reads exactly once each.
+      - name: push Ream-named images
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+          BUILD_REF: ${{ steps.build.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
+          CORE_REF: ${{ steps.core.outputs.ref }}
+          RENDERER_REF: ${{ steps.renderer.outputs.ref }}
+        run: |
+          set -eu
+          if [ "$BUILD_REUSED" != 0 ]; then
+            echo "REUSED ream names: the images were not built by this run (reused=${BUILD_REUSED:-unset}), so none is pushed or certified under a Ream name"
+            exit 0
+          fi
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          sha12="${GITHUB_SHA:0:12}"
+          repo="git.tenfourty.site/runcove"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u artifacts-publisher --password-stdin
+          # publish <old repo name> <old ref: repo:tag@sha256:digest> <new repo name>
+          # Sets new_digest. Runs in this shell (never in $(...)), so its exit stops the step.
+          publish() {
+            old_name="$1"; old_ref="$2"; new_name="$3"
+            new="${repo}/${new_name}:${sha12}"
+            case "$old_ref" in
+              "${repo}/${old_name}:${sha12}@sha256:"*) ;;
+              *) echo "unexpected ref for ${old_name}: ${old_ref}" >&2; exit 1 ;;
+            esac
+            want="${old_ref##*@}"
+            [ -n "$want" ] || { echo "no digest in ${old_ref}" >&2; exit 1; }
+            if pulled=$(docker pull "$new" 2>&1); then
+              echo "$new already exists in the registry: refusing to move it" >&2
+              exit 1
+            fi
+            case "$pulled" in
+              *"manifest unknown"*|*"not found"*) ;;
+              *) echo "$pulled" >&2; echo "could not tell whether $new exists" >&2; exit 1 ;;
+            esac
+            docker tag "$old_ref" "$new"
+            docker push "$new"
+            new_digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$new" \
+              | grep -m1 "^${repo}/${new_name}@sha256:" | cut -d@ -f2)
+            [ -n "$new_digest" ] || { echo "no registry digest for $new after the push" >&2; exit 1; }
+            [ "$new_digest" = "$want" ] || { echo "$new has digest ${new_digest}, but ${old_name} has ${want}" >&2; exit 1; }
+            echo "PUBLISHED ${new_name} image=${new} digest=${new_digest} same-as=${repo}/${old_name}:${sha12}"
+          }
+          publish artifacts "$BUILD_REF" ream
+          full_digest="$new_digest"
+          if [ -z "$CORE_REF" ]; then
+            echo "the core image step published no ref in a run that built the images" >&2
+            exit 1
+          fi
+          publish artifacts-core "$CORE_REF" ream-core
+          [ "$new_digest" != "$full_digest" ] || { echo "ream-core digest equals ream's: the core image must be the app target" >&2; exit 1; }
+          if [ -n "$RENDERER_REF" ]; then
+            publish artifacts-renderer "$RENDERER_REF" ream-renderer
+          else
+            echo "SKIPPED ream-renderer: the renderer step published no ref (it does not fail the job), so there is nothing to push under the Ream name"
+          fi
+
       # The browser-free image, proved by running it: the image pushed as `artifacts-core` (the
       # step above built it `--target app`) must find no browser inside it; then the same
       # assertion on the full image, which must find one, so an empty result cannot pass for a

@@ -18,6 +18,15 @@ here:
    published but `core-lock` is skipped for that commit, and a re-run does not recover it (the re-run
    finds the pushed tag and reuses it, so `core_ref` is empty). Only a new commit on main unblocks the
    deploy.
+   **Under the Ream names too (step 3 of the rename).** The step `push Ream-named images` also pushes each
+   image under its new name, with the same digest: `runcove/ream:<sha12>`, `runcove/ream-core:<sha12>` and
+   `runcove/ream-renderer:<sha12>`. It tags each from the digest the old step read back, pushes, reads the
+   digest back from the registry and fails the job unless it equals the old name's (and unless
+   `ream-core`'s differs from `ream`'s). It prints `PUBLISHED ream image=... digest=...`,
+   `PUBLISHED ream-core image=...` and `PUBLISHED ream-renderer image=...`; none of them is a line the
+   pin lander reads. It pushes nothing on a re-run. The old names stay the job's outputs and what
+   `core-lock` moves; `core-lock` switches to the new names, and the old names stop, in a later step (the
+   contract step).
 2. `core-lock` runs `.forgejo/scripts/core-lock-pr.sh`: it force-pushes branch `core-lock/next` on
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that

@@ -203,7 +203,9 @@ unattributed until its next real change -- an identical republish mints no versi
 
 **A push to `main` asks to deploy.** CI tests, builds the `app` image (no browser) and pushes it as
 `runcove/artifacts-core:<sha12>`, and the `full` image (the browser) as `runcove/artifacts:<sha12>` and
-`runcove/artifacts-renderer:<sha12>`; the core and renderer digests differ: CI refuses a core digest equal to the full (renderer) one, and
+`runcove/artifacts-renderer:<sha12>`, and each of the three is also pushed as `runcove/ream:<sha12>`, `runcove/ream-core:<sha12>`
+and `runcove/ream-renderer:<sha12>` with the same digest (the job fails if a Ream name's digest differs; the old names stay what the job outputs
+and `core-lock` reads, until the contract step); the core and renderer digests differ: CI refuses a core digest equal to the full (renderer) one, and
 ream-homelab's pin (`pin-pr.sh --check-renderer-lock`) is to refuse a `renderer.lock` digest equal to `core.lock`'s (that check is
 added in ream-homelab, separately from this repo's change). Then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
 `CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image (and `renderer.lock` to `runcove/artifacts-renderer:<sha12>` when that image was published), set to merge when that

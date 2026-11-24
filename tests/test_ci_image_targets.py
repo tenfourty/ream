@@ -45,6 +45,7 @@ def test_the_steps_this_file_reads_exist():
         "build and push",
         "push core image",
         "push renderer image",
+        "push Ream-named images",
         "core image has no browser",
     } <= set(_image_steps())
 
@@ -68,6 +69,52 @@ def test_the_renderer_image_is_the_full_image_and_is_not_rebuilt_as_app():
     assert 'docker tag "$BUILD_REF" "$renderer"' in step
     assert "--target app" not in step
     assert '[ "$digest" = "${BUILD_REF##*@}" ]' in step
+
+
+def test_every_image_is_also_pushed_under_its_ream_name_with_the_same_digest():
+    step = _image_steps()["push Ream-named images"]
+    # one push per old name, tagged from the ref the old step output (an exact digest)
+    assert 'publish artifacts "$BUILD_REF" ream\n' in step
+    assert 'publish artifacts-core "$CORE_REF" ream-core\n' in step
+    assert 'publish artifacts-renderer "$RENDERER_REF" ream-renderer\n' in step
+    assert 'docker tag "$old_ref" "$new"' in step and 'docker push "$new"' in step
+    assert "docker build" not in step
+    # the digest is read back from the registry and must equal the old name's, or the job fails
+    assert "RepoDigests" in step
+    assert '[ "$new_digest" = "$want" ] ||' in step and "exit 1" in step
+    assert 'want="${old_ref##*@}"' in step
+    # core still never has the full image's digest, under the Ream names either
+    assert '[ "$new_digest" != "$full_digest" ]' in step
+    # a PUBLISHED-style line per name, none of which is a line the pin lander already reads
+    assert 'echo "PUBLISHED ${new_name} image=${new} digest=${new_digest}' in step
+    assert "PUBLISHED image=" not in step
+    assert "PUBLISHED core" not in step and "PUBLISHED renderer" not in step
+
+
+def test_the_ream_name_step_runs_after_the_old_pushes_and_cannot_be_ignored():
+    steps = _image_steps()
+    step = steps["push Ream-named images"]
+    assert "continue-on-error" not in step
+    assert not re.search(r"^\s*if:", step, re.MULTILINE)
+    names = list(steps)
+    assert names.index("push Ream-named images") > names.index("push renderer image")
+    assert names.index("push Ream-named images") < names.index(
+        "core image has no browser"
+    )
+    # a re-run (nothing built by this run) pushes nothing, as for the old names
+    assert '[ "$BUILD_REUSED" != 0 ]' in step
+    # a fresh run with no core ref fails
+    assert '[ -z "$CORE_REF" ]' in step
+
+
+def test_the_job_outputs_still_name_the_old_images_only():
+    job = CI.read_text().split("\n  image:\n", 1)[1].split("\n    steps:\n", 1)[0]
+    assert "ref: ${{ steps.build.outputs.ref }}" in job
+    assert "core_ref: ${{ steps.core.outputs.ref }}" in job
+    assert "renderer_ref: ${{ steps.renderer.outputs.ref }}" in job
+    assert "ream" not in "\n".join(
+        ln for ln in job.splitlines() if "outputs" in ln and "steps." in ln
+    )
 
 
 def test_the_browser_check_runs_the_pushed_core_image_not_a_build_of_its_own():
