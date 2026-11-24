@@ -42,6 +42,12 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("folder_alias.owner", ""),
     # Person #1, the owner (people design, slice 1). The other people's ids are not the owner's.
     ("person.id", ""),
+    # Per-person state (slice 2): what the owner has read, prefers and pinned, and the passes
+    # minted for them.
+    ("page_read.person", ""),
+    ("human_pref.person", ""),
+    ("page_pin.person", ""),
+    ("frame_pass.person", ""),
 )
 
 

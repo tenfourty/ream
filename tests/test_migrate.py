@@ -375,9 +375,9 @@ def _seed(database: Database) -> None:
             "frame_pass",
             (
                 "token_sha256, artifact_id, version, expires_at, used_at, created_at,"
-                " changes_from"
+                " changes_from, person"
             ),
-            ["c" * 64, "a1", 1, T1, None, T0, None],
+            ["c" * 64, "a1", 1, T1, None, T0, None, "jeremy"],
         ),
         (
             "connect_request",
@@ -400,7 +400,12 @@ def _seed(database: Database) -> None:
                 "k1",
             ],
         ),
-        ("page_read", "artifact_id, read_version, read_at", ["a1", 2, T1]),
+        (
+            "page_read",
+            "person, artifact_id, read_version, read_at",
+            ["jeremy", "a1", 2, T1],
+        ),
+        ("page_pin", "person, artifact_id, pinned_at", ["jeremy", "a1", T1]),
         (
             "page_view_day",
             "artifact_id, day, kind, views",
@@ -430,7 +435,11 @@ def _seed(database: Database) -> None:
             "cookie_sha256, share_id, created_at, expires_at",
             ["0" * 64, "e1", T0, T1],
         ),
-        ("human_pref", "key, value, updated_at", ["theme", "dark", T0]),
+        (
+            "human_pref",
+            "person, key, value, updated_at",
+            ["jeremy", "theme", "dark", T0],
+        ),
         (
             "idempotency",
             "agent, route, key, body_sha256, status, response, expires_at",

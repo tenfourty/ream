@@ -604,6 +604,78 @@ def _sql_text(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
+def _people_slice_2(conn) -> None:
+    """SQLite schema step 37 (people design, slice 2); schema.sql does the same on Postgres.
+
+    `page_read` (person, artifact_id) and `human_pref` (person, key) are rebuilt, `page_pin`
+    is made and filled from `artifact.pinned_at` (kept, no longer read or written), and
+    `frame_pass` gains `person`. Every migrated row takes the owner id recorded in
+    `service_meta`; a database that holds such rows and records none is refused, because
+    rows given a guessed owner would be read as a stranger's."""
+    owner = conn.execute(
+        "select value from service_meta where key = 'owner_id'"
+    ).fetchone()
+    owner = owner[0] if owner else None
+    held = sum(
+        conn.execute(f"select count(*) from {table}{where}").fetchone()[0]  # noqa: S608 -- fixed names
+        for table, where in (
+            ("page_read", ""),
+            ("human_pref", ""),
+            ("artifact", " where pinned_at is not null"),
+            ("frame_pass", ""),
+        )
+    )
+    if held and owner is None:
+        raise RuntimeError(
+            "schema step 37 found per-person rows but service_meta records no owner id:"
+            " start the service once on the previous version, or record it"
+        )
+    conn.execute(
+        "create table page_read_new ("
+        " person text not null,"
+        " artifact_id text not null references artifact(id) on delete cascade,"
+        " read_version integer not null,"
+        " read_at timestamptz not null default (artifacts_now()),"
+        " primary key (person, artifact_id))"
+    )
+    conn.execute(
+        "insert into page_read_new (person, artifact_id, read_version, read_at)"
+        " select %s, artifact_id, read_version, read_at from page_read",
+        (owner,),
+    )
+    conn.execute("drop table page_read")
+    conn.execute("alter table page_read_new rename to page_read")
+    conn.execute(
+        "create table human_pref_new ("
+        " person text not null,"
+        " key text not null,"
+        " value text not null,"
+        " updated_at timestamptz not null default (artifacts_now()),"
+        " primary key (person, key))"
+    )
+    conn.execute(
+        "insert into human_pref_new (person, key, value, updated_at)"
+        " select %s, key, value, updated_at from human_pref",
+        (owner,),
+    )
+    conn.execute("drop table human_pref")
+    conn.execute("alter table human_pref_new rename to human_pref")
+    conn.execute(
+        "create table page_pin ("
+        " person text not null,"
+        " artifact_id text not null references artifact(id) on delete cascade,"
+        " pinned_at timestamptz not null,"
+        " primary key (person, artifact_id))"
+    )
+    conn.execute(
+        "insert into page_pin (person, artifact_id, pinned_at)"
+        " select %s, id, pinned_at from artifact where pinned_at is not null",
+        (owner,),
+    )
+    conn.execute("alter table frame_pass add column person text")
+    conn.execute("update frame_pass set person = %s", (owner,))
+
+
 # Step 1 is `schema_sqlite.sql`, run whole on a fresh file. Every later change is
 # a numbered step here, run statement by statement, never an edit to that file.
 _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
@@ -1089,6 +1161,10 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " unique (issuer, subject))"
         ),
     ),
+    # 24 Nov 2026: per-person state, people design slice 2 (see schema.sql): read marks and
+    # preferences rebuilt with the person in their key, pins in their own table, and the person
+    # a frame pass was minted for. Rows that exist take the owner id `service_meta` records.
+    37: (_people_slice_2,),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

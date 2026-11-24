@@ -1600,17 +1600,24 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 # he wrote an earlier message, made after he last opened the page. Without it a
 # reply to him leaves a read page looking read. Yields who wrote it (the session
 # label when there is one, so the tile can name the office, else the author).
-# The rule itself lives in `comments.UNSEEN_REPLY` so his inbox asks the same
+# `pr` and `pp` are the request person's `page_read` and `page_pin` rows, left-joined to the
+# page (`_PERSON_JOINS`, two parameters, the person each); every wall query carries them.
+# The rule itself lives in `comments.unseen_reply` so his inbox asks the same
 # question the wall does.
 _WALL_REPLIED_BY = (
     "(select coalesce(nullif(c.session, ''), c.author) from comment c"  # noqa: S608
-    f"  where c.artifact_id = a.id and {comments.UNSEEN_REPLY}"
+    f"  where c.artifact_id = a.id and {comments.unseen_reply('pr.read_at')}"
     "  order by c.created_at desc, c.id desc limit 1)"
 )
 _WALL_UNREAD = (
-    "(a.current_version > coalesce((select r.read_version"  # noqa: S608
-    "   from page_read r where r.artifact_id = a.id), 0)"
+    "(a.current_version > coalesce(pr.read_version, 0)"
     f"  or {_WALL_REPLIED_BY} is not null)"
+)
+# The joins `pr` and `pp` need, one `%s` each: the request person's id, twice. They come right
+# after `from artifact a`, so their parameters precede the where clause's.
+_PERSON_JOINS = (
+    " left join page_read pr on pr.artifact_id = a.id and pr.person = %s"
+    " left join page_pin pp on pp.artifact_id = a.id and pp.person = %s"
 )
 
 
@@ -3672,12 +3679,12 @@ def _after_cursor(cursor: str) -> tuple[str, tuple]:
     # only `tail` carries any, and it sits innermost, once.
     if pin_at is not None:
         after = (
-            "(a.pinned_at is null or a.pinned_at < %s"
-            f" or (a.pinned_at = %s and {after}))"
+            "(pp.pinned_at is null or pp.pinned_at < %s"
+            f" or (pp.pinned_at = %s and {after}))"
         )
         params = [pin_at, pin_at, *params]
     else:
-        after = f"(a.pinned_at is null and {after})"
+        after = f"(pp.pinned_at is null and {after})"
     return " and " + after, tuple(params)
 
 
@@ -5430,6 +5437,7 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _wall(
         conn,
+        person: str,
         archived: bool,
         folder_id: str | None = None,
         grouped: bool = False,
@@ -5493,7 +5501,7 @@ def gallery_router(db: Database) -> APIRouter:
             "       exists (select 1 from version v"
             "          where v.artifact_id = a.id and v.n = a.current_version"
             "            and v.thumbnail is not null) as has_thumb,"
-            "       a.pinned_at,"
+            "       pp.pinned_at,"
             # WHICH SESSION last changed it, not which first published it: the
             # tile already says "Edited 5h ago" beside this, and the question a
             # reader is asking at that moment is who did THAT. Jeremy, 21 Sep,
@@ -5516,7 +5524,8 @@ def gallery_router(db: Database) -> APIRouter:
             "            and v.n = a.current_version), false) as flagged,"
             f"       {_WALL_REPLIED_BY} as replied_by"
             "  from artifact a"
-            " where (a.archived_at is null) = %s and a.deleted_at is null"
+            + _PERSON_JOINS
+            + " where (a.archived_at is null) = %s and a.deleted_at is null"
             + scope
             + after
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -5534,14 +5543,14 @@ def gallery_router(db: Database) -> APIRouter:
             # UNpinned page above every pinned one -- precisely backwards, and
             # it would look like pinning had done nothing rather than like a
             # broken sort.
-            + " order by a.pinned_at desc nulls last,"
+            + " order by pp.pinned_at desc nulls last,"
             f"          {_WALL_WAITING} desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
             # One more than a page, to know whether an older page exists.
             f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
-            (not archived, *extra, *after_params),
+            (person, person, not archived, *extra, *after_params),
         ).fetchall()
         rows = _WallRows(fetched[:_WALL_PAGE])
         if len(fetched) > _WALL_PAGE:
@@ -5549,14 +5558,14 @@ def gallery_router(db: Database) -> APIRouter:
             rows.cursor = _wall_cursor(rows[-1])
         return rows
 
-    def _folder_pages(conn):
+    def _folder_pages(conn, person: str):
         """Every page that is in a folder and not binned, one line each, with the folder's
         own fields: the facts a folder tile is made of. Not capped like `_wall`, so a folder
         of a thousand daily digests still counts them all."""
         return conn.execute(
             "select f.id, f.title, f.archived_at, a.agent, a.updated_at,"  # noqa: S608
             "       (a.archived_at is not null) as page_archived,"
-            "       (a.pinned_at is not null) as pinned,"
+            "       (pp.pinned_at is not null) as pinned,"
             f"       {_WALL_UNREAD} as unread,"
             "       (select count(*) from decision d"
             "          where d.artifact_id = a.id"
@@ -5564,7 +5573,9 @@ def gallery_router(db: Database) -> APIRouter:
             "            and a.archived_at is null"
             "            and d.closed_at is null) as waiting"
             "  from artifact a join folder f on f.id = a.folder_id"
-            " where a.deleted_at is null"
+            + _PERSON_JOINS
+            + " where a.deleted_at is null",
+            (person, person),
         ).fetchall()
 
     def _folder_items(pages, archived: bool) -> list:
@@ -5722,15 +5733,19 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> HTMLResponse:
-        return _wall_page(request)
+    def index(request: Request, person: people.Person = people.CURRENT) -> HTMLResponse:
+        return _wall_page(request, person.id)
 
     @router.get("/f/{folder_id}", response_class=HTMLResponse)
-    def open_folder(folder_id: str, request: Request) -> HTMLResponse:
+    def open_folder(
+        folder_id: str, request: Request, person: people.Person = people.CURRENT
+    ) -> HTMLResponse:
         # The opaque id, never the slug: a slug is only unique per owner.
-        return _wall_page(request, folder_id)
+        return _wall_page(request, person.id, folder_id)
 
-    def _wall_page(request: Request, folder_id: str | None = None) -> HTMLResponse:
+    def _wall_page(
+        request: Request, person: str, folder_id: str | None = None
+    ) -> HTMLResponse:
         query = (request.query_params.get("q") or "").strip()
         chosen_agent = (request.query_params.get("agent") or "").strip()
         chosen = request.query_params.get("filter")
@@ -5760,29 +5775,43 @@ def gallery_router(db: Database) -> APIRouter:
                 # A shelved folder lists its archived pages; a live one its live pages.
                 on_archived = shelved
                 grouped = False
-                rows = [] if shelved else _wall(conn, False, folder_id, older=older)
+                rows = (
+                    []
+                    if shelved
+                    else _wall(conn, person, False, folder_id, older=older)
+                )
                 archived_rows = (
-                    _wall(conn, True, folder_id, older=older) if shelved else []
+                    _wall(conn, person, True, folder_id, older=older) if shelved else []
                 )
                 pages = []
             else:
                 on_archived = chosen == "archived"
                 grouped = not flat
                 rows = _wall(
-                    conn, False, grouped=grouped, older="" if on_archived else older
+                    conn,
+                    person,
+                    False,
+                    grouped=grouped,
+                    older="" if on_archived else older,
                 )
                 archived_rows = _wall(
-                    conn, True, grouped=grouped, older=older if on_archived else ""
+                    conn,
+                    person,
+                    True,
+                    grouped=grouped,
+                    older=older if on_archived else "",
                 )
-                pages = [] if flat else _folder_pages(conn)
+                pages = [] if flat else _folder_pages(conn, person)
             # On a later page the header counts still describe the first page, so they do
             # not change under the reader as they page.
             count_rows, count_archived = rows, archived_rows
             if older:
                 if on_archived:
-                    count_archived = _wall(conn, True, folder_id, grouped=grouped)
+                    count_archived = _wall(
+                        conn, person, True, folder_id, grouped=grouped
+                    )
                 else:
-                    count_rows = _wall(conn, False, folder_id, grouped=grouped)
+                    count_rows = _wall(conn, person, False, folder_id, grouped=grouped)
         later = bool(older)
         paged = (
             archived_rows if on_archived else rows
@@ -6219,7 +6248,9 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 in_folder[1] if in_folder else "Ream",
                 body,
-                meta_html=_wall_meta(waiting_total, inbox.label(*inbox.count(db))),
+                meta_html=_wall_meta(
+                    waiting_total, inbox.label(*inbox.count(db, person=person))
+                ),
                 controls=_controls_row(
                     view,
                     query,
@@ -6259,8 +6290,8 @@ def gallery_router(db: Database) -> APIRouter:
         return response
 
     @router.get("/inbox", response_class=HTMLResponse)
-    def inbox_page() -> HTMLResponse:
-        rows, capped = inbox.gather(db)
+    def inbox_page(person: people.Person = people.CURRENT) -> HTMLResponse:
+        rows, capped = inbox.gather(db, person=person.id)
         if capped:
             meta = (
                 f"{inbox.label(len(rows), True)} items waiting on you; "
@@ -6361,7 +6392,7 @@ def gallery_router(db: Database) -> APIRouter:
         artifact_id: str,
         request: Request,
         pinned: str = Form("1"),
-        _person: people.Person = people.REQUIRE_OWNER,
+        person: people.Person = people.REQUIRE_OWNER,
     ):
         """Pin a page to the front of the wall, or unpin it.
 
@@ -6374,7 +6405,9 @@ def gallery_router(db: Database) -> APIRouter:
         work?" is the wall, reordered, with the page now leading it.
         """
         _same_origin_write(request)
-        if not store.set_pinned(db, artifact_id, pinned == "1", agent=None):
+        if not store.set_pinned(
+            db, artifact_id, pinned == "1", agent=None, person=person.id
+        ):
             raise HTTPException(404, "no such page")
         return RedirectResponse("/", status_code=303)
 
@@ -6990,11 +7023,11 @@ def gallery_router(db: Database) -> APIRouter:
         # against it, and mark_read is about to move it.
         with db.connect() as conn:
             prev = conn.execute(
-                "select read_at from page_read where artifact_id = %s",
-                (artifact_id,),
+                "select read_at from page_read where artifact_id = %s and person = %s",
+                (artifact_id, person.id),
             ).fetchone()
         prev_read_at = prev[0] if prev else None
-        store.mark_read(db, artifact_id)
+        store.mark_read(db, artifact_id, person.id)
         # A reader of the page (runcove-5t3oj.158.1): this request's own connections are
         # closed here, and the route is sync, as `pageviews.record` asks. Not a deleted page.
         if row[7] is None:
@@ -7121,7 +7154,9 @@ def gallery_router(db: Database) -> APIRouter:
         src = escape(
             content_url(
                 artifact_id,
-                frame_pass.mint(db, artifact_id, changes_from=changes_from),
+                frame_pass.mint(
+                    db, artifact_id, changes_from=changes_from, person=person.id
+                ),
             )
         )
         # Sandboxed with no allow-top-navigation*, no allow-forms, no allow-modals: an agent's
@@ -7683,7 +7718,9 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.get("/a/{artifact_id}/frame")
     def fresh_frame(
-        artifact_id: str, changes: str = Query("1", pattern="^(0|1)$")
+        artifact_id: str,
+        changes: str = Query("1", pattern="^(0|1)$"),
+        person: people.Person = people.CURRENT,
     ) -> Response:
         """A new pass for the page in front of him, for gallery.js to re-point a
         frame whose pass was spent (homelab-ij8.101). Behind Authelia like every
@@ -7705,6 +7742,7 @@ def gallery_router(db: Database) -> APIRouter:
                             db,
                             artifact_id,
                             changes_from=_open_round(artifact_id, changes)[2],
+                            person=person.id,
                         ),
                     )
                 }
@@ -7794,10 +7832,12 @@ def gallery_router(db: Database) -> APIRouter:
         decision_id: str,
         mode: str = Form(...),
         _guard: None = Depends(_same_origin_write),
-        _person: people.Person = people.REQUIRE_OWNER,
+        person: people.Person = people.REQUIRE_OWNER,
     ):
         try:
-            artifact_id, _released = holds.set_review_mode(db, decision_id, mode)
+            artifact_id, _released = holds.set_review_mode(
+                db, decision_id, mode, person.id
+            )
         except ValueError as exc:
             raise HTTPException(422, "mode is held or live") from exc
         except decisions.AlreadyDecided as exc:

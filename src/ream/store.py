@@ -744,9 +744,16 @@ def publish(
     )
 
 
+# The owner's pin (`page_pin`, people design slice 2), read as the page's `pinned_at`: what an
+# agent sees is whether THE OWNER pinned it. One `%s`: the person id (`folders.his()`), the
+# first parameter of any query that selects it.
+_PIN = (
+    "(select pp.pinned_at from page_pin pp"
+    " where pp.artifact_id = artifact.id and pp.person = %s)"
+)
 _PAGE_COLUMNS = (
     "select id, title, agent, visibility, current_version, updated_at,"
-    " archived_at, pinned_at, agents_can_read"
+    f" archived_at, {_PIN}, agents_can_read"
 )
 
 
@@ -767,22 +774,20 @@ def _owned(
     if wide is not None and as_reader and wide.reads_all():
         return conn.execute(
             _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null",
-            (artifact_id,),
+            (folders.his(), artifact_id),
         ).fetchone()
     if wide is not None and not as_reader and wide.writes_others():
         writers = wide.writes()
         return conn.execute(
             _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null"
             f" and agent in {in_list(writers)}",
-            (artifact_id, *writers),
+            (folders.his(), artifact_id, *writers),
         ).fetchone()
     if as_reader:
         return conn.execute(
-            "select id, title, agent, visibility, current_version, updated_at,"
-            " archived_at, pinned_at, agents_can_read"
-            " from artifact where id = %s and deleted_at is null"
+            _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null"
             " and (agent = %s or agents_can_read)",
-            (artifact_id, agent),
+            (folders.his(), artifact_id, agent),
         ).fetchone()
     return conn.execute(
         # `deleted_at is null` is here rather than at each caller BECAUSE
@@ -790,10 +795,9 @@ def _owned(
         # housekeeping verbs all resolve a page through this one function. A
         # deleted page must be invisible to all of them, and the way to be
         # sure of that is for there to be one place it can be forgotten.
-        "select id, title, agent, visibility, current_version, updated_at,"
-        " archived_at, pinned_at, agents_can_read"
-        " from artifact where id = %s and agent = %s and deleted_at is null",
-        (artifact_id, agent),
+        _PAGE_COLUMNS
+        + " from artifact where id = %s and agent = %s and deleted_at is null",
+        (folders.his(), artifact_id, agent),
     ).fetchone()
 
 
@@ -1595,8 +1599,9 @@ def get_owned(
         # Whether HE has read it is the publisher's to know, not every reader's.
         seen = (
             conn.execute(
-                "select read_version, read_at from page_read where artifact_id = %s",
-                (row[0],),
+                "select read_version, read_at from page_read"
+                " where artifact_id = %s and person = %s",
+                (row[0], folders.his()),
             ).fetchone()
             if row[2] == agent
             else None
@@ -1969,9 +1974,9 @@ def _rebuild(conn, artifact_id: str, start: int, group: list[int]) -> dict[int, 
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
     with db.connect() as conn:
         rows = conn.execute(
-            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
+            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"  # noqa: S608 -- _PIN is a fixed clause
             " artifact.current_version, version.revision, artifact.updated_at,"
-            " artifact.archived_at, artifact.pinned_at, version.session,"
+            f" artifact.archived_at, {_PIN}, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
@@ -1981,10 +1986,11 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
             " left join page_read on page_read.artifact_id = artifact.id"
+            " and page_read.person = %s"
             " left join folder on folder.id = artifact.folder_id"
             " where artifact.agent = %s and artifact.deleted_at is null"
             " order by artifact.updated_at desc",
-            (agent,),
+            (folders.his(), folders.his(), agent),
         ).fetchall()
     now = datetime.now(UTC)
     return [
@@ -2033,9 +2039,9 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
     wide = caller_reach.widened(agent)
     with db.connect() as conn:
         rows = conn.execute(
-            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
+            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"  # noqa: S608 -- _PIN is a fixed clause
             " artifact.current_version, version.revision, artifact.updated_at,"
-            " artifact.archived_at, artifact.pinned_at, version.session,"
+            f" artifact.archived_at, {_PIN}, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
@@ -2045,12 +2051,18 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
             " left join page_read on page_read.artifact_id = artifact.id"
+            " and page_read.person = %s"
             " left join folder on folder.id = artifact.folder_id"
             " where artifact.deleted_at is null"
             " and (artifact.agent = %s or artifact.agents_can_read or %s)"
             " order by artifact.updated_at desc",
             # A signed-in app reads every page the owner can read (MCP design 11.2).
-            (agent, wide is not None and wide.reads_all()),
+            (
+                folders.his(),
+                folders.his(),
+                agent,
+                wide is not None and wide.reads_all(),
+            ),
         ).fetchall()
     now = datetime.now(UTC)
     return [
@@ -2565,12 +2577,12 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
     its own.
     """
     scope = "" if agent is None else " and artifact.agent = %s"
-    params = () if agent is None else (agent,)
+    params = (folders.his(),) + (() if agent is None else (agent,))
     with db.connect() as conn:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent,"  # noqa: S608 -- `scope` is a fixed clause with a placeholder
             " artifact.visibility, artifact.current_version, version.revision,"
-            " artifact.updated_at, artifact.archived_at, artifact.pinned_at,"
+            f" artifact.updated_at, artifact.archived_at, {_PIN},"
             " artifact.deleted_at, version.session,"
             # Questions set aside while the page sits in the bin: shown to him as such,
             # never counted as waiting.
@@ -3046,35 +3058,59 @@ def rename(db: Database, artifact_id: str, title: str, *, agent: str | None) -> 
 
 
 def set_pinned(
-    db: Database, artifact_id: str, pinned: bool, *, agent: str | None
+    db: Database,
+    artifact_id: str,
+    pinned: bool,
+    *,
+    agent: str | None,
+    person: str | None = None,
 ) -> bool:
-    """Pin a page to the front of the wall, or unpin it.
+    """Pin a page to the front of `person`'s wall, or unpin it.
 
-    Its own column rather than a flag on `updated_at`, because the two orderings
+    A row of `page_pin` rather than a flag on `updated_at`, because the two orderings
     answer different questions: "what moved last" is what the wall has always
     shown, and "what I care about" is what pinning adds. A pinned page that has
-    not changed in a month still leads.
+    not changed in a month still leads. Pins are per person (people design, slice
+    2): the gallery passes the request's person; an agent's pin (`agent` given,
+    `person` not) is the owner's, as it always was (`folders.his()`).
     """
+    who = person or folders.his()
     where, params = _scoped(artifact_id, agent)
-    with db.connect() as conn:
-        done = conn.execute(
-            f"update artifact set pinned_at = %s {where}",  # noqa: S608 -- see _scoped
-            (datetime.now(UTC) if pinned else None, *params),
+    with db.connect() as conn, conn.transaction():
+        if pinned:
+            done = conn.execute(
+                "insert into page_pin (person, artifact_id, pinned_at)"  # noqa: S608 -- see _scoped
+                f" select %s, id, %s from artifact {where}"
+                " on conflict (person, artifact_id)"
+                " do update set pinned_at = excluded.pinned_at",
+                (who, datetime.now(UTC), *params),
+            )
+            return done.rowcount > 0
+        found = conn.execute(
+            f"select id from artifact {where}",  # noqa: S608 -- see _scoped
+            params,
+        ).fetchone()
+        if found is None:
+            return False
+        conn.execute(
+            "delete from page_pin where person = %s and artifact_id = %s",
+            (who, artifact_id),
         )
-        return done.rowcount > 0
+        return True
 
 
-def mark_read(db: Database, artifact_id: str) -> None:
-    """Jeremy opened this page in the gallery: record the version he saw
-    (homelab-ij8.103). Only ever called from the gallery, behind his login."""
+def mark_read(db: Database, artifact_id: str, person: str | None = None) -> None:
+    """`person` opened this page in the gallery: record the version they saw
+    (homelab-ij8.103). Only ever called from the gallery, behind the sign-in; the
+    owner's when no person is named."""
     with db.connect() as conn:
         conn.execute(
-            "insert into page_read (artifact_id, read_version, read_at)"
-            " select id, current_version, %s from artifact"
+            "insert into page_read (person, artifact_id, read_version, read_at)"
+            " select %s, id, current_version, %s from artifact"
             " where id = %s and current_version is not null"
-            " on conflict (artifact_id) do update"
+            " on conflict (person, artifact_id) do update"
             " set read_version = excluded.read_version, read_at = excluded.read_at",
-            (datetime.now(UTC), artifact_id),
+            (person or folders.his(), datetime.now(UTC), artifact_id),
         )
 
 

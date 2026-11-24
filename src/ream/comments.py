@@ -237,8 +237,11 @@ def office_of(label: str | None) -> str:
 # message (or under the note he left on a decision, which is his by being
 # there), made after he last opened the page. The wall's unread mark and his
 # inbox both read it, so they can never disagree about what is new.
-# `c.artifact_id` is the page; `page_read.read_at` is when he last opened it.
-# Plain SQL on both drivers: `created_at` compares as the one stored format.
+# `c.artifact_id` is the page; `read_at` is the SQL of when the reader last
+# opened it: the caller joins `page_read` for the request's person (people
+# design, slice 2: a read mark is one person's) and names its `read_at` column,
+# which is NULL when they never have. Plain SQL on both drivers: `created_at`
+# compares as the one stored format.
 _HIS_THREAD = (
     "(exists (select 1 from comment h"
     "  where h.artifact_id = c.artifact_id"
@@ -248,17 +251,21 @@ _HIS_THREAD = (
     "    and h.created_at < c.created_at)"
     "  or c.anchor->>'kind' = 'decision')"
 )
-UNSEEN_REPLY = (
-    "c.author_kind = 'agent'"  # noqa: S608
-    " and c.kind = 'comment' and (c.thread_root is not null"
-    "      or c.anchor->>'kind' = 'decision')"
-    " and c.withdrawn_at is null and c.deleted_at is null and not c.held"
-    " and (select root.withdrawn_at from comment root"
-    "       where root.id = coalesce(c.thread_root, c.id)) is null"
-    " and not exists (select 1 from page_read r"
-    "       where r.artifact_id = c.artifact_id and r.read_at >= c.created_at)"
-    f" and {_HIS_THREAD}"
-)
+
+
+def unseen_reply(read_at: str) -> str:
+    """The condition, with `read_at` (an SQL expression, e.g. `pr.read_at`) as when the
+    reader last opened the page."""
+    return (
+        "c.author_kind = 'agent'"  # noqa: S608
+        " and c.kind = 'comment' and (c.thread_root is not null"
+        "      or c.anchor->>'kind' = 'decision')"
+        " and c.withdrawn_at is null and c.deleted_at is null and not c.held"
+        " and (select root.withdrawn_at from comment root"
+        "       where root.id = coalesce(c.thread_root, c.id)) is null"
+        f" and ({read_at} is null or {read_at} < c.created_at)"
+        f" and {_HIS_THREAD}"
+    )
 
 
 def is_foreign(

@@ -22,6 +22,8 @@ from ream import (
     decide,
     decisions,
     folders,
+    frame_pass,
+    holds,
     keys,
     news,
     onboarding,
@@ -300,6 +302,10 @@ COLUMNS = [
     ("comment_image", "staged_by", ""),
     ("partner_question", "answered_by", ""),
     ("person", "id", ""),
+    ("page_read", "person", ""),
+    ("human_pref", "person", ""),
+    ("page_pin", "person", ""),
+    ("frame_pass", "person", ""),
 ]
 
 
@@ -329,7 +335,11 @@ def _populate(db):
     comments.resolve(db, root.id, by="jeremy", agent=None)
     comments.reopen(db, root.id, agent=None, by="jeremy")
     comments.resolve(db, root.id, by="jeremy", agent=None)
+    store.mark_read(db, page.id, "jeremy")
+    store.set_pinned(db, page.id, True, agent=None, person="jeremy")
+    frame_pass.mint(db, page.id, person="jeremy")
     with db.connect() as conn:
+        holds.set_mode(conn, "live", "jeremy")
         folders.create_his(conn, "Reading")
         folder_id = conn.execute("select id from folder").fetchone()[0]
         conn.execute(

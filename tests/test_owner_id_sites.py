@@ -113,7 +113,10 @@ NO_PERSON_WRITES: dict[str, str] = {}
 # Reads that are the owner's alone (they show keys and consent).
 OWNER_ONLY_READS = {"/machines", "/connect"}
 # Reads that write (mark a page read, count a view): they take the request's person.
-READS_THAT_WRITE = {"/a/{artifact_id}"}
+READS_THAT_WRITE = {"/a/{artifact_id}", "/a/{artifact_id}/frame"}
+# Reads that are a person's own (read marks, pins, the inbox's unseen replies): they take the
+# request's person (people design, slice 2).
+READS_BY_PERSON = {"/", "/f/{folder_id}", "/inbox"}
 
 
 def test_every_gallery_route_that_writes_names_its_person(db):
@@ -139,7 +142,9 @@ def test_every_gallery_route_that_writes_names_its_person(db):
                 )
             if method == "GET" and route.path in OWNER_ONLY_READS:
                 assert owner_only, route.path
-            if method == "GET" and route.path in READS_THAT_WRITE:
+            if method == "GET" and route.path in READS_THAT_WRITE | READS_BY_PERSON:
                 assert named, route.path
     assert seen_post_forms, "the forms route (forms_ui.register) is not in the walk"
-    assert {r.path for r in routes} >= OWNER_ONLY_READS | READS_THAT_WRITE
+    assert {r.path for r in routes} >= (
+        OWNER_ONLY_READS | READS_THAT_WRITE | READS_BY_PERSON
+    )

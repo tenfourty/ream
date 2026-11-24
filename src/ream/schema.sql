@@ -1390,3 +1390,71 @@ create table if not exists person (
     disabled_at  timestamptz,
     unique (issuer, subject)
 );
+
+-- PER-PERSON STATE (24 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 2). What a
+-- person has read, prefers and pinned is theirs: `page_read` is keyed (person, artifact_id) and
+-- `human_pref` (person, key); `page_pin` holds pins, filled once from `artifact.pinned_at`
+-- (kept, no longer read or written); `frame_pass.person` is who the pass was minted for. Rows that
+-- exist take the owner id `service_meta` records, and a database that holds rows and records none
+-- is refused. SQLite does the same as its schema step 37 (its rebuilt tables list `person` first,
+-- here it was added last: the copier matches columns by name). Each block runs once: the test for
+-- "already done" is the column or the table, so a start never refills a pin the owner removed.
+do $$
+begin
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'page_read'
+          and column_name = 'person'
+    ) then
+        alter table page_read add column person text;
+        if exists (select 1 from page_read) then
+            update page_read set person = (select value from service_meta where key = 'owner_id');
+            if exists (select 1 from page_read where person is null) then
+                raise exception 'people slice 2: page_read has rows but service_meta records no owner id';
+            end if;
+        end if;
+        alter table page_read alter column person set not null;
+        alter table page_read drop constraint page_read_pkey;
+        alter table page_read add primary key (person, artifact_id);
+    end if;
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'human_pref'
+          and column_name = 'person'
+    ) then
+        alter table human_pref add column person text;
+        if exists (select 1 from human_pref) then
+            update human_pref set person = (select value from service_meta where key = 'owner_id');
+            if exists (select 1 from human_pref where person is null) then
+                raise exception 'people slice 2: human_pref has rows but service_meta records no owner id';
+            end if;
+        end if;
+        alter table human_pref alter column person set not null;
+        alter table human_pref drop constraint human_pref_pkey;
+        alter table human_pref add primary key (person, key);
+    end if;
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'frame_pass'
+          and column_name = 'person'
+    ) then
+        alter table frame_pass add column person text;
+        update frame_pass set person = (select value from service_meta where key = 'owner_id');
+    end if;
+    if to_regclass('page_pin') is null then
+        create table page_pin (
+            person      text        not null,
+            artifact_id text        not null references artifact(id) on delete cascade,
+            pinned_at   timestamptz not null,
+            primary key (person, artifact_id)
+        );
+        if exists (select 1 from artifact where pinned_at is not null) then
+            if not exists (select 1 from service_meta where key = 'owner_id') then
+                raise exception 'people slice 2: pinned pages exist but service_meta records no owner id';
+            end if;
+            insert into page_pin (person, artifact_id, pinned_at)
+                select (select value from service_meta where key = 'owner_id'), id, pinned_at
+                from artifact where pinned_at is not null;
+        end if;
+    end if;
+end $$;

@@ -11,7 +11,7 @@ Four kinds of item today, all built by `items`, which returns typed `Item`s:
   earlier unanswered one (a held question is not for him yet);
 - `review`: an open review request awaiting his verdict;
 - `reply`: an office's reply under one of his comments or notes that he has not
-  seen (the same rule the wall's unread mark uses, `comments.UNSEEN_REPLY`).
+  seen (the same rule the wall's unread mark uses, `comments.unseen_reply`).
 
 A Slack-home question takes the same order as a page question (`key` reads the
 same attributes off the copy).
@@ -28,7 +28,7 @@ offers something better, and a review is already flagged on the wall by its page
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ream import comments, decisions, partner_in, readside
+from ream import comments, decisions, folders, partner_in, readside
 from ream.db import Database
 
 URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
@@ -141,10 +141,12 @@ def order(rows: list[Item], now: datetime) -> list[Item]:
 # Shared by the list and the count, so they cannot disagree about which replies
 # are waiting: a reply he has not seen, on a page that is neither archived nor
 # deleted.
+# Its one parameter, first, is the person whose read marks it asks about.
 _REPLY_FROM_WHERE = (
     " from comment c join artifact a on a.id = c.artifact_id"
+    " left join page_read pr on pr.artifact_id = c.artifact_id and pr.person = %s"
     " where a.deleted_at is null and a.archived_at is null"
-    f"   and {comments.UNSEEN_REPLY}"
+    f"   and {comments.unseen_reply('pr.read_at')}"
 )
 
 
@@ -185,14 +187,14 @@ def _slack_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     ], len(found) >= limit
 
 
-def _reply_items(db: Database, limit: int) -> tuple[list[Item], bool]:
+def _reply_items(db: Database, limit: int, person: str) -> tuple[list[Item], bool]:
     with db.connect() as conn:
         found = conn.execute(
             "select c.id, c.artifact_id, a.title, a.agent,"
             "       coalesce(nullif(c.session, ''), c.author), c.body, c.created_at"
             f"{_REPLY_FROM_WHERE}"
             " order by c.created_at asc, c.id asc limit %s",
-            (limit,),
+            (person, limit),
         ).fetchall()
     return [
         Item(
@@ -209,33 +211,44 @@ def _reply_items(db: Database, limit: int) -> tuple[list[Item], bool]:
 
 
 def gather(
-    db: Database, now: datetime | None = None, limit: int | None = None
+    db: Database,
+    now: datetime | None = None,
+    limit: int | None = None,
+    person: str | None = None,
 ) -> tuple[list[Item], bool]:
     """Everything waiting on him in inbox order, and whether a source hit its
     `limit` (the oldest `limit` of each source are read; a newer one is not
-    shown, and the caller must say so)."""
+    shown, and the caller must say so). `person` is whose read marks decide which
+    replies are unseen: the request's, the owner's when none is named."""
     now = now or datetime.now(UTC)
     limit = limit or _LIMIT
     decided, capped_d = _decision_items(db, limit)
-    replied, capped_r = _reply_items(db, limit)
+    replied, capped_r = _reply_items(db, limit, person or folders.his())
     slacked, capped_s = _slack_items(db, limit)
     return order(decided + replied + slacked, now), capped_d or capped_r or capped_s
 
 
 def items(
-    db: Database, now: datetime | None = None, limit: int | None = None
+    db: Database,
+    now: datetime | None = None,
+    limit: int | None = None,
+    person: str | None = None,
 ) -> list[Item]:
     """Everything waiting on him, in inbox order."""
-    return gather(db, now, limit)[0]
+    return gather(db, now, limit, person)[0]
 
 
-def count(db: Database, limit: int | None = None) -> tuple[int, bool]:
+def count(
+    db: Database, limit: int | None = None, person: str | None = None
+) -> tuple[int, bool]:
     """How many items `items` would hold, and whether a source is over `limit`,
     from COUNT queries and ids only: no question text and no reply bodies."""
     limit = limit or _LIMIT
     reviews, questions, open_rows = decisions.open_counts(db)
     with db.connect() as conn:
-        replies = conn.execute(f"select count(*){_REPLY_FROM_WHERE}").fetchone()[0]
+        replies = conn.execute(
+            f"select count(*){_REPLY_FROM_WHERE}", (person or folders.his(),)
+        ).fetchone()[0]
     slacked = readside.count_waiting(db, limit)
     capped = open_rows >= limit or replies >= limit or slacked >= limit
     return reviews + questions + replies + slacked, capped
