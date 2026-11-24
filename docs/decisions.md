@@ -1599,3 +1599,19 @@ the same safety.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
 Tracker item runcove-5t3oj.160.5; design `docs/agent/specs/2026-11-24-people-design.md`.
+
+## The homelab's Ream keeps its login gate; people's sign-in goes live on GitGuardian's instance (24 Nov 2026)
+
+**Chosen:** the gallery sign-in built in step 2 (people) stays off on the homelab's Ream, which keeps
+its login gate in front as the only thing that says who the reader is. GitGuardian gets its own
+separate Ream instance, sharing no data, keys or people with the homelab's. Until that instance is
+set up the sign-in is proven in tests only; its first live use is there.
+
+**Not chosen:**
+- Turn the sign-in on at home behind the login gate, to prove it on real use: the homelab's Ream
+  has one reader and gains nothing from it.
+- A throwaway test instance on cove-01 with the sign-in on, to prove it live sooner: more to run
+  and clean up, for a proof the company instance gives anyway.
+
+**Evidence:** Jeremy said on 24 Nov 2026 in #hq-artifacts that GitGuardian runs a separate instance;
+the office played it back and he confirmed (a). Tracker item runcove-5t3oj.160.5.
