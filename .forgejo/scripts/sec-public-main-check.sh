@@ -13,13 +13,18 @@
 # (https://git.tenfourty.site/runcove/ream.git) is tried first and the old one (.../runcove/artifacts.git)
 # second, so the script works before and after the forge renames the repository (after it, git over
 # HTTPS on the old name fails with "RPC failed; HTTP 301", and http.followRedirects is deliberately not
-# set). The old name is tried only when `git ls-remote` of the new one FAILS; a new name that lists
-# but has no main, lists main twice, or fails any later step is a failure, not a reason to ask the old
-# one. The first address that lists main is used for the fetch and every step after it, never mixed
+# set). The old name is asked for main only when `git ls-remote` of the new one FAILS; a new name that
+# lists but has no main, lists main twice, or fails any later step is a failure, not a reason to ask the
+# old one. The first address that lists main is used for the fetch and every step after it, never mixed
 # with the other, and is printed on stderr (the address only, never the token). If neither lists main
-# the failure names both. The selftest's seam: SEC_PUBLIC_URL_CANDIDATES, an ordered, space-separated
-# list that replaces the two defaults and is accepted only when every entry is a file:// address
-# (anything else in it refuses the run).
+# the failure names both. When the first lists main, the later addresses are asked too, and if one
+# answers differently the run is REFUSED, naming both: two names that disagree about main are not
+# something to pick between (the same repository under both names answers alike). The candidate list is
+# a parameter of `check`; no environment variable can change which addresses the real run reads.
+#
+# The old-name fallback, and with it the second ask, is removed in the rename's contract step, when
+# PUBLIC_URLS_DEFAULT shrinks to the new name alone (docs/decisions.md, "The forge repo moves to
+# runcove/ream").
 #
 # Public main is read with SEC_PUBLIC_READ_TOKEN (read of the repository only): the organization
 # is limited-visibility, so an anonymous read is refused. The token rides in git's environment as an
@@ -52,13 +57,14 @@ gitr() {
   fi
 }
 
-# check <url> <built> [<fallback url>...]: the first address whose ls-remote succeeds is the one used for
-# everything after it; a later address is tried only when the earlier one's ls-remote failed.
+# check <built> <url>...: one address is read alone. With several, the first whose ls-remote succeeds is
+# the one used for everything after it (a later one is read only when the earlier one's ls-remote
+# failed), but if any later address also answers, its answer must be the same, or the run is refused.
 check() {
-  local url="$1" built="$2" listed pub fetched u shown
-  shift 2
-  local cands=("$url" "$@") tried=()
-  url=""
+  local built="${1:-}" listed other pub fetched u shown i idx=-1
+  [ "$#" -ge 2 ] || { echo "sec-public-main-check: no address to read public main at" >&2; return 1; }
+  shift
+  local -a cands=("$@") tried=()
   for u in "${cands[@]}"; do
     case "$u" in
       file://*) ;;
@@ -71,31 +77,37 @@ check() {
     || { echo "sec-public-main-check: the checkout is not the commit being built" >&2; return 1; }
   [ "$(git rev-parse --is-shallow-repository)" = "false" ] \
     || { echo "sec-public-main-check: the checkout is shallow, so ancestry cannot be judged" >&2; return 1; }
-  for u in "${cands[@]}"; do
-    if listed=$(gitr 60 ls-remote "$u" refs/heads/main </dev/null); then
-      url="$u"
+  for i in "${!cands[@]}"; do
+    if listed=$(gitr 60 ls-remote "${cands[$i]}" refs/heads/main </dev/null); then
+      idx=$i
       break
     fi
-    tried+=("$u")
+    tried+=("${cands[$i]}")
   done
-  if [ -z "$url" ]; then
+  if [ "$idx" = -1 ]; then
     if [ "${#cands[@]}" = 1 ]; then
-      echo "sec-public-main-check: could not read public main" >&2
+      echo "sec-public-main-check: could not read public main at $(redact "${cands[0]}")" >&2
     else
       shown=""
-      for u in "${tried[@]}"; do shown="${shown:+$shown, }$(printf '%s' "$u" | sed 's#//[^/@]*@#//#')"; done
+      for u in "${tried[@]}"; do shown="${shown:+$shown, }$(redact "$u")"; done
       echo "sec-public-main-check: could not read public main at either address: $shown" >&2
     fi
     return 1
   fi
-  shown=$(printf '%s' "$url" | sed 's#//[^/@]*@#//#')
-  echo "sec-public-main-check: public main read at $shown" >&2
+  local url="${cands[$idx]}"
+  echo "sec-public-main-check: public main read at $(redact "$url")" >&2
   [ "$(printf '%s\n' "$listed" | grep -c .)" = "1" ] \
     || { echo "sec-public-main-check: public main did not list exactly once" >&2; return 1; }
   pub=${listed%%[[:space:]]*}
   [ "${listed#*[[:space:]]}" = "refs/heads/main" ] \
     || { echo "sec-public-main-check: the one ref listed is not refs/heads/main" >&2; return 1; }
   [[ "$pub" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: public main is not a commit id" >&2; return 1; }
+  for u in "${cands[@]:idx+1}"; do
+    if other=$(gitr 60 ls-remote "$u" refs/heads/main </dev/null) && [ "$other" != "$listed" ]; then
+      echo "REFUSED: $(redact "$url") and $(redact "$u") both answer for main and do not agree; run again, and if it persists tell the homelab maintainer." >&2
+      return 1
+    fi
+  done
   gitr 300 fetch --quiet --no-tags "$url" refs/heads/main </dev/null \
     || { echo "sec-public-main-check: could not fetch public main" >&2; return 1; }
   fetched=$(git rev-parse --verify "FETCH_HEAD^{commit}")
@@ -110,27 +122,17 @@ check() {
   fi
 }
 
-# run_check <built> [<url>]: with a url, that one address alone; without, the two defaults in order (or,
-# for the selftest, SEC_PUBLIC_URL_CANDIDATES, which must hold only file:// addresses).
+# redact <url>: the address without any user@ part, for a message
+redact() { printf '%s' "$1" | sed 's#//[^/@]*@#//#'; }
+
+# run_check <built> [<url>]: with a url, that one address alone; without, the two defaults in order.
 run_check() {
-  local built="$1" u
-  local -a urls
+  local built="${1:-}"
   if [ -n "${2:-}" ]; then
-    check "$2" "$built"
-    return
-  fi
-  if [ -n "${SEC_PUBLIC_URL_CANDIDATES:-}" ]; then
-    read -r -a urls <<<"$SEC_PUBLIC_URL_CANDIDATES"
-    for u in "${urls[@]}"; do
-      case "$u" in
-        file://*) ;;
-        *) echo "sec-public-main-check: SEC_PUBLIC_URL_CANDIDATES takes only file:// addresses" >&2; return 1 ;;
-      esac
-    done
+    check "$built" "$2"
   else
-    urls=("${PUBLIC_URLS_DEFAULT[@]}")
+    check "$built" "${PUBLIC_URLS_DEFAULT[@]}"
   fi
-  check "${urls[0]}" "$built" "${urls[@]:1}"
 }
 
 selftest() {
@@ -164,7 +166,7 @@ selftest() {
   expect() {
     local want="$1" name="$2" dir="$3" url="$4" built rc=0
     built=${5-$(head_of "$dir")}
-    (cd "$dir" && check "$url" "$built") >/dev/null 2>&1 || rc=$?
+    (cd "$dir" && check "$built" "$url") >/dev/null 2>&1 || rc=$?
     if { [ "$want" = pass ] && [ "$rc" = 0 ]; } || { [ "$want" = fail ] && [ "$rc" != 0 ]; }; then
       echo "ok   $name"
     else echo "FAIL $name (exit $rc)"; fails=$((fails + 1)); fi
@@ -172,7 +174,7 @@ selftest() {
   # refused_with <name> <dir> <url> <built> <text the refusal must hold>
   refused_with() {
     local name="$1" dir="$2" url="$3" built="$4" text="$5" msg rc=0
-    msg=$(cd "$dir" && check "$url" "$built" 2>&1) || rc=$?
+    msg=$(cd "$dir" && check "$built" "$url" 2>&1) || rc=$?
     if [ "$rc" != 0 ] && [[ "$msg" == *"$text"* ]]; then echo "ok   $name"
     else echo "FAIL $name (exit $rc): $msg"; fails=$((fails + 1)); fi
   }
@@ -194,32 +196,69 @@ selftest() {
     "SEC_PUBLIC_READ_TOKEN is not set"
   SEC_PUBLIC_READ_TOKEN="" refused_with "https url with the token set but empty is refused for the token" \
     "$d/ahead" "$https" "$(head_of "$d/ahead")" "SEC_PUBLIC_READ_TOKEN is not set"
-  # via <name> <pass|fail> <text the output must hold> <dir> <candidates> <built> [<url argument>]: the
-  # whole of run_check, the way the workflow calls it
+  # via <name> <pass|fail> <text the output must hold> <dir> <built> <url>...: check with a candidate list,
+  # the way run_check hands it the defaults
   via() {
-    local name="$1" want="$2" text="$3" dir="$4" candlist="$5" built="$6" msg rc=0
-    shift 6
-    msg=$(cd "$dir" && SEC_PUBLIC_URL_CANDIDATES="$candlist" run_check "$built" "$@" 2>&1) || rc=$?
+    local name="$1" want="$2" text="$3" dir="$4" built="$5" msg rc=0
+    shift 5
+    msg=$(cd "$dir" && check "$built" "$@" 2>&1) || rc=$?
     if { [ "$want" = pass ] && [ "$rc" = 0 ]; } || { [ "$want" = fail ] && [ "$rc" != 0 ]; }; then
       if [[ "$msg" == *"$text"* ]]; then echo "ok   $name"
       else echo "FAIL $name (output lacks \"$text\"): $msg"; fails=$((fails + 1)); fi
     else echo "FAIL $name (exit $rc): $msg"; fails=$((fails + 1)); fi
   }
-  local gone1="file://$d/gone1" gone2="file://$d/gone2" ah
+  # said <name> <dir> <built> <the last line it says, exactly> <url>...: a failing check ends with exactly this
+  # (git's own complaint about an address it cannot read comes before it)
+  said() {
+    local name="$1" dir="$2" built="$3" text="$4" msg rc=0
+    shift 4
+    msg=$(cd "$dir" && check "$built" "$@" 2>&1) || rc=$?
+    msg=${msg##*$'\n'}
+    if [ "$rc" != 0 ] && [ "$msg" = "$text" ]; then echo "ok   $name"
+    else echo "FAIL $name (exit $rc): $msg"; fails=$((fails + 1)); fi
+  }
+  local gone1="file://$d/gone1" gone2="file://$d/gone2" other="file://$d/unrelated" ah ou
   ah=$(head_of "$d/ahead")
-  via "new name present: it is the one used" pass "public main read at $pubu" "$d/ahead" "$pubu file://$d/unrelated" "$ah"
-  via "new name absent, old present: the old one is used" pass "public main read at $pubu" "$d/ahead" "$gone1 $pubu" "$ah"
-  via "both absent: fails, naming both" fail "at either address: $gone1, $gone2" "$d/ahead" "$gone1 $gone2" "$ah"
-  via "new lists another main than the old: the new one wins, no mixing" pass "public main read at file://$d/unrelated" \
-    "$d/unrelated" "file://$d/unrelated $pubu" "$(head_of "$d/unrelated")"
-  via "new lists another main than the old: a build lacking the new one's main is refused" fail "REFUSED" \
-    "$d/ahead" "file://$d/unrelated $pubu" "$ah"
-  via "new has no main: no fallback to the old, which has one" fail "exactly once" "$d/ahead" "file://$d/nomain $pubu" "$ah"
-  via "new has a second ref for main: no fallback" fail "exactly once" "$d/ahead" "file://$d/duppub $pubu" "$ah"
-  via "an explicit url is the only address" pass "public main read at $pubu" "$d/ahead" "$gone1 file://$d/unrelated" "$ah" "$pubu"
-  via "an explicit url that fails does not fall back" fail "could not read public main" "$d/ahead" "$pubu" "$ah" "$gone1"
-  via "a candidate list with a non-file address is refused" fail "only file://" "$d/ahead" "$pubu $https" "$ah"
-  via "the defaults (https, token unset) are refused for the token" fail "SEC_PUBLIC_READ_TOKEN is not set" "$d/ahead" "" "$ah"
+  ou=$(head_of "$d/unrelated")
+  local usedpub="public main read at $pubu"
+  via "a list of one address reads it" pass "$usedpub" "$d/ahead" "$ah" "$pubu"
+  via "new name present, old absent: the new one is used" pass "$usedpub" "$d/ahead" "$ah" "$pubu" "$gone2"
+  via "new name absent, old present: the old one is used" pass "$usedpub" "$d/ahead" "$ah" "$gone1" "$pubu"
+  via "both names answer alike (the same repository): used" pass "$usedpub" "$d/ahead" "$ah" "$pubu" "file://$d/pub"
+  via "both names answer, with another main: refused, naming both (new, old)" fail "REFUSED: $pubu and $other both answer" \
+    "$d/ahead" "$ah" "$pubu" "$other"
+  via "both names answer, with another main: refused, naming both (old order)" fail "REFUSED: $other and $pubu both answer" \
+    "$d/unrelated" "$ou" "$other" "$pubu"
+  via "both absent: fails, naming both in order" fail "at either address: $gone1, $gone2" "$d/ahead" "$ah" "$gone1" "$gone2"
+  via "both absent: fails, naming both in the other order" fail "at either address: $gone2, $gone1" "$d/ahead" "$ah" "$gone2" "$gone1"
+  via "new has no main: no fallback to the old, which has one" fail "exactly once" "$d/ahead" "$ah" "file://$d/nomain" "$pubu"
+  via "new has a second ref for main: no fallback" fail "exactly once" "$d/ahead" "$ah" "file://$d/duppub" "$pubu"
+  said "one address that fails says so with that address and not the either-address text" "$d/ahead" "$ah" \
+    "sec-public-main-check: could not read public main at $gone1" "$gone1"
+  said "two addresses that fail say the either-address text" "$d/ahead" "$ah" \
+    "sec-public-main-check: could not read public main at either address: $gone1, $gone2" "$gone1" "$gone2"
+  # the defaults and the way the real run hands them over: check replaced by one that prints its arguments
+  local newname="https://git.tenfourty.site/runcove/ream.git" oldname="https://git.tenfourty.site/runcove/artifacts.git"
+  # equal <name> <got> <want>
+  equal() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fails=$((fails + 1)); fi
+  }
+  equal "the defaults are the new name, then the old" "${PUBLIC_URLS_DEFAULT[*]}" "$newname $oldname"
+  local got
+  got=$(
+    # shellcheck disable=SC2329  # called by run_check, which shellcheck cannot see through
+    check() { printf '%s|' "$@"; }
+    run_check "$ah"
+  )
+  equal "with no argument the run reads the new name, then the old" "$got" "$ah|$newname|$oldname|"
+  got=$(
+    # shellcheck disable=SC2329
+    check() { printf '%s|' "$@"; }
+    run_check "$ah" "$gone1"
+  )
+  equal "an explicit address is read alone" "$got" "$ah|$gone1|"
+  refused_with "the defaults (https, token unset) are refused for the token" "$d/ahead" "$newname" "$ah" "SEC_PUBLIC_READ_TOKEN is not set"
+  expect fail "no address at all" "$d/ahead" ""
   # a fetch that lands on another commit than the one listed: gitr replaced, in a subshell, by one whose
   # fetch reads another repository
   (
