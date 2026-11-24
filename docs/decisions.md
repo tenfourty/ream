@@ -1535,3 +1535,19 @@ no one reads.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
 Tracker item runcove-5t3oj.160.4.
+
+## Typed pages wait: the company launches with ordinary pages (24 Nov 2026)
+
+**Chosen:** typed pages (a page that holds its content and data, drawn by a shared template whose
+fixes reach every page made from it) stay out of the whole-company design for now. The company
+launches with ordinary pages, and typed pages are designed again once it has run for a while, from
+what its people actually make.
+
+**Not chosen:**
+- Design them now as a later step after data behind a page: commits the design to a change in what
+  a page is before any company use shows which templates matter.
+- Design them now, ahead of data behind a page, for recurring reports: the larger change first,
+  on the same guess.
+
+**Evidence:** Jeremy chose (b) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread), over
+the office's recommendation (a). Tracker item runcove-5t3oj.160.4.
