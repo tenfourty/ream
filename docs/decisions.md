@@ -1551,3 +1551,20 @@ what its people actually make.
 
 **Evidence:** Jeremy chose (b) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread), over
 the office's recommendation (a). Tracker item runcove-5t3oj.160.4.
+
+## On the company deployment, owners see named readers only for direct shares (24 Nov 2026)
+
+**Chosen:** on the whole-company deployment a page's owner sees how many people read it each day,
+and by name only those people and teams the page was shared with directly who opened it. A page
+shared with everyone shows counts, never names. The homelab keeps its rule (20 Nov 2026, above).
+Why: in a company the readers are colleagues, and a name is shown only where the owner already
+chose that person or team as a reader.
+
+**Not chosen:**
+- Every reader by name, as on the homelab: a colleague who opens a company-wide page is named to
+  its owner without having been chosen as a reader.
+- Counts only, never names: the owner of a page shared with a few named people loses the one
+  answer they need, whether those people read it.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
+Tracker item runcove-5t3oj.160.4.
