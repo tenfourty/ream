@@ -16,14 +16,14 @@
 #      While the forge repo is renamed runcove/artifacts -> runcove/ream (FORGE_REPO below) the
 #      conjunct may instead be `github.repository == 'runcove/ream'`, or a parenthesised
 #      disjunction of ONLY such equality tests on those two names (nothing else inside it).
-#      A job whose `if:` is false is never dispatched to a runner, so in the private copy these
-#      jobs never leave the forge. The gate is a conjunct, not just present: `gate || true`,
+#      The guard keeps every gated job's `if:` in a form that both the server and the runner evaluate
+#      to false outside the named repos, so these jobs do not run in the private copy. The gate is a conjunct, not just present: `gate || true`,
 #      `!gate`, `(gate || x) && y` and the literal inside a string are all refused. And no job of
 #      such a file has `runs-on` naming runcove-sec (or an expression, which could): the public
 #      repo's jobs must not claim the dedicated runner.
 #      The gate is also the FIRST top-level conjunct; the `if:` is read exactly as written (a value with
 #      `${{` must be `${{ ... }}` with nothing before or after it, and a bare one has no leading or
-#      trailing whitespace); and `[` or `]` outside a string literal is refused. The expression
+#      trailing whitespace); and `[`, `]`, `{` or `}` outside a string literal is refused. The expression
 #      evaluator reads those forms differently from this reader.
 #   A job-level `if:` that is not a string (`if: false`) is refused too: write the gate and then
 #   `&& false`. A job with a `uses:` (a called workflow) is refused: what it runs is not on this page.
@@ -465,9 +465,10 @@ def tokenize(s):
         j = i
         while j < n and not s[j].isspace() and s[j] not in "'()!,<>&|=":
             j += 1
-        # Rule: no `[` or `]` outside a string literal (an index expression is not read here).
-        if "[" in s[i:j] or "]" in s[i:j]:
-            raise ValueError("a bracket outside a string literal")
+        # Rule: no `[`, `]`, `{` or `}` outside a string literal (an index expression, or text the
+        # evaluator would read around the `}}`, is not read here).
+        if any(ch in s[i:j] for ch in "[]{}"):
+            raise ValueError("a bracket or brace outside a string literal")
         toks.append(("w", s[i:j]))
         i = j
     return toks
@@ -530,7 +531,7 @@ def gate_problem(expr):
     """None if expr has the gate as a top-level conjunct, else why not."""
     s = expr  # as written: no strip, so text or whitespace outside ${{ }} is seen
     if "${{" in s or "}}" in s:
-        m = re.fullmatch(r"\$\{\{(.*)\}\}", s, re.S)
+        m = re.fullmatch(r"\$\{\{(.*?)\}\}", s, re.S)
         if not m or "${{" in m.group(1) or "}}" in m.group(1):
             return "the `if:` mixes ${{ }} with other text"
         s = m.group(1)
@@ -1239,6 +1240,20 @@ selftest() {
   case_ "outside \${{ }}: a bare expression with a leading tab" 1 "$d" "whitespace"
   pubwf "$d" ci.yml "if: \"\${{ ($G) && true }}\"" "if: \"\${{ $G }}\"" "if: \"\${{  $G && true  }}\"" "if: \"$G && true\""
   case_ "outside \${{ }}: exactly \${{ ... }} (space inside the braces is fine), or none" 0 "$d" "4 jobs"
+  # a brace outside a string literal: text left after the first `}}` is read by the runner as text
+  d=$tmp/f2b
+  pubwf "$d" ci.yml "if: \"\${{ ($G) && true }}}\""
+  case_ "braces: a stray } after the closing }} (quoted)" 1 "$d" "a bracket or brace"
+  pubwf "$d" ci.yml "if: \${{ ($G) && true }}}"
+  case_ "braces: a stray } after the closing }} (plain scalar)" 1 "$d" "a bracket or brace"
+  pubwf "$d" ci.yml "if: \"\${{ $G && true }}}}\""
+  case_ "braces: two stray } after the closing }}" 1 "$d" "mixes"
+  pubwf "$d" ci.yml "if: \"$G && {true}\""
+  case_ "braces: a { and } inside a bare expression" 1 "$d" "a bracket or brace"
+  pubwf "$d" ci.yml "if: \"$G && x{\""
+  case_ "braces: a lone { in a bare expression" 1 "$d" "a bracket or brace"
+  pubwf "$d" ci.yml "if: \"\${{ $G && contains('}', 'x') && contains('{', 'y') }}\""
+  case_ "braces: only inside string literals is fine" 0 "$d"
   # (3) the gate must be the FIRST top-level conjunct
   d=$tmp/f3
   pubwf "$d" ci.yml "if: \"fromJSON('x') && ($G)\""
@@ -1367,6 +1382,13 @@ selftest() {
       needs.build.result == 'success'"
   pubwf "$d" other.yaml "if: \"$H && false\""
   gcase_ "gates written as a conjunct in many forms" 0 "$d" "2 GitHub workflow files, 6 jobs"
+  d=$tmp/g_f
+  pubwf "$d" publish.yml "if: \"\${{ ($H) && true }}}\""
+  gcase_ "braces: a stray } after the closing }} (quoted), in .github" 1 "$d" "a bracket or brace"
+  pubwf "$d" publish.yml "if: \${{ ($H) && true }}}"
+  gcase_ "braces: a stray } after the closing }} (plain scalar), in .github" 1 "$d" "a bracket or brace"
+  pubwf "$d" publish.yml "if: \"\${{ $H && contains('}', 'x') }}\""
+  gcase_ "braces: a } inside a string literal is fine, in .github" 0 "$d"
   d=$tmp/g_r1
   pubwf "$d" publish.yml "if: \"$H\"" -
   gcase_ "a GitHub job with no if (the second of two)" 1 "$d" "publish.yml job j2: has no job-level"
