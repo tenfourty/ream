@@ -23,8 +23,8 @@
 # a parameter of `check`; no environment variable can change which addresses the real run reads.
 #
 # The old-name fallback, and with it the second ask, is removed in the rename's contract step, when
-# PUBLIC_URLS_DEFAULT shrinks to the new name alone (docs/decisions.md, "The forge repo moves to
-# runcove/ream").
+# PUBLIC_URLS_DEFAULT shrinks to the new name alone (docs/decisions.md, "After the forge rename, git and
+# tool installs on the old name fail: every address moves to runcove/ream (24 Nov 2026)").
 #
 # Public main is read with SEC_PUBLIC_READ_TOKEN (read of the repository only): the organization
 # is limited-visibility, so an anonymous read is refused. The token rides in git's environment as an
@@ -232,9 +232,12 @@ selftest() {
   via "both absent: fails, naming both in order" fail "at either address: $gone1, $gone2" "$d/ahead" "$ah" "$gone1" "$gone2"
   via "both absent: fails, naming both in the other order" fail "at either address: $gone2, $gone1" "$d/ahead" "$ah" "$gone2" "$gone1"
   via "new has no main: no fallback to the old, which has one" fail "exactly once" "$d/ahead" "$ah" "file://$d/nomain" "$pubu"
+  via "new lists main, the old answers but lists no main: refused" fail "REFUSED: $pubu and file://$d/nomain both answer" \
+    "$d/ahead" "$ah" "$pubu" "file://$d/nomain"
   via "new has a second ref for main: no fallback" fail "exactly once" "$d/ahead" "$ah" "file://$d/duppub" "$pubu"
   said "one address that fails says so with that address and not the either-address text" "$d/ahead" "$ah" \
     "sec-public-main-check: could not read public main at $gone1" "$gone1"
+  said "no address at all says so" "$d/ahead" "$ah" "sec-public-main-check: no address to read public main at"
   said "two addresses that fail say the either-address text" "$d/ahead" "$ah" \
     "sec-public-main-check: could not read public main at either address: $gone1, $gone2" "$gone1" "$gone2"
   # the defaults and the way the real run hands them over: check replaced by one that prints its arguments
@@ -258,9 +261,10 @@ selftest() {
   )
   equal "an explicit address is read alone" "$got" "$ah|$gone1|"
   refused_with "the defaults (https, token unset) are refused for the token" "$d/ahead" "$newname" "$ah" "SEC_PUBLIC_READ_TOKEN is not set"
-  expect fail "no address at all" "$d/ahead" ""
   # a fetch that lands on another commit than the one listed: gitr replaced, in a subshell, by one whose
   # fetch reads another repository
+  # a subshell's own count of failures is lost on exit, so it must exit non-zero when a row in it failed
+  local before=$fails
   (
     # shellcheck disable=SC2329  # called by check, which shellcheck cannot see through
     gitr() {
@@ -269,6 +273,7 @@ selftest() {
       if [ "$1" = fetch ]; then git fetch --quiet --no-tags "file://$d/ahead" refs/heads/main; else git "$@"; fi
     }
     refused_with "a fetch landing on another commit" "$d/ahead" "$pubu" "$(head_of "$d/ahead")" "moved while it was read"
+    [ "$fails" = "$before" ]
   ) || fails=$((fails + 1))
   [ "$fails" = 0 ] || { echo "selftest: $fails failed" >&2; return 1; }
   echo "selftest: ok"
