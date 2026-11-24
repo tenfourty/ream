@@ -21,6 +21,10 @@
 #      `!gate`, `(gate || x) && y` and the literal inside a string are all refused. And no job of
 #      such a file has `runs-on` naming runcove-sec (or an expression, which could): the public
 #      repo's jobs must not claim the dedicated runner.
+#      The gate is also the FIRST top-level conjunct; the `if:` is read exactly as written (a value with
+#      `${{` must be `${{ ... }}` with nothing before or after it, and a bare one has no leading or
+#      trailing whitespace); and `[` or `]` outside a string literal is refused. The expression
+#      evaluator reads those forms differently from this reader.
 #   A job-level `if:` that is not a string (`if: false`) is refused too: write the gate and then
 #   `&& false`. A job with a `uses:` (a called workflow) is refused: what it runs is not on this page.
 #   3. .github/workflows (absent is fine): the same as rule 2, except that the gate is
@@ -461,6 +465,9 @@ def tokenize(s):
         j = i
         while j < n and not s[j].isspace() and s[j] not in "'()!,<>&|=":
             j += 1
+        # Rule: no `[` or `]` outside a string literal (an index expression is not read here).
+        if "[" in s[i:j] or "]" in s[i:j]:
+            raise ValueError("a bracket outside a string literal")
         toks.append(("w", s[i:j]))
         i = j
     return toks
@@ -521,12 +528,14 @@ def conjuncts(toks):
 
 def gate_problem(expr):
     """None if expr has the gate as a top-level conjunct, else why not."""
-    s = expr.strip()
+    s = expr  # as written: no strip, so text or whitespace outside ${{ }} is seen
     if "${{" in s or "}}" in s:
         m = re.fullmatch(r"\$\{\{(.*)\}\}", s, re.S)
         if not m or "${{" in m.group(1) or "}}" in m.group(1):
             return "the `if:` mixes ${{ }} with other text"
         s = m.group(1)
+    elif s != s.strip():
+        return "the `if:` has whitespace or a newline before or after it"
     try:
         toks0 = tokenize(s)
         toks = strip_parens(toks0)
@@ -535,12 +544,15 @@ def gate_problem(expr):
             if toks != toks0 and is_gate_disjunction(toks):
                 return None
             return "the `if:` has a top-level || (it could be true without the gate)"
-        found = [c for c in conjuncts(toks) if is_gate_term(c) or is_gate_disjunction(c)]
+        cs = conjuncts(toks)
     except ValueError as e:
         return f"the `if:` could not be read ({e})"
-    if not found:
+    ok = [is_gate_term(c) or is_gate_disjunction(c) for c in cs]
+    if not any(ok):
         more = f" (or the same on {', '.join(GATE_REPOS[1:])}, or a parenthesised || of only such tests)" if len(GATE_REPOS) > 1 else ""
         return f"the `if:` has no top-level conjunct `github.repository == '{GATE_REPOS[0]}'`{more}"
+    if not ok[0]:
+        return "the gate is not the first top-level conjunct of the `if:`"
     return None
 
 
@@ -1036,11 +1048,11 @@ selftest() {
   d=$tmp/p2
   pubwf "$d" ci.yml \
     "if: \"$G && !contains(github.event.head_commit.message, '[skip ci]')\"" \
-    "if: \"!contains(github.event.head_commit.message, '[skip ci]') && $G && github.ref == 'refs/heads/main'\"" \
+    "if: \"$G && !contains(github.event.head_commit.message, '[skip ci]') && github.ref == 'refs/heads/main'\"" \
     "if: \"($G)\"" \
     "if: \"${G//==/ == }\"" \
     "if: \"\${{ $G && always() }}\"" \
-    "if: \"(github.ref == 'refs/heads/main' || github.event_name == 'push') && $G\"" \
+    "if: \"$G && (github.ref == 'refs/heads/main' || github.event_name == 'push')\"" \
     "if: \"($G && success()) && needs.a.result == 'success'\"" \
     "if: \"$G && false\"" \
     "if: >-
@@ -1125,7 +1137,7 @@ selftest() {
     "if: \"($R || $A)\"" \
     "if: \"($A || $R) && !contains(github.event.head_commit.message, '[skip ci]')\"" \
     "if: \"($A || $R) && github.ref == 'refs/heads/main' && false\"" \
-    "if: \"github.ref == 'refs/heads/main' && ($A || $R)\"" \
+    "if: \"$R && github.ref == 'refs/heads/main'\"" \
     "if: \"(  $A  ||  $R  )\"" \
     "if: \"\${{ ($A || $R) && always() }}\"" \
     "if: \"$A && true\""
@@ -1174,6 +1186,10 @@ selftest() {
   case_ "the two-name gate: a disjunction with another term is no gate" 1 "$d" "no top-level conjunct \`github.repository == 'runcove/artifacts'\`"
   pubwf "$d" ci.yml "if: \"($A || $R) && true\"" "if: \"($A || x)\""
   case_ "the two-name gate: one good job does not excuse a bad one" 1 "$d" "j2"
+  pubwf "$d" ci.yml "if: \"github.ref == 'refs/heads/main' && ($A || $R)\""
+  case_ "the two-name gate: a disjunction gate that is not the first conjunct" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"fromJSON('x') && $R\""
+  case_ "the two-name gate: the new name that is not the first conjunct" 1 "$d" "not the first"
   # a Forgejo directory holding the two-name form still refuses the sec rules as before
   d=$tmp/tn_sec
   pubwf "$d" ci.yml "if: \"($A || $R)\""
@@ -1190,6 +1206,55 @@ selftest() {
   pubwf "$d" publish.yml "if: \"($H || $R)\""
   gcase_ "the mirror gate or a forge name is no gate in .github/workflows" 1 "$d" "REFUSED"
 
+  # --- the three `if:` forms the expression evaluator reads differently from this reader ---
+  # (1) a bracket outside a string literal
+  d=$tmp/f1
+  pubwf "$d" ci.yml "if: \"!github.event.x[true && ($G) && true]\""
+  case_ "brackets: an index expression holding the gate" 1 "$d" "a bracket"
+  pubwf "$d" ci.yml "if: \"$G && github.event.x[0]\""
+  case_ "brackets: the gate first, then an index" 1 "$d" "a bracket"
+  pubwf "$d" ci.yml "if: \"$G && github.event.x['y']\""
+  case_ "brackets: the gate first, then a quoted index" 1 "$d" "a bracket"
+  pubwf "$d" ci.yml "if: \"$G && github.event.x]\""
+  case_ "brackets: a lone closing bracket" 1 "$d" "a bracket"
+  pubwf "$d" ci.yml "if: \"$G && !contains(github.event.head_commit.message, '[skip ci]') && contains('a[0]', ']')\""
+  case_ "brackets: only inside string literals is fine" 0 "$d"
+  # (2) text outside ${{ }}, or whitespace around a bare expression
+  d=$tmp/f2
+  pubwf "$d" ci.yml "if: \" \${{ ($G) && true }}\""
+  case_ "outside \${{ }}: a leading space" 1 "$d" "mixes"
+  pubwf "$d" ci.yml "if: \"\\n\${{ ($G) && true }}\""
+  case_ "outside \${{ }}: a leading newline" 1 "$d" "mixes"
+  pubwf "$d" ci.yml "if: \"\${{ ($G) && true }}\\n\""
+  case_ "outside \${{ }}: a trailing newline" 1 "$d" "mixes"
+  pubwf "$d" ci.yml "if: \"\${{ ($G) && true }} \""
+  case_ "outside \${{ }}: a trailing space" 1 "$d" "mixes"
+  printf 'name: x\n"on": push\njobs:\n  a:\n    runs-on: docker-light\n    if: |\n      ${{ (%s) && true }}\n    steps:\n      - run: echo hi\n' "$G" >"$d/ci.yml"
+  case_ "outside \${{ }}: a | block scalar (trailing newline)" 1 "$d" "mixes"
+  pubwf "$d" ci.yml "if: \"$G\\n\""
+  case_ "outside \${{ }}: a bare expression with a trailing newline" 1 "$d" "whitespace"
+  pubwf "$d" ci.yml "if: \" $G\""
+  case_ "outside \${{ }}: a bare expression with a leading space" 1 "$d" "whitespace"
+  pubwf "$d" ci.yml "if: \"\\t$G\""
+  case_ "outside \${{ }}: a bare expression with a leading tab" 1 "$d" "whitespace"
+  pubwf "$d" ci.yml "if: \"\${{ ($G) && true }}\"" "if: \"\${{ $G }}\"" "if: \"\${{  $G && true  }}\"" "if: \"$G && true\""
+  case_ "outside \${{ }}: exactly \${{ ... }} (space inside the braces is fine), or none" 0 "$d" "4 jobs"
+  # (3) the gate must be the FIRST top-level conjunct
+  d=$tmp/f3
+  pubwf "$d" ci.yml "if: \"fromJSON('x') && ($G)\""
+  case_ "gate position: a call before the gate" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"true && $G\""
+  case_ "gate position: true before the gate" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"\${{ fromJSON('x') && $G }}\""
+  case_ "gate position: a call before the gate, inside \${{ }}" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"a && b && $G\""
+  case_ "gate position: second of three, third" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"!contains(github.event.head_commit.message, '[skip ci]') && $G\""
+  case_ "gate position: a contains() before the gate" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"(github.ref == 'refs/heads/main' || github.event_name == 'push') && $G\""
+  case_ "gate position: a parenthesised || before the gate" 1 "$d" "not the first"
+  pubwf "$d" ci.yml "if: \"($G) && fromJSON('x')\"" "if: \"$G && a && b\"" "if: \"(($G) && a) && b\"" "if: \"\${{ ($G) && fromJSON('x') }}\""
+  case_ "gate position: the gate first, a call after it" 0 "$d" "4 jobs"
   d=$tmp/r4
   mkdir -p "$d"
   printf 'name: x\n"on": push\njobs:\n  a:\n    runs-on: docker-light\n    # %s\n    steps:\n      - run: echo hi\n' "$G" >"$d/ci.yml"
@@ -1294,8 +1359,8 @@ selftest() {
   d=$tmp/g_p2
   pubwf "$d" publish.yml \
     "if: \"$H && github.ref == 'refs/heads/main'\"" \
-    "if: \"github.ref == 'refs/heads/main' && $H\"" \
-    "if: \"(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && $H\"" \
+    "if: \"$H && !contains(github.event.head_commit.message, '[skip ci]')\"" \
+    "if: \"$H && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')\"" \
     "if: \"\${{ $H && always() }}\"" \
     "if: >-
       $H &&
@@ -1307,8 +1372,10 @@ selftest() {
   gcase_ "a GitHub job with no if (the second of two)" 1 "$d" "publish.yml job j2: has no job-level"
   pubwf "$d" publish.yml "if: \"$G\""
   gcase_ "the forge's gate is not the mirror's" 1 "$d" "no top-level conjunct \`github.repository == 'tenfourty/ream'\`"
+  pubwf "$d" publish.yml "if: \"$H && $G\""
+  gcase_ "the mirror's gate and the forge's: gated to both, never true anywhere" 0 "$d" "1 jobs"
   pubwf "$d" publish.yml "if: \"$G && $H\""
-  gcase_ "the forge's gate and the mirror's: gated to both, never true anywhere" 0 "$d" "1 jobs"
+  gcase_ "the mirror's gate second, after the forge's: not the first conjunct" 1 "$d" "not the first"
   pubwf "$d" publish.yml "if: \"github.repository != 'runcove-sec/artifacts-sec'\""
   gcase_ "a negative gate" 1 "$d" "no top-level conjunct"
   pubwf "$d" publish.yml "if: \"$H || true\""
