@@ -1498,3 +1498,23 @@ keeps working only while the name stays reserved.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts; security and homelab raised no
 hold (rename thread in #bot-artifacts, 24 Nov 2026).
+
+## The whole-company design restarts now, beside the comparison's builds (24 Nov 2026)
+
+**Chosen:** the design for Ream used by a whole company (the page "Ream for the whole of
+GitGuardian", approved at version 8 on 9 Nov 2026) restarts now, in parallel with the builds that
+came out of the Ream vs Claude artifacts comparison. The design is the office's own writing; the
+builds run in lanes. The restart is a new version of that same page, taking in what has shipped
+since version 8 (MCP sign-in, view stats, screenshots of any readable page, the MCP twins) and the
+comparison's findings (viewer identity, co-editing, data behind a page, typed pages), with its open
+questions re-asked, revised, in one fresh thread. Building company features still waits for the
+revised design's approval.
+
+**Not chosen:**
+- Restart once the comparison's verdict page is out, so the design could cite its verdicts: the
+  verdicts are already on the tracker, and waiting would hold the design for no new input.
+- Restart only after the three small builds and the MCP fixes land: they are separate lanes and
+  do not change the design's open questions.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the question asked on 23 Nov).
+Tracker item runcove-5t3oj.160.4.
