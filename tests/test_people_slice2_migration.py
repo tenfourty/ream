@@ -26,7 +26,9 @@ def _old_shape(db) -> None:
         )
         conn.execute(
             "create table human_pref (key text primary key, value text not null,"
-            " updated_at timestamptz not null)"
+            " updated_at timestamptz not null default "
+            + ("(artifacts_now())" if db.sqlite else "now()")
+            + ")"
         )
         if db.sqlite:
             conn.execute("pragma user_version = 36")

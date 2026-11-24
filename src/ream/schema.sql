@@ -1399,13 +1399,23 @@ create table if not exists person (
 -- is refused. SQLite does the same as its schema step 37 (its rebuilt tables list `person` first,
 -- here it was added last: the copier matches columns by name). Each block runs once: the test for
 -- "already done" is the column or the table, so a start never refills a pin the owner removed.
+create table if not exists page_pin (
+    person      text        not null,
+    artifact_id text        not null references artifact(id) on delete cascade,
+    pinned_at   timestamptz not null,
+    primary key (person, artifact_id)
+);
 do $$
+declare
+    fresh boolean;
 begin
-    if not exists (
+    -- one transaction moves `page_read` and fills `page_pin`, so the first is the test for both
+    fresh := not exists (
         select 1 from information_schema.columns
         where table_schema = current_schema() and table_name = 'page_read'
           and column_name = 'person'
-    ) then
+    );
+    if fresh then
         alter table page_read add column person text;
         if exists (select 1 from page_read) then
             update page_read set person = (select value from service_meta where key = 'owner_id');
@@ -1441,13 +1451,7 @@ begin
         alter table frame_pass add column person text;
         update frame_pass set person = (select value from service_meta where key = 'owner_id');
     end if;
-    if to_regclass('page_pin') is null then
-        create table page_pin (
-            person      text        not null,
-            artifact_id text        not null references artifact(id) on delete cascade,
-            pinned_at   timestamptz not null,
-            primary key (person, artifact_id)
-        );
+    if fresh then
         if exists (select 1 from artifact where pinned_at is not null) then
             if not exists (select 1 from service_meta where key = 'owner_id') then
                 raise exception 'people slice 2: pinned pages exist but service_meta records no owner id';

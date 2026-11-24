@@ -608,7 +608,7 @@ def _people_slice_2(conn) -> None:
     """SQLite schema step 37 (people design, slice 2); schema.sql does the same on Postgres.
 
     `page_read` (person, artifact_id) and `human_pref` (person, key) are rebuilt, `page_pin`
-    is made and filled from `artifact.pinned_at` (kept only as a record, no longer read or written), and
+    (made by the statement before this function in step 37) is filled from `artifact.pinned_at` (kept only as a record, no longer read or written), and
     `frame_pass` gains `person` (its rows do not count toward the owner refusal, as on
     Postgres). Every migrated row takes the owner id recorded in
     `service_meta`; a database that holds such rows and records none is refused, because
@@ -660,13 +660,6 @@ def _people_slice_2(conn) -> None:
     )
     conn.execute("drop table human_pref")
     conn.execute("alter table human_pref_new rename to human_pref")
-    conn.execute(
-        "create table page_pin ("
-        " person text not null,"
-        " artifact_id text not null references artifact(id) on delete cascade,"
-        " pinned_at timestamptz not null,"
-        " primary key (person, artifact_id))"
-    )
     conn.execute(
         "insert into page_pin (person, artifact_id, pinned_at)"
         " select %s, id, pinned_at from artifact where pinned_at is not null",
@@ -1164,7 +1157,18 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # 24 Nov 2026: per-person state, people design slice 2 (see schema.sql): read marks and
     # preferences rebuilt with the person in their key, pins in their own table, and the person
     # a frame pass was minted for. Rows that exist take the owner id `service_meta` records.
-    37: (_people_slice_2,),
+    # `page_pin` is created by the plain statement first (so the table lists find it), then the
+    # function rebuilds the rest and fills it.
+    37: (
+        (
+            "create table page_pin ("
+            " person text not null,"
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " pinned_at timestamptz not null,"
+            " primary key (person, artifact_id))"
+        ),
+        _people_slice_2,
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 
