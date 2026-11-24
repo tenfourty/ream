@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slice 1 built (this commit); slices 2 to 4 designed, not built. Written up from the
+Status: slice 1 built; slices 2 to 4 designed, not built. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -80,9 +80,11 @@ Each lands alone and the homelab stays byte-identical until a setting is set.
   extended to every person). A person is matched by (issuer, subject), never by email. Slice 4
   builds this.
 
-## Open question (asked of the owner)
-
-- B. Whether the homelab turns on in-app sign-in after slice 4.
+- B. The homelab's Ream keeps its login gate and never turns on gallery sign-in. GitGuardian runs its
+  own separate instance; sign-in is proven in tests until that instance exists. No open questions
+  remain.
+- Slice 4 must fill person #1's issuer and subject from `REAM_OIDC_OWNER_SUBJECT` when it is set
+  (no `oidc_owner_sub` pin is written then, so `owner.check` finds nothing to copy).
 
 ## Not yet checked
 
