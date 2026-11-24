@@ -26,9 +26,11 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   there is one. `owner._COLUMNS` gains `person.id`, so `change-owner` moves the row.
 - Slice 2 (built): `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
   `page_pin(person, artifact_id, pinned_at)` filled once from `artifact.pinned_at` (kept only as a record, neither read
-  nor written; this change cannot be rolled back by image alone: an older image on a migrated database
-  fails on every page open, and pins made meanwhile are lost, so the way back is restoring the pre-upgrade
-  backup, `docs/agent/runbooks/sqlite.md`); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
+  nor written; no image rollback: an older image on a migrated database
+  fails on every page open, and pins made meanwhile are lost. On SQLite restore the newest nightly snapshot
+  (`docs/agent/runbooks/sqlite.md`, § "A real restore"; writes since it are lost, so snapshot just before
+  upgrading); on Postgres restore the deployment's own pg_dump backup (no runbook here); otherwise roll
+  forward with a fix); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
   Migrated rows take the `service_meta` owner id; a database that holds such rows and records no
   owner is refused rather than guessed. SQLite does it in step 37 (a function: rebuilds and copies);
   Postgres at the end of `schema.sql`, each part guarded by its own "already done" test (the column or

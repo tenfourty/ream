@@ -120,7 +120,7 @@ def test_the_owner_pins_through_the_gallery_and_it_is_a_page_pin_row(db, owner_w
     assert [r[:2] for r in _rows(db, "select person, artifact_id from page_pin")] == [
         ("jeremy", page.id)
     ]
-    # `artifact.pinned_at` is kept only as a record (not a rollback path) and neither read nor written.
+    # `artifact.pinned_at` is kept only as a record (there is no image rollback for this change) and neither read nor written.
     assert _rows(db, "select pinned_at from artifact where id = %s", page.id) == [
         (None,)
     ]
@@ -220,3 +220,5 @@ def test_a_pinned_page_reads_back_with_a_datetime_on_every_read_path(db):
     assert isinstance(store.get_owned(db, "seat", page.id).pinned_at, datetime)
     assert isinstance(store.list_for_agent(db, "seat")[0].pinned_at, datetime)
     assert isinstance(store.list_readable(db, "seat")[0].pinned_at, datetime)
+    assert store.set_deleted(db, page.id, True, agent="seat")
+    assert isinstance(store.list_deleted(db, "seat")[0].pinned_at, datetime)
