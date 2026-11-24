@@ -6970,6 +6970,7 @@ def gallery_router(db: Database) -> APIRouter:
         comments_scope: str = Query("this", alias="comments", pattern="^(this|all)$"),
         # Round 2 and later open on what changed; "0" is his Hide changes.
         changes: str = Query("1", pattern="^(0|1)$"),
+        person: people.Person = people.CURRENT,
     ) -> HTMLResponse:
         # Look the artifact up rather than framing whatever the URL said: an
         # unchecked id renders a frame pointing at an invented subdomain, and

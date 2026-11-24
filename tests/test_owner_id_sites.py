@@ -17,6 +17,8 @@ Keyed by (file, enclosing function) with how many calls it holds.
 import ast
 import pathlib
 
+from ream import people
+
 SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "ream"
 
 REQUEST = "request person"
@@ -102,39 +104,42 @@ def test_a_gallery_handler_takes_the_person_from_people_current():
     assert gallery == {("gallery.py", "_bubble")}
 
 
-def _writes_and_owner_only():
-    tree = ast.parse((SRC / "gallery.py").read_text())
-    routes = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for dec in node.decorator_list:
-            if (
-                isinstance(dec, ast.Call)
-                and isinstance(dec.func, ast.Attribute)
-                and ast.unparse(dec.func.value) == "router"
-            ):
-                routes.append(
-                    (dec.func.attr, ast.unparse(dec.args[0]), ast.unparse(node.args))
-                )
-    return routes
+def _takes(dependant, call) -> bool:
+    return any(d.call is call or _takes(d, call) for d in dependant.dependencies)
 
 
-# Routes that take no person, with why. None today: every write names its person.
+# Writes that take no person, one reason each. None today.
 NO_PERSON_WRITES: dict[str, str] = {}
-# Reads that are the owner's alone (they show keys and consent), not just writes.
+# Reads that are the owner's alone (they show keys and consent).
 OWNER_ONLY_READS = {"/machines", "/connect"}
+# Reads that write (mark a page read, count a view): they take the request's person.
+READS_THAT_WRITE = {"/a/{artifact_id}"}
 
 
-def test_every_gallery_write_names_its_person():
-    routes = _writes_and_owner_only()
-    assert any(m == "post" for m, _, _ in routes), "the walk is broken"
-    for method, path, args in routes:
-        if method in ("post", "put", "patch", "delete"):
-            ok = "people.CURRENT" in args or "people.REQUIRE_OWNER" in args
-            assert ok or path in NO_PERSON_WRITES, (
-                f"{method.upper()} {path} takes neither people.CURRENT nor"
-                " people.REQUIRE_OWNER: say whose act it is"
-            )
-        if method == "get" and path in OWNER_ONLY_READS:
-            assert "people.REQUIRE_OWNER" in args, path
+def test_every_gallery_route_that_writes_names_its_person(db):
+    """Walks the real router (async and sync handlers, `add_api_route`, routes another module
+    registers on it) and its dependency trees: a write names `people.current`, directly or
+    through `require_owner`."""
+    from fastapi.routing import APIRoute
+
+    from ream.gallery import gallery_router
+
+    routes = [r for r in gallery_router(db).routes if isinstance(r, APIRoute)]
+    assert len(routes) > 40, "the walk is broken"
+    seen_post_forms = False
+    for route in routes:
+        named = _takes(route.dependant, people.current)
+        owner_only = _takes(route.dependant, people.require_owner)
+        for method in route.methods:
+            if method in ("POST", "PUT", "PATCH", "DELETE"):
+                seen_post_forms |= route.path == "/a/{artifact_id}/forms/{form}"
+                assert named or route.path in NO_PERSON_WRITES, (
+                    f"{method} {route.path} does not depend on people.current:"
+                    " say whose act it is"
+                )
+            if method == "GET" and route.path in OWNER_ONLY_READS:
+                assert owner_only, route.path
+            if method == "GET" and route.path in READS_THAT_WRITE:
+                assert named, route.path
+    assert seen_post_forms, "the forms route (forms_ui.register) is not in the walk"
+    assert {r.path for r in routes} >= OWNER_ONLY_READS | READS_THAT_WRITE

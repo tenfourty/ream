@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ream import formanswer, formrecord, forms, store
+from ream import formanswer, formrecord, forms, people, store
 from ream.content import _script_json
 
 _STYLE = (
@@ -139,7 +139,12 @@ def register(
         )
 
     @router.post("/a/{artifact_id}/forms/{form}")
-    async def submit_form(artifact_id: str, form: str, request: Request):
+    async def submit_form(
+        artifact_id: str,
+        form: str,
+        request: Request,
+        person: people.Person = people.CURRENT,
+    ):
         same_origin(request)
         ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
@@ -178,7 +183,11 @@ def register(
             if row is None:
                 raise store.NotFound()
             return formanswer.submit(
-                db, row[0], version=version, values=body.get("values")
+                db,
+                row[0],
+                version=version,
+                values=body.get("values"),
+                by=person.id,
             )
 
         try:
