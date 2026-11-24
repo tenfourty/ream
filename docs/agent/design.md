@@ -423,3 +423,9 @@ in (§10); wording and memory figures (§4.2, §8); WIP stance (§6.5).
 
 Also corrected by that review: a sign-in alone does not make a host "owner only". Ream's hosts
 allow only the owner, by a subject rule with an explicit deny after it.
+
+## People (24 Nov 2026)
+
+The owner is person #1 in a `person` table, and a gallery request has a person (`people.current`),
+which is the owner from settings until gallery sign-in exists. Access is still single-owner. The design
+and the slices are in `docs/agent/specs/2026-11-24-people-design.md`.

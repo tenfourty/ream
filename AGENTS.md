@@ -71,6 +71,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
+| People: the owner is person #1 (the `person` table, seeded by `owner.check`); `people.current(request)` is who a gallery request is for, `people.require_owner` an owner-only route; design `docs/agent/specs/2026-11-24-people-design.md` | `src/ream/people.py`; `tests/test_people_seed.py`, `tests/test_owner_id_sites.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | View counts: who read a page, per day and per viewer (`record`, best-effort, emits no event; read back by `report` through `GET /api/v1/pages/{id}/stats`, the MCP `page_stats` tool and `ream stats`); the design is `docs/agent/specs/2026-11-22-view-stats-design.md` | `src/ream/pageviews.py` |
 | Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render; a screenshot on request (`rendercore.shoot`, over the browser's DevTools pipe; `/v1/shot` on the renderer), and an agent's screenshot of a page it can read (`shots.take`, served at `GET /api/v1/pages/{id}/screenshot`) | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `devtools.py`, `thumbs.py`, `shots.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
@@ -223,7 +224,13 @@ hyphens), `REAM_OWNER_NAME` (default `the owner`) and `REAM_OWNER_PRONOUN` (`the
 so the first start records it in `service_meta` and every later start refuses a different one
 (`owner.check`). A deployment whose rows say another id sets the variable to that id; to move a
 database to a new one run `artifacts-admin change-owner <new-id> [--dry-run]`, then set the variable
-and restart. No agent may be named the owner id. Do not write the id as a literal in code: read
+and restart. The owner is **person #1**: `owner.check` seeds a `person` row with that id, and a gallery handler
+that acts for "the request's person" takes `people.CURRENT` and uses `person.id` rather than
+reading settings (values identical today; sign-in for other people comes later). Every remaining
+`settings.owner_id()` call is classified in `tests/test_owner_id_sites.py`: a new one fails it until
+you say whether it is the request's person, the page owner or the deployment seed.
+
+No agent may be named the owner id. Do not write the id as a literal in code: read
 `settings.owner_id()` (SQL takes it as a bound parameter).
 
 ## Safety rules
