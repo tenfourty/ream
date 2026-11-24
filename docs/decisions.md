@@ -1582,3 +1582,20 @@ approval of version 8 as the design of record.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread), after
 answering its three other questions. Tracker item runcove-5t3oj.160.4.
+
+## A new person's stored id is a readable name from their login (24 Nov 2026)
+
+**Chosen:** when the whole-company design adds people beyond the owner (step 2, people), each new
+person gets a readable id taken from their login (like the owner's `jeremy`), stored on their
+answers, comments and actions. It is fixed once given and never reused, even after the person
+leaves. Person ids and agent names share one name space: an agent cannot take a person's name and
+a person cannot take an agent's. A person is matched to their login by the login's issuer and
+permanent subject, never by email. Why: stored ids show up in what people read (who answered,
+who commented), and a readable one needs no lookup.
+
+**Not chosen:** an opaque id (`p_…`) with the name shown beside it: safe against a login name being
+reused, but every place that shows an id would need a name lookup, and the never-reused rule gives
+the same safety.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
+Tracker item runcove-5t3oj.160.5; design `docs/agent/specs/2026-11-24-people-design.md`.
