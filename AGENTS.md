@@ -227,8 +227,9 @@ database to a new one run `artifacts-admin change-owner <new-id> [--dry-run]`, t
 and restart. The owner is **person #1**: `owner.check` seeds a `person` row with that id, and a gallery handler
 that acts for "the request's person" takes `people.CURRENT` and uses `person.id` rather than
 reading settings (values identical today; sign-in for other people comes later). Every remaining
-`settings.owner_id()` call is classified in `tests/test_owner_id_sites.py`: a new one fails it until
-you say whether it is the request's person, the page owner or the deployment seed.
+read of the owner id (call, `.owner_id` attribute, import) is classified in `tests/test_owner_id_sites.py`:
+a new one fails it until you say whether it is the request's person, the page owner or the deployment
+seed. The same test fails for a gallery write route that does not depend on `people.current`.
 
 No agent may be named the owner id. Do not write the id as a literal in code: read
 `settings.owner_id()` (SQL takes it as a bound parameter).

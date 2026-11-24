@@ -42,8 +42,11 @@ else, as for a page that is not there), `OPEN_SIGN_IN`. The gallery handlers tha
 person" (answer a decision, comment, resolve, reopen, delete, restore, stage a comment picture) take
 `person = people.CURRENT` and use `person.id`; the Machines handlers take `people.REQUIRE_OWNER`.
 Values are identical to `settings.owner_id()`; no served text changes. `tests/test_owner_id_sites.py`
-classifies every remaining `settings.owner_id()` call as request person, page owner (step 4) or
-deployment seed, so a new call has to say which.
+classifies every read of the owner id (calls, `.owner_id` attribute reads, imports) as request person,
+page owner (step 4) or deployment seed, so a new one has to say which. The same file walks the real
+gallery router's dependency trees and fails unless every write route (and the page view, which marks
+a page read) depends on `people.current`, and the Machines and Connect reads on `require_owner`.
+The forms submit route takes `people.CURRENT` and passes `person.id` to `formanswer.submit`.
 
 ## Guards (for the later slices; each is a test)
 
