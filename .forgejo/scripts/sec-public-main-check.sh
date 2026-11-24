@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # sec-public-main-check.sh -- an embargoed fix's image is hand-pinned to production, so it must carry
-# everything public main has: refuse unless public main of runcove/artifacts is an ancestor of the
-# commit being built. Without it, a private copy that had not merged public main produced a pinnable
-# image that would have rolled production back 40 commits (22 Nov 2026). Runbook:
+# everything public main has: refuse unless public main of runcove/ream (formerly runcove/artifacts) is
+# an ancestor of the commit being built. Without it, a private copy that had not merged public main
+# produced a pinnable image that would have rolled production back 40 commits (22 Nov 2026). Runbook:
 # docs/agent/runbooks/embargoed-fix.md, step 4.
 #
 #   sec-public-main-check.sh [<url>]          needs SEC_PUBLIC_READ_TOKEN in the environment; run in the checkout, with the full history (not shallow);
 #                                             the commit built is $GITHUB_SHA
 #   sec-public-main-check.sh --selftest       offline, against local repositories
 #
-# Public main is read with SEC_PUBLIC_READ_TOKEN (read of runcove/artifacts only): the organization
+# Which address: with a <url>, that one alone. Without one, the repository's new name
+# (https://git.tenfourty.site/runcove/ream.git) is tried first and the old one (.../runcove/artifacts.git)
+# second, so the script works before and after the forge renames the repository (after it, git over
+# HTTPS on the old name fails with "RPC failed; HTTP 301", and http.followRedirects is deliberately not
+# set). The old name is tried only when `git ls-remote` of the new one FAILS; a new name that lists
+# but has no main, lists main twice, or fails any later step is a failure, not a reason to ask the old
+# one. The first address that lists main is used for the fetch and every step after it, never mixed
+# with the other, and is printed on stderr (the address only, never the token). If neither lists main
+# the failure names both. The selftest's seam: SEC_PUBLIC_URL_CANDIDATES, an ordered, space-separated
+# list that replaces the two defaults and is accepted only when every entry is a file:// address
+# (anything else in it refuses the run).
+#
+# Public main is read with SEC_PUBLIC_READ_TOKEN (read of the repository only): the organization
 # is limited-visibility, so an anonymous read is refused. The token rides in git's environment as an
 # extra header, never on a command line, and is required for an https address (a file:// address,
 # used by the selftest, needs none). Anything it cannot establish -- the address unreadable, no `main`, a second answer, a shallow
@@ -17,7 +29,12 @@
 # a skip: "could not tell" stops the build, and the SEC BUILT line is never printed.
 set -euo pipefail
 
-PUBLIC_URL_DEFAULT="https://git.tenfourty.site/runcove/artifacts.git"
+# The new name first, then the old: the forge repository is being renamed from runcove/artifacts to
+# runcove/ream, and the new name does not exist until then.
+PUBLIC_URLS_DEFAULT=(
+  "https://git.tenfourty.site/runcove/ream.git"
+  "https://git.tenfourty.site/runcove/artifacts.git"
+)
 
 # gitr <seconds> <git args>: git bounded by a timeout (a timeout is a failure), with the read token
 # as a header when there is one; the token is never an argument.
@@ -35,20 +52,44 @@ gitr() {
   fi
 }
 
+# check <url> <built> [<fallback url>...]: the first address whose ls-remote succeeds is the one used for
+# everything after it; a later address is tried only when the earlier one's ls-remote failed.
 check() {
-  local url="$1" built="$2" listed pub fetched
-  case "$url" in
-    file://*) ;;
-    *) [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ] \
-         || { echo "sec-public-main-check: SEC_PUBLIC_READ_TOKEN is not set on this repo, so public main cannot be read" >&2; return 1; } ;;
-  esac
+  local url="$1" built="$2" listed pub fetched u shown
+  shift 2
+  local cands=("$url" "$@") tried=()
+  url=""
+  for u in "${cands[@]}"; do
+    case "$u" in
+      file://*) ;;
+      *) [ -n "${SEC_PUBLIC_READ_TOKEN:-}" ] \
+           || { echo "sec-public-main-check: SEC_PUBLIC_READ_TOKEN is not set on this repo, so public main cannot be read" >&2; return 1; } ;;
+    esac
+  done
   [[ "$built" =~ ^[0-9a-f]{40}$ ]] || { echo "sec-public-main-check: no commit to check" >&2; return 1; }
   [ "$(git rev-parse HEAD)" = "$built" ] \
     || { echo "sec-public-main-check: the checkout is not the commit being built" >&2; return 1; }
   [ "$(git rev-parse --is-shallow-repository)" = "false" ] \
     || { echo "sec-public-main-check: the checkout is shallow, so ancestry cannot be judged" >&2; return 1; }
-  listed=$(gitr 60 ls-remote "$url" refs/heads/main </dev/null) \
-    || { echo "sec-public-main-check: could not read public main" >&2; return 1; }
+  for u in "${cands[@]}"; do
+    if listed=$(gitr 60 ls-remote "$u" refs/heads/main </dev/null); then
+      url="$u"
+      break
+    fi
+    tried+=("$u")
+  done
+  if [ -z "$url" ]; then
+    if [ "${#cands[@]}" = 1 ]; then
+      echo "sec-public-main-check: could not read public main" >&2
+    else
+      shown=""
+      for u in "${tried[@]}"; do shown="${shown:+$shown, }$(printf '%s' "$u" | sed 's#//[^/@]*@#//#')"; done
+      echo "sec-public-main-check: could not read public main at either address: $shown" >&2
+    fi
+    return 1
+  fi
+  shown=$(printf '%s' "$url" | sed 's#//[^/@]*@#//#')
+  echo "sec-public-main-check: public main read at $shown" >&2
   [ "$(printf '%s\n' "$listed" | grep -c .)" = "1" ] \
     || { echo "sec-public-main-check: public main did not list exactly once" >&2; return 1; }
   pub=${listed%%[[:space:]]*}
@@ -67,6 +108,29 @@ check() {
     echo "Merge public main into the private copy and run again; an image without it would roll production back." >&2
     return 1
   fi
+}
+
+# run_check <built> [<url>]: with a url, that one address alone; without, the two defaults in order (or,
+# for the selftest, SEC_PUBLIC_URL_CANDIDATES, which must hold only file:// addresses).
+run_check() {
+  local built="$1" u
+  local -a urls
+  if [ -n "${2:-}" ]; then
+    check "$2" "$built"
+    return
+  fi
+  if [ -n "${SEC_PUBLIC_URL_CANDIDATES:-}" ]; then
+    read -r -a urls <<<"$SEC_PUBLIC_URL_CANDIDATES"
+    for u in "${urls[@]}"; do
+      case "$u" in
+        file://*) ;;
+        *) echo "sec-public-main-check: SEC_PUBLIC_URL_CANDIDATES takes only file:// addresses" >&2; return 1 ;;
+      esac
+    done
+  else
+    urls=("${PUBLIC_URLS_DEFAULT[@]}")
+  fi
+  check "${urls[0]}" "$built" "${urls[@]:1}"
 }
 
 selftest() {
@@ -130,6 +194,32 @@ selftest() {
     "SEC_PUBLIC_READ_TOKEN is not set"
   SEC_PUBLIC_READ_TOKEN="" refused_with "https url with the token set but empty is refused for the token" \
     "$d/ahead" "$https" "$(head_of "$d/ahead")" "SEC_PUBLIC_READ_TOKEN is not set"
+  # via <name> <pass|fail> <text the output must hold> <dir> <candidates> <built> [<url argument>]: the
+  # whole of run_check, the way the workflow calls it
+  via() {
+    local name="$1" want="$2" text="$3" dir="$4" candlist="$5" built="$6" msg rc=0
+    shift 6
+    msg=$(cd "$dir" && SEC_PUBLIC_URL_CANDIDATES="$candlist" run_check "$built" "$@" 2>&1) || rc=$?
+    if { [ "$want" = pass ] && [ "$rc" = 0 ]; } || { [ "$want" = fail ] && [ "$rc" != 0 ]; }; then
+      if [[ "$msg" == *"$text"* ]]; then echo "ok   $name"
+      else echo "FAIL $name (output lacks \"$text\"): $msg"; fails=$((fails + 1)); fi
+    else echo "FAIL $name (exit $rc): $msg"; fails=$((fails + 1)); fi
+  }
+  local gone1="file://$d/gone1" gone2="file://$d/gone2" ah
+  ah=$(head_of "$d/ahead")
+  via "new name present: it is the one used" pass "public main read at $pubu" "$d/ahead" "$pubu file://$d/unrelated" "$ah"
+  via "new name absent, old present: the old one is used" pass "public main read at $pubu" "$d/ahead" "$gone1 $pubu" "$ah"
+  via "both absent: fails, naming both" fail "at either address: $gone1, $gone2" "$d/ahead" "$gone1 $gone2" "$ah"
+  via "new lists another main than the old: the new one wins, no mixing" pass "public main read at file://$d/unrelated" \
+    "$d/unrelated" "file://$d/unrelated $pubu" "$(head_of "$d/unrelated")"
+  via "new lists another main than the old: a build lacking the new one's main is refused" fail "REFUSED" \
+    "$d/ahead" "file://$d/unrelated $pubu" "$ah"
+  via "new has no main: no fallback to the old, which has one" fail "exactly once" "$d/ahead" "file://$d/nomain $pubu" "$ah"
+  via "new has a second ref for main: no fallback" fail "exactly once" "$d/ahead" "file://$d/duppub $pubu" "$ah"
+  via "an explicit url is the only address" pass "public main read at $pubu" "$d/ahead" "$gone1 file://$d/unrelated" "$ah" "$pubu"
+  via "an explicit url that fails does not fall back" fail "could not read public main" "$d/ahead" "$pubu" "$ah" "$gone1"
+  via "a candidate list with a non-file address is refused" fail "only file://" "$d/ahead" "$pubu $https" "$ah"
+  via "the defaults (https, token unset) are refused for the token" fail "SEC_PUBLIC_READ_TOKEN is not set" "$d/ahead" "" "$ah"
   # a fetch that lands on another commit than the one listed: gitr replaced, in a subshell, by one whose
   # fetch reads another repository
   (
@@ -147,5 +237,5 @@ selftest() {
 
 case "${1:-}" in
   --selftest) selftest ;;
-  *) check "${1:-$PUBLIC_URL_DEFAULT}" "${GITHUB_SHA:-}" ;;
+  *) run_check "${GITHUB_SHA:-}" "${1:-}" ;;
 esac
