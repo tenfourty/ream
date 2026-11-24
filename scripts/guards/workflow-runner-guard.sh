@@ -17,7 +17,10 @@
 #      conjunct may instead be `github.repository == 'runcove/ream'`, or a parenthesised
 #      disjunction of ONLY such equality tests on those two names (nothing else inside it).
 #      The guard keeps every gated job's `if:` in a form that both the server and the runner evaluate
-#      to false outside the named repos, so these jobs do not run in the private copy. The gate is a conjunct, not just present: `gate || true`,
+#      to false outside the named repos, so these jobs do not run in the private copy. That holds only
+#      for an `if:` the expression parser can read (an error is not a false), so the whole `if:` is read
+#      with the evaluator's lexer (only space, tab, newline and carriage return are whitespace outside a
+#      string literal; a word is letters, digits and _ - . * +) and grammar, and one it cannot parse is refused. The gate is a conjunct, not just present: `gate || true`,
 #      `!gate`, `(gate || x) && y` and the literal inside a string are all refused. And no job of
 #      such a file has `runs-on` naming runcove-sec (or an expression, which could): the public
 #      repo's jobs must not claim the dedicated runner.
@@ -429,11 +432,22 @@ def check_sec_job_supply(where, jid, job):
                 refuse(where, f"{name}: {why}")
 
 
+# The expression lexer of the evaluator (actionlint's, which the forge reads the same way): outside a
+# string literal only space, \t, \n and \r are whitespace, and a word is made of the characters below.
+# Anything else (another Unicode space, `"`, `@`, `;`, `#`, `$`, ...) is not a token: the evaluator
+# errors, and a job whose `if:` errors is sent to a runner (only a false result skips it).
+WORD_CHARS = re.compile(r"[A-Za-z0-9_.*+-]+")
+IDENT = r"[A-Za-z_][A-Za-z0-9_-]*"
+WORD_PATH = re.compile(rf"{IDENT}(\.({IDENT}|\*))*")  # a context path, a function name, true/false/null
+WORD_DEREF = re.compile(rf"(\.({IDENT}|\*))+")  # `.name` or `.*` after a call or a parenthesis
+WORD_NUMBER = re.compile(r"[+-]?([0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F]+)")
+
+
 def tokenize(s):
     toks, i, n = [], 0, len(s)
     while i < n:
         c = s[i]
-        if c.isspace():
+        if c in " \t\n\r":
             i += 1
             continue
         if c == "'":
@@ -462,16 +476,98 @@ def tokenize(s):
             continue
         if c in "&|=":
             raise ValueError(f"a stray {c!r}")
-        j = i
-        while j < n and not s[j].isspace() and s[j] not in "'()!,<>&|=":
-            j += 1
         # Rule: no `[`, `]`, `{` or `}` outside a string literal (an index expression, or text the
         # evaluator would read around the `}}`, is not read here).
-        if any(ch in s[i:j] for ch in "[]{}"):
+        if c in "[]{}":
             raise ValueError("a bracket or brace outside a string literal")
-        toks.append(("w", s[i:j]))
-        i = j
+        m = WORD_CHARS.match(s, i)
+        if not m:
+            raise ValueError(f"the character {c!r} outside a string literal")
+        toks.append(("w", m.group()))
+        i = m.end()
     return toks
+
+
+def check_grammar(toks):
+    """Parse the whole token list as the evaluator's expression grammar (loosest to tightest: ||, &&,
+    == !=, < <= > >=, !; operands: a string, a number, a context path, a call, a parenthesised
+    expression), or raise ValueError. An `if:` the evaluator cannot parse is sent to a runner, so no
+    conjunct after the gate may be one it would reject. Index brackets are refused by the tokenizer."""
+    pos = 0
+
+    def peek():
+        return toks[pos] if pos < len(toks) else None
+
+    def take():
+        nonlocal pos
+        t = peek()
+        pos += 1
+        return t
+
+    def binary(ops, sub):
+        sub()
+        while peek() is not None and peek()[0] == "op" and peek()[1] in ops:
+            take()
+            sub()
+
+    def expr():
+        binary(("||",), and_)
+
+    def and_():
+        binary(("&&",), eq)
+
+    def eq():
+        binary(("==", "!="), cmp_)
+
+    def cmp_():
+        binary(("<", "<=", ">", ">="), unary)
+
+    def unary():
+        while peek() == ("op", "!"):
+            take()
+        operand()
+
+    def deref():
+        while peek() is not None and peek()[0] == "w" and WORD_DEREF.fullmatch(peek()[1]):
+            take()
+
+    def operand():
+        t = take()
+        if t is None:
+            raise ValueError("the expression ends where an operand is expected")
+        if t[0] == "str":
+            return
+        if t == ("op", "("):
+            expr()
+            if take() != ("op", ")"):
+                raise ValueError("a missing )")
+            deref()
+        elif t[0] == "w":
+            if WORD_NUMBER.fullmatch(t[1]):
+                return
+            if not WORD_PATH.fullmatch(t[1]):
+                raise ValueError(f"{t[1]!r} is not a name or a number")
+            if peek() == ("op", "("):
+                if "." in t[1]:
+                    raise ValueError(f"{t[1]!r} is called but is not a function name")
+                take()
+                if peek() == ("op", ")"):
+                    take()
+                else:
+                    while True:
+                        expr()
+                        u = take()
+                        if u == ("op", ")"):
+                            break
+                        if u != ("op", ","):
+                            raise ValueError("a call argument list is not closed")
+                deref()
+        else:
+            raise ValueError(f"unexpected {t[1]!r}")
+
+    expr()
+    if pos != len(toks):
+        raise ValueError(f"unexpected {toks[pos][1]!r} after a complete expression")
 
 
 def split_top(toks, op):
@@ -531,7 +627,7 @@ def gate_problem(expr):
     """None if expr has the gate as a top-level conjunct, else why not."""
     s = expr  # as written: no strip, so text or whitespace outside ${{ }} is seen
     if "${{" in s or "}}" in s:
-        m = re.fullmatch(r"\$\{\{(.*?)\}\}", s, re.S)
+        m = re.fullmatch(r"\$\{\{(.*)\}\}", s, re.S)
         if not m or "${{" in m.group(1) or "}}" in m.group(1):
             return "the `if:` mixes ${{ }} with other text"
         s = m.group(1)
@@ -539,6 +635,7 @@ def gate_problem(expr):
         return "the `if:` has whitespace or a newline before or after it"
     try:
         toks0 = tokenize(s)
+        check_grammar(toks0)
         toks = strip_parens(toks0)
         if len(split_top(toks, "||")) > 1:
             # A || at the top is refused, except a whole `if:` that is one parenthesised gate disjunction.
@@ -1113,14 +1210,14 @@ selftest() {
   case_ "the gate in another letter case" 1 "$d" "no top-level conjunct"
   pubwf "$d" ci.yml "if: \"github.repository != 'runcove/artifacts'\""
   case_ "the gate with !=" 1 "$d" "no top-level conjunct"
-  pubwf "$d" ci.yml "if: \"contains(github.event.head_commit.message, '$G')\""
+  pubwf "$d" ci.yml "if: \"contains(github.event.head_commit.message, '${G//\'/\'\'}')\""
   case_ "the gate text inside a string" 1 "$d" "no top-level conjunct"
   pubwf "$d" ci.yml "if: \"github.event.repository.full_name == 'runcove/artifacts'\""
   case_ "a different context for the same name" 1 "$d" "no top-level conjunct"
   pubwf "$d" ci.yml "if: false"
   case_ "if: false (a boolean)" 1 "$d" "not a string"
   pubwf "$d" ci.yml "if: \"\""
-  case_ "an empty if" 1 "$d" "no top-level conjunct"
+  case_ "an empty if" 1 "$d" "could not be read"
   pubwf "$d" ci.yml "if: \"$G & true\""
   case_ "a stray single &" 1 "$d" "could not be read"
   pubwf "$d" ci.yml "if: \"($G && true\""
@@ -1254,6 +1351,19 @@ selftest() {
   case_ "braces: a lone { in a bare expression" 1 "$d" "a bracket or brace"
   pubwf "$d" ci.yml "if: \"\${{ $G && contains('}', 'x') && contains('{', 'y') }}\""
   case_ "braces: only inside string literals is fine" 0 "$d"
+  # (3a) a conjunct the expression parser cannot read: the server errors on it and a job whose if: errors
+  # is sent to a runner, so the guard reads the whole if: with the evaluator's lexer and grammar
+  d=$tmp/f3a
+  local probe
+  for probe in "\${{ $G && \"x\" }}" "$G && true true" "$G && @" "$G && x;" "$G && ==x" "$G && !!" \
+    "$G && $(printf '\u3000')true" "$G && $(printf '\u00a0')true" "$G && $(printf '\u2003')true" \
+     "$G && x\$" "$G && contains(a,)" "$G &&" "$G && (a" "$G && a)" "$G && f.g(x)" "$G && 1.2.3" "$G && a b"; do
+    pubwf "$d" ci.yml "if: $probe"
+    case_ "unparseable conjunct refused: ${probe//[^ -~]/?}" 1 "$d" "could not be read"
+  done
+  pubwf "$d" ci.yml "if: $G && env.X" "if: $G && !contains(github.event.head_commit.message, 'a') && github.x.*.y == 1.5" \
+    "if: \${{ $G && (a || b) && fromJSON('{}').x != -1 && 0x1F >= 2e3 && !!a }}" "if: $G && a<b"
+  case_ "parseable later conjuncts stay accepted" 0 "$d" "4 jobs"
   # (3) the gate must be the FIRST top-level conjunct
   d=$tmp/f3
   pubwf "$d" ci.yml "if: \"fromJSON('x') && ($G)\""
@@ -1414,7 +1524,7 @@ selftest() {
   gcase_ "the gate in another letter case" 1 "$d" "no top-level conjunct"
   pubwf "$d" publish.yml "if: \"github.repository == 'tenfourty/ream-sec'\""
   gcase_ "another repo name" 1 "$d" "no top-level conjunct"
-  pubwf "$d" publish.yml "if: \"contains(github.event.head_commit.message, '$H')\""
+  pubwf "$d" publish.yml "if: \"contains(github.event.head_commit.message, '${H//\'/\'\'}')\""
   gcase_ "the gate text inside a string" 1 "$d" "no top-level conjunct"
   pubwf "$d" publish.yml "if: false"
   gcase_ "if: false (a boolean)" 1 "$d" "not a string"
