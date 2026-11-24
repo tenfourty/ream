@@ -354,7 +354,8 @@ def test_the_time_bound_is_also_checked_inside_one_shape(monkeypatch):
     with pytest.raises(scan.ScanTimeout):
         scan._scan(body, deadline=deadline)
     assert len(calls) == 11, (
-        "read once before the shape, then once per match, then stopped"
+        "read once after the text view, once before the shape, then once per match"
+        " until the eleventh read passed the bound"
     )
 
 
