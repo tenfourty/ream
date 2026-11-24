@@ -1568,3 +1568,17 @@ chose that person or team as a reader.
 
 **Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread).
 Tracker item runcove-5t3oj.160.4.
+
+## Ream for the whole of GitGuardian: the restarted design is approved (24 Nov 2026)
+
+**Chosen:** the restarted whole-company design (the page "Ream for the whole of GitGuardian",
+version 9, with the three answers above folded in as version 10) is approved. Building starts with
+step 2 of the page's build order, people, and follows that order. This replaces the 9 Nov 2026
+approval of version 8 as the design of record.
+
+**Not chosen:**
+- Approve with changes to a named section: no section was named.
+- Not yet: nothing was named as missing.
+
+**Evidence:** Jeremy chose (a) on 24 Nov 2026 in #hq-artifacts (the version 9 design thread), after
+answering its three other questions. Tracker item runcove-5t3oj.160.4.
