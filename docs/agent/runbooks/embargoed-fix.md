@@ -202,9 +202,13 @@ git switch -c sec/<topic>
 ```
 
 - Never add the public repo (or the GitHub mirror) as a remote of this clone. To bring public
-  `main` in, fetch it by URL and merge: `git fetch https://git.tenfourty.site/runcove/artifacts.git main`,
-  then `git merge FETCH_HEAD`. Fetching publishes nothing. At release, the same one-off URL on the
-  push, `main` only: `PUSH_COUNT=<n> git push https://git.tenfourty.site/runcove/artifacts.git main:main`.
+  `main` in, fetch it by URL and merge: `git fetch "$PUB" main`, then `git merge FETCH_HEAD`.
+  Fetching publishes nothing. At release, the same one-off URL on the push, `main` only:
+  `PUSH_COUNT=<n> git push "$PUB" main:main`. `PUB` is the public repo's address,
+  `PUB=https://git.tenfourty.site/runcove/ream.git`; until the forge repo is renamed from
+  `runcove/artifacts` to `runcove/ream`, set it to `https://git.tenfourty.site/runcove/artifacts.git`
+  instead (the new name does not exist yet). After the rename, use only the new name: git over HTTPS
+  does not follow the old name's redirect and fails with `RPC failed; HTTP 301`, a push included.
 - Never prove a fix on a public `ci/<name>` branch. A pushed branch of `runcove/artifacts` is public
   at once, and its CI log and the commits on it with it. The tests run in artifacts-sec's own CI
   (a push of `sec/*` runs the test jobs in `sec.yml`).
