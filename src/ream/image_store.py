@@ -228,11 +228,20 @@ def for_reader(
     """(content type, bytes) of an attached picture, if `agent` may read its page and its
     comment is shown to agents (not held, not withdrawn); else None. Every refusal is the same
     None, so a caller cannot tell an unknown picture from one it may not see."""
+    found = for_reader_by(db, agent, comment_id, image_id)
+    return None if found is None else found[:2]
+
+
+def for_reader_by(
+    db: Database, agent: str, comment_id: str, image_id: str
+) -> tuple[str, bytes, str] | None:
+    """`for_reader`, and the comment's author as a third part (who wrote the picture's
+    words: what a label before the picture names). The same single refusal."""
     if not (_ID.fullmatch(comment_id) and _ID.fullmatch(image_id)):
         return None
     with db.connect() as conn:
         row = conn.execute(
-            "select comment_image.artifact_id from comment_image"  # noqa: S608 -- clause from the module, no caller input
+            "select comment_image.artifact_id, comment.author from comment_image"  # noqa: S608 -- clause from the module, no caller input
             " join comment on comment.id = comment_image.comment_id"
             " where comment_image.id = %s and comment_image.comment_id = %s"
             f" and not comment.held and {_visible()}",
@@ -240,7 +249,8 @@ def for_reader(
         ).fetchone()
         if row is None or store._owned(conn, row[0], agent, True) is None:
             return None
-        return _bytes(conn, image_id)
+        got = _bytes(conn, image_id)
+        return None if got is None else (*got, row[1] or "")
 
 
 def for_origin(

@@ -217,6 +217,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "missing",
             "decision_id",
             "image_id",
+            "comment_id",
         ),
         _ID,
     ),
@@ -715,6 +716,66 @@ def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     )
     out = jsonable_encoder([row.__dict__ for row in rows])
     return ToolOutput({"comments": out}, written_by=page.agent)
+
+
+# --- comment_image --------------------------------------------------------------------
+
+
+@tool(
+    "comment_image",
+    title="Look at a picture on a comment",
+    description=(
+        "One picture a person or agent attached to a comment, as an image: name the "
+        "comment_id and the image id from that comment's images in comments. A comment "
+        "you cannot see, or a picture it does not hold, is no such image. A picture over "
+        "3.75 MB is refused (its byte_size says). Not for the comment's words: use "
+        "comments."
+    ),
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    # Ids, a type and a size only: the picture's pixels cannot be fenced, so
+    # `_call_tool` puts Ream's fixed label, naming the comment's author, before it.
+    fences=Fences(ream=_REAM),
+    input_schema=_schema(
+        {
+            "comment_id": {"type": "string", "description": "The comment's id."},
+            "image_id": {
+                "type": "string",
+                "description": "The picture's id, from the comment's images.",
+            },
+        },
+        ("comment_id", "image_id"),
+    ),
+)
+def _comment_image(call: Call, arguments: dict[str, Any]) -> ToolOutput:
+    comment_id = _str(arguments, "comment_id", required=True)
+    image_id = _str(arguments, "image_id", required=True)
+    # The route's own lookup (`GET /comments/{id}/images/{id}`): every refusal, an
+    # unreadable page and an unknown id included, is the same sentence.
+    found = image_store.for_reader_by(call.db, call.agent, comment_id, image_id)
+    if found is None:
+        raise ToolError("no such image")
+    content_type, data, author = found
+    if len(data) > MCP_SHOT_MAX_BYTES:
+        raise HTTPException(
+            413,
+            {
+                "field": "picture",
+                "limit": MCP_SHOT_MAX_BYTES,
+                "detail": "the picture is too large to return here: fetch it from the route",
+            },
+        )
+    return ToolOutput(
+        {
+            "comment_id": comment_id,
+            "image_id": image_id,
+            "content_type": content_type,
+            "byte_size": len(data),
+        },
+        written_by=author,
+        images=((content_type, data),),
+    )
 
 
 # --- questions ------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 route does. Runs on both databases."""
 
 import base64
+import json
 
 import pytest
 from test_comment_images import (
@@ -18,6 +19,7 @@ from test_comment_images import (
 from test_mcp import (  # noqa: F401
     FENCED,
     HOST,
+    LEGACY_HEADERS,
     call_tool,
     client,
     headers,
@@ -302,3 +304,135 @@ def test_stage_data_is_what_the_route_and_the_tool_share(db):
 def _count(db) -> int:
     with db.connect() as conn:
         return conn.execute("select count(*) from comment_image").fetchone()[0]
+
+
+# --- reading a picture back: the `comment_image` tool ---------------------------------
+
+
+def look(client, token, **arguments) -> dict:
+    """The whole `tools/call` result of `comment_image`."""
+    return client.post(
+        "/mcp",
+        headers=headers(token, **LEGACY_HEADERS),
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "comment_image", "arguments": arguments},
+        },
+    ).json()["result"]
+
+
+def attached(client, token, page_id, data: bytes = GOOD_PNG) -> tuple[str, str]:
+    """(comment id, image id) of a new comment carrying one picture."""
+    image = staged(client, token, page_id, data)
+    error, got = comment(client, token, page_id, images=[image])
+    assert not error, got
+    return got["comment"]["id"], image
+
+
+def test_the_picture_comes_back_as_an_image_block_after_reams_label(
+    client, on, token, page
+):
+    cid, image = attached(client, token, page)
+    listed = call_tool(client, token, "comments", page_id=page)[1]["comments"][0]
+    assert [p["id"] for p in listed["images"]] == [image]  # what to ask for
+    result = look(client, token, comment_id=cid, image_id=image)
+    assert result["isError"] is False, result
+    facts = {
+        "comment_id": cid,
+        "image_id": image,
+        "content_type": "image/png",
+        "byte_size": len(GOOD_PNG),
+    }
+    assert result["structuredContent"] == facts
+    text, label, picture = result["content"]
+    assert json.loads(text["text"]) == facts  # bare: Ream's own values
+    assert label == {"type": "text", "text": mcp.image_label("mcp-seat")}
+    assert picture["type"] == "image" and picture["mimeType"] == "image/png"
+    assert base64.b64decode(picture["data"]) == GOOD_PNG
+
+
+def test_it_returns_the_bytes_the_route_serves(client, on, token, page):
+    cid, image = attached(client, token, page)
+    route = client.get(
+        f"/api/v1/comments/{cid}/images/{image}",
+        headers={"host": HOST, "authorization": f"Bearer {token}"},
+    )
+    assert route.status_code == 200
+    got = look(client, token, comment_id=cid, image_id=image)["content"][2]
+    assert base64.b64decode(got["data"]) == route.content
+    assert got["mimeType"] == route.headers["content-type"]
+
+
+def test_it_is_a_read_tool_with_explicit_hints(client, on, token):
+    listed = client.post(
+        "/mcp",
+        headers=headers(token, **LEGACY_HEADERS),
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    ).json()["result"]["tools"]
+    found = next(t for t in listed if t["name"] == "comment_image")
+    assert found["annotations"]["readOnlyHint"] is True
+    assert found["annotations"]["destructiveHint"] is False
+    assert found["annotations"]["openWorldHint"] is False
+    assert found["inputSchema"]["required"] == ["comment_id", "image_id"]
+    assert mcp.TOOLS["comment_image"].permission == mcp.READ
+
+
+def test_every_refusal_is_the_same_no_such_image(db, client, on, token, page):
+    from ream import keys
+
+    cid, image = attached(client, token, page)
+    closed = store.publish(db, "other", "Closed", PAGE).id
+    store.set_agents_can_read(db, closed, False, agent="other")
+    other, _ = keys.mint(db, agent="other")
+    theirs_c, theirs_i = attached(
+        client, other, closed
+    )  # `other` comments on its own page
+    second = attached(client, token, page, varied(5))
+    asks = [
+        {"comment_id": MISSING, "image_id": image},  # unknown comment
+        {"comment_id": cid, "image_id": MISSING},  # unknown picture
+        {"comment_id": cid, "image_id": second[1]},  # picture of another comment
+        {"comment_id": theirs_c, "image_id": theirs_i},  # a page closed to this key
+        {"comment_id": "not-an-id", "image_id": "x" * 500},
+    ]
+    answers = [look(client, token, **ask) for ask in asks]
+    assert all(a["isError"] for a in answers)
+    assert len({a["content"][0]["text"] for a in answers}) == 1
+    assert "no such image" in answers[0]["content"][0]["text"]
+    # Its own agent reads it: the refusal was the scope, not the picture.
+    assert not look(client, other, comment_id=theirs_c, image_id=theirs_i)["isError"]
+
+
+def test_a_withdrawn_comments_picture_is_no_such_image(db, client, on, token, page):
+    cid, image = attached(client, token, page)
+    assert not look(client, token, comment_id=cid, image_id=image)["isError"]
+    with db.connect() as conn:
+        conn.execute(
+            "update comment set deleted_at = %s where id = %s",
+            ("2026-11-24 10:00:00", cid),
+        )
+    gone = look(client, token, comment_id=cid, image_id=image)
+    assert gone["isError"] and "no such image" in gone["content"][0]["text"]
+
+
+def test_a_picture_over_the_mcp_cap_is_refused_with_its_size(
+    client, on, token, page, monkeypatch
+):
+    from ream import mcp_tools
+
+    cid, image = attached(client, token, page)
+    monkeypatch.setattr(mcp_tools, "MCP_SHOT_MAX_BYTES", len(GOOD_PNG) - 1)
+    result = look(client, token, comment_id=cid, image_id=image)
+    assert result["isError"] and "too large" in result["content"][0]["text"]
+    assert len(result["content"]) == 1  # no picture came with it
+
+
+def test_it_takes_only_its_own_arguments(client, on, token, page):
+    cid, image = attached(client, token, page)
+    for extra in ({"page_id": page}, {"width": 1}):
+        result = look(client, token, comment_id=cid, image_id=image, **extra)
+        assert result["isError"] and "unknown argument" in result["content"][0]["text"]
+    for missing in ({"comment_id": cid}, {"image_id": image}):
+        assert look(client, token, **missing)["isError"]
