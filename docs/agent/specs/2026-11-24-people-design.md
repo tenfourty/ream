@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slices 1 and 2 built; slices 3 and 4 designed, not built. Written up from the
+Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) and slice 4 designed, not built. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -37,10 +37,12 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   the table), because `schema.sql` runs at every start and a pin the owner removed must not return.
   Postgres adds `person` as the last column and swaps the primary key; SQLite rebuilds the tables
   with `person` first; the copier matches columns by name.
-- Slice 3: `decision.addressed_to` (null = page owners); `decisions.may_answer(person, d)`;
-  `form_answer(decision_id, person, answer_record, answered_at, pk(decision_id, person))` filled from
-  `decision.answer_record` (kept); `receipt.person`; `answers[]` on form reads (agent-visible, so
-  offices review first).
+- Slice 3a (built): `decision.addressed_to` (null = page owners); `decisions.may_answer(person, d)`;
+  `form_answer(decision_id, person, answer_record, answered_at, pk(decision_id, person))` filled once
+  from `decision.answer_record` (kept, still what the agent reads); `receipt.person`. SQLite step 38;
+  Postgres at the end of `schema.sql`, its backfill guarded by the new `receipt.person` column.
+  Migrated rows take the `service_meta` owner id, and rows with no recorded owner are refused.
+- Slice 3b (not built): `answers[]` on form reads. It is agent-visible, so offices review its shape first.
 - Stays single-owner until steps 3 and 4: `can_read`, MCP `owner_login` / `NotOwner`, page
   ownership, archive, rename, share, machines and keys (behind `people.require_owner`), plug-in answer
   sources, `pageviews` kind owner, email shares.
@@ -115,8 +117,38 @@ Tests: `tests/test_per_person_state.py` (two people by overriding `people.curren
 flipped), `tests/test_people_slice2_migration.py` (both backends), `tests/test_migrate.py`'s copy round
 trip, and `tests/test_owner.py` (`change-owner` moves the new columns).
 
+## Slice 3a as built
+
+Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP changes
+(`decisions.public` drops `addressed_to`; `answer_record` and every receipt are as before).
+- `decisions.may_answer(person, d)` (and `addressed_ok(person, addressed_to)` for a caller that holds
+  only the column): the person a question is addressed to, else the page's owners (today the owner).
+  The gallery's answer routes pass the request's person to `decisions.answer(person=)` and
+  `formanswer.submit(person=)`; anyone else gets `store.NotFound`, the 404 of a decision that is not
+  there. No agent route sets `addressed_to` yet (nothing sets it today).
+- A form is answered per person: `formanswer.submit` merges a person's submit into their own
+  `form_answer` row (not another person's) and also writes `decision.answer_record`, so the agent's
+  record is the latest submitter's. With one person that is the record as before. How several
+  people's answers reach the agent is slice 3b's `answers[]`. A relay (`formanswer.relay`) is the
+  owner's and merges into the owner's row. A republish brings every person's row onto the new
+  version (`forms._reconcile_record`). The gallery's form bar (`forms_ui.payload`) draws the
+  request person's own record.
+- `receipt.person` is the decision's `answered_by` when the receipt was written, never sent to an
+  agent. The gallery says nothing of a receipt or a pickup on an answer someone else gave
+  (`_render_decisions(person=)`).
+- `comments._HIS_THREAD` is per person: a reply is unseen for the person who wrote in its thread
+  (`me.person`, joined by `comments.ME_JOIN` beside `pr` and `pp`), no longer for any human. A reply
+  under a note left on a decision (`anchor.kind = 'decision'`) is still every reader's.
+- `change-owner` moves `decision.addressed_to`, `form_answer.person` and `receipt.person`.
+- Tests: `tests/test_people_answers.py` (two people), `tests/test_people_slice3_migration.py` (both
+  backends), `tests/test_migrate.py`'s copy round trip, `tests/test_owner.py`,
+  `tests/test_per_person_state.py` (the thread is per person).
+- No image rollback for this slice either: an older image on a migrated database still runs (the new
+  columns and table are unread by it), but answers made meanwhile are in `decision.answer_record` only,
+  which the next upgrade does not copy again.
+
 ## Not yet checked
 
 Checked in slice 2: every `page_read` / `human_pref` / `pinned_at` call site (the grep is the list in
 "Slice 2 as built"), the Postgres schema of the rebuilt tables, and `migrate.copy`'s column handling
-(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (slice 3).
+(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (the decision's `acknowledged_at` is one value; slice 3b).
