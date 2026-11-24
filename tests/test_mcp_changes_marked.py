@@ -251,9 +251,16 @@ def test_a_failed_mark_up_says_why_and_the_body_is_the_new_page(
     client, on, token, mine, monkeypatch
 ):
     pagediff._CACHE.clear()
-    monkeypatch.setattr(
-        pagediff, "_run_in_worker", lambda *a, **k: ((V3, "boom"), True)
-    )
+    real = pagediff._run_in_worker
+
+    def fail_the_mark_up_only(old, new, timeout, func=None, **k):
+        # `partdiff.changes_safely` shares this worker for the parts; only the mark-up
+        # (no `func`) fails here, so the parts never depend on another test's cache.
+        if func is None:
+            return (V3, "boom"), True
+        return real(old, new, timeout, func=func, **k)
+
+    monkeypatch.setattr(pagediff, "_run_in_worker", fail_the_mark_up_only)
     error, got = read(client, token, mine.id, changes_since=1, changes_format="marked")
     assert not error, got
     got = unfence_all(got)
