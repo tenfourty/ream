@@ -1615,3 +1615,30 @@ set up the sign-in is proven in tests only; its first live use is there.
 
 **Evidence:** Jeremy said on 24 Nov 2026 in #hq-artifacts that GitGuardian runs a separate instance;
 the office played it back and he confirmed (a). Tracker item runcove-5t3oj.160.5.
+
+## After the forge rename, git and tool installs on the old name fail: every address moves to runcove/ream (24 Nov 2026)
+
+**Chosen:** at the rename of the forge repo from `runcove/artifacts` to `runcove/ream`, every user of
+a git address moves to `runcove/ream`: fetches, pushes, clones, `uv tool install` sources and the CI
+log API paths. Until the rename the old name is the only one that exists, so an instruction that has
+to work on both sides names the new address first and the old as the fallback (the public-main check
+reads `runcove/ream`, then `runcove/artifacts`), and never pushes to the new name before it exists.
+In the rename's contract step the public-main check's old-name fallback, and with it its second ask
+(which refuses when both names answer and disagree about main), are removed.
+
+This corrects the line in "The forge repo moves to runcove/ream; runcove/artifacts stays reserved as
+a redirect for good" (24 Nov 2026) that a fetch or install address naming the old repo keeps
+working through the redirect. Homelab's probe on a throwaway repo showed that after a forge rename,
+git and `uv tool install` over HTTPS on the old name fail with HTTP 301 (git does not follow it by
+default), while API reads follow the redirect. Keeping the old name reserved still stops anyone creating a
+repo under it; it does not keep git addresses alive.
+
+**Not chosen:**
+- Setting `http.followRedirects` on every machine and tool so old addresses keep working: not done;
+  the addresses move instead.
+- Relying on the API's redirect for the instructions agents follow: the runbooks name the new repo
+  once it exists.
+
+**Evidence:** homelab's probe of a throwaway repo on the live forge, 24 Nov 2026, relayed through the
+coordinator. The token for the public-main read follows the rename too (a team grant stored by repo
+id; homelab, from a forge read). Branch `ci/rename-git-urls`.

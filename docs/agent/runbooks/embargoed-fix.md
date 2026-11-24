@@ -121,7 +121,7 @@ Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on
 | `SEC_CHECK_TOKEN` | the single token of `artifacts-sec-checker`, an **owner** of `runcove-sec` (conditions below) (Forgejo lists a repo's runners only to its owners: `reqOwner`, so a repo admin is refused 403), with the scopes `read:organization,read:repository` and no other: `sec-private-check.sh repo` proves that first, by probing, and stops if not. The runner list needs no further scope (it sits under `read:repository`) |
 | `SEC_REGISTRY_TOKEN` | package write on `runcove-sec` only, account `artifacts-sec-publisher` |
 | `SEC_HOMELAB_READ_TOKEN` | read of `runcove/ream-homelab` only |
-| `SEC_PUBLIC_READ_TOKEN` | a repository-scoped token with `read:repository`, that can read the public repo under whichever name it has (`runcove/ream` after the rename, `runcove/artifacts` before; homelab is confirming that the token's scope follows the rename; the organization is limited-visibility, so public main is not readable anonymously): `sec-public-main-check.sh`; empty means the job fails |
+| `SEC_PUBLIC_READ_TOKEN` | a repository-scoped token with `read:repository`, for the public repo, `runcove/artifacts` until the forge renames it to `runcove/ream` (the organization is limited-visibility, so public main is not readable anonymously). Its account reaches the repo through a team and the grant is stored by repo id (homelab, from a forge read, 24 Nov 2026), so it follows the rename and needs no re-issue: `sec-public-main-check.sh`; empty means the job fails |
 
 `sec-private-check.sh repo` also requires artifacts-sec's collaborators to be exactly
 `artifacts-maintainer` (write), `security` (read), `artifacts-sec-checker` (owner: the forge
