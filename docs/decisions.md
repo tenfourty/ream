@@ -1634,11 +1634,12 @@ default), while API reads follow the redirect. Keeping the old name reserved sti
 repo under it; it does not keep git addresses alive.
 
 **Not chosen:**
-- Setting `http.followRedirects` on every machine and tool so old addresses keep working: not done;
-  the addresses move instead.
-- Relying on the API's redirect for the instructions agents follow: the runbooks name the new repo
-  once it exists.
+- Setting `http.followRedirects` on every machine and tool so old addresses keep working: it would
+  have to reach machines this project does not run, and it makes every fetch trust wherever the old
+  name points later; moving the addresses leaves one name and nothing to configure.
+- Relying on the API's redirect for the instructions agents follow: only reads were shown to follow
+  it, and a write sent to the old name is not; the runbooks name the new repo once it exists.
 
-**Evidence:** homelab's probe of a throwaway repo on the live forge, 24 Nov 2026, relayed through the
-coordinator. The token for the public-main read follows the rename too (a team grant stored by repo
+**Evidence:** homelab's probe of a throwaway repo on the live forge, 24 Nov 2026, reported in this
+project's rename thread (tracker item runcove-5t3oj.83.5). The token for the public-main read follows the rename too (a team grant stored by repo
 id; homelab, from a forge read). Branch `ci/rename-git-urls`.
