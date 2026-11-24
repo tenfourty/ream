@@ -46,10 +46,17 @@ fix touches none of them until release.
    `.github/workflows` too (the GitHub mirror's `publish.yml`): every job there is gated to
    `github.repository == 'tenfourty/ream'`, so a forge setting or version that reads that folder still
    dispatches nothing in artifacts-sec.
-4. **Images.** On artifacts-sec `main` only, and only when public `main` of `runcove/artifacts` is an
+4. **Images.** On artifacts-sec `main` only, and only when public `main` of the public repo is an
    ancestor of the commit built (`.forgejo/scripts/sec-public-main-check.sh`, read with `SEC_PUBLIC_READ_TOKEN`, run first and
    again before the line; it fails the job when public main cannot be read, so merge public main into the
-   private copy first, or the run is red and prints no pin line: such an image would roll production back):
+   private copy first, or the run is red and prints no pin line: such an image would roll production back).
+   The public repo is being renamed from `runcove/artifacts` to `runcove/ream`, so the script tries
+   `runcove/ream` first and `runcove/artifacts` second. It asks the old name only when `git ls-remote` of
+   the new one fails (an address that answers but has no `main`, or lists it twice, is a failure, not a
+   reason to try the other); the address that lists `main` is used for the fetch and everything after, and is
+   printed on stderr. When the new name answers, the old one is asked as well, and if both answer and they do
+   not agree the run is refused, naming both. When neither can be read it fails with "could not read public
+   main at either address" and both addresses. The old-name fallback goes in the rename's contract step. The images:
    `runcove-sec/artifacts-core:<sha12>`, built
    `--target app` (the Dockerfile's browser-free target, as in the public pipeline), then the
    deployed image `runcove-sec/artifacts:<sha12>-<plugins sha12>` from ream-homelab's Dockerfile
@@ -114,7 +121,7 @@ Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on
 | `SEC_CHECK_TOKEN` | the single token of `artifacts-sec-checker`, an **owner** of `runcove-sec` (conditions below) (Forgejo lists a repo's runners only to its owners: `reqOwner`, so a repo admin is refused 403), with the scopes `read:organization,read:repository` and no other: `sec-private-check.sh repo` proves that first, by probing, and stops if not. The runner list needs no further scope (it sits under `read:repository`) |
 | `SEC_REGISTRY_TOKEN` | package write on `runcove-sec` only, account `artifacts-sec-publisher` |
 | `SEC_HOMELAB_READ_TOKEN` | read of `runcove/ream-homelab` only |
-| `SEC_PUBLIC_READ_TOKEN` | a repository-scoped token with `read:repository`, for `runcove/artifacts` only (the organization is limited-visibility, so public main is not readable anonymously): `sec-public-main-check.sh`; empty means the job fails |
+| `SEC_PUBLIC_READ_TOKEN` | a repository-scoped token with `read:repository`, that can read the public repo under whichever name it has (`runcove/ream` after the rename, `runcove/artifacts` before; homelab is confirming that the token's scope follows the rename; the organization is limited-visibility, so public main is not readable anonymously): `sec-public-main-check.sh`; empty means the job fails |
 
 `sec-private-check.sh repo` also requires artifacts-sec's collaborators to be exactly
 `artifacts-maintainer` (write), `security` (read), `artifacts-sec-checker` (owner: the forge
@@ -201,14 +208,23 @@ git remote -v           # exactly one remote, origin, and it is runcove-sec/arti
 git switch -c sec/<topic>
 ```
 
+The public repo's address depends on which side of the forge repo's rename from `runcove/artifacts`
+to `runcove/ream` you are on. Set `PUB` first, from one test: does the new name exist?
+
+```bash
+FORGE_AS=<you> forge tea api /repos/runcove/ream     # an answer: use the new name; not found: the old
+PUB=https://git.tenfourty.site/runcove/ream.git          # it answered: renamed
+PUB=https://git.tenfourty.site/runcove/artifacts.git     # not found: not renamed yet
+```
+
+**Before the rename, never push to `ream.git`**: the name does not exist, and a push to it might create
+a repository there. After the rename, never use the old name: git over HTTPS does not follow its
+redirect and fails with `RPC failed; HTTP 301`, a push included.
+
 - Never add the public repo (or the GitHub mirror) as a remote of this clone. To bring public
   `main` in, fetch it by URL and merge: `git fetch "$PUB" main`, then `git merge FETCH_HEAD`.
   Fetching publishes nothing. At release, the same one-off URL on the push, `main` only:
-  `PUSH_COUNT=<n> git push "$PUB" main:main`. `PUB` is the public repo's address,
-  `PUB=https://git.tenfourty.site/runcove/ream.git`; until the forge repo is renamed from
-  `runcove/artifacts` to `runcove/ream`, set it to `https://git.tenfourty.site/runcove/artifacts.git`
-  instead (the new name does not exist yet). After the rename, use only the new name: git over HTTPS
-  does not follow the old name's redirect and fails with `RPC failed; HTTP 301`, a push included.
+  `PUSH_COUNT=<n> git push "$PUB" main:main`.
 - Never prove a fix on a public `ci/<name>` branch. A pushed branch of `runcove/artifacts` is public
   at once, and its CI log and the commits on it with it. The tests run in artifacts-sec's own CI
   (a push of `sec/*` runs the test jobs in `sec.yml`).

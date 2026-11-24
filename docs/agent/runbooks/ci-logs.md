@@ -8,15 +8,17 @@ Through the forge API, as yourself (`FORGE_AS=<you> forge tea api …`):
 2. `/repos/runcove/artifacts/actions/runs/<id>/jobs` gives the job's `id`.
 3. `/repos/runcove/artifacts/actions/jobs/<job id>/logs` gives the log.
 
-The paths here name `runcove/artifacts`, which is right until the forge repo is renamed to
-`runcove/ream`. After the rename a read on the old name still follows the redirect, but a write
-does not (the POST cancel below), so use `runcove/ream` in the paths from then on, the cancel's first.
+The paths here name `runcove/artifacts`, the repo's name until the forge renames it to `runcove/ream`.
+Use `runcove/ream` in them if `forge tea api /repos/runcove/ream` answers, and `runcove/artifacts` if it
+says not found. Do not rely on the old name still working after the rename, least of all for the cancel
+below, which is a write.
 
 Grep out only the lines you need. The tests mint throwaway keys, and a log carries their
 `Bearer art_…` lines.
 
 A superseded run still holds the runner. Cancel it before pushing again to the same branch:
-`forge tea api -X POST /repos/runcove/artifacts/actions/runs/<id>/cancel`.
+`forge tea api -X POST /repos/<repo>/actions/runs/<id>/cancel`, with `<repo>` the name that test gave
+(`runcove/ream`, or `runcove/artifacts` before the rename).
 
 ## Proving the browser tests ran
 
