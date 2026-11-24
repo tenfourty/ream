@@ -38,7 +38,7 @@ jobs:
     # else has its jobs skipped (the private repo runs sec.yml instead). A job whose `if:` is false
     # is never dispatched. Every job in this file carries this gate;
     # scripts/guards/workflow-runner-guard.sh refuses one that does not.
-    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
@@ -138,7 +138,7 @@ jobs:
     # 60, not 45: a passing run took 41 min on 19 Nov 2026.
     timeout-minutes: 60
     # Public repo only, named (see `test`); skipped in the private copy.
-    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
@@ -234,7 +234,7 @@ jobs:
     # 45, not 25: both suites at two workers ran past 25 min on 19 Nov 2026.
     timeout-minutes: 45
     # Public repo only, named (see `test`); skipped in the private copy.
-    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
@@ -303,7 +303,7 @@ jobs:
     timeout-minutes: 30
     # Only the public repo publishes here (named, not "anything but the sec repo"): a copy of this
     # file in any other repo, the private embargo repo first, never pushes to this registry.
-    if: "github.repository == 'runcove/artifacts' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       dind:
         image: docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
@@ -591,7 +591,7 @@ jobs:
     # OFF: production now pins from ream-homelab (9 Nov 2026), whose pin job opens the deployment's pin
     # PR, and the deployment's lander no longer accepts this repo as a source; `core-lock` below is the
     # only path on main. To roll back see docs/agent/runbooks/image-from-ream-homelab.md.
-    if: "github.repository == 'runcove/artifacts' && false"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -616,7 +616,7 @@ jobs:
     needs: [test, test-sqlite, image]
     runs-on: deploy-docker
     timeout-minutes: 10
-    if: "github.repository == 'runcove/artifacts' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && needs.image.outputs.core_ref != ''"
+    if: "(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && needs.image.outputs.core_ref != ''"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

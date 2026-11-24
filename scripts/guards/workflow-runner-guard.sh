@@ -13,6 +13,9 @@
 #      the privileged one, for the image build only).
 #   2. every OTHER workflow file (ci.yml and any added later): every job has a job-level `if:`
 #      with `github.repository == 'runcove/artifacts'` as one of its top-level `&&` conjuncts.
+#      While the forge repo is renamed runcove/artifacts -> runcove/ream (FORGE_REPO below) the
+#      conjunct may instead be `github.repository == 'runcove/ream'`, or a parenthesised
+#      disjunction of ONLY such equality tests on those two names (nothing else inside it).
 #      A job whose `if:` is false is never dispatched to a runner, so in the private copy these
 #      jobs never leave the forge. The gate is a conjunct, not just present: `gate || true`,
 #      `!gate`, `(gate || x) && y` and the literal inside a string are all refused. And no job of
@@ -93,7 +96,11 @@
 # Exit codes: 0 ok, 1 refused (naming every file and job), 2 --selftest failed, 3 usage or cannot run.
 set -uo pipefail
 SELF="workflow-runner-guard"
-FORGE_REPO="runcove/artifacts"  # the gate of .forgejo/workflows
+# The gate of .forgejo/workflows: the names this repo may have on the forge. Two while it is renamed
+# runcove/artifacts -> runcove/ream (step 2 of 9: CI must keep running whichever name the forge holds);
+# back to `runcove/ream` alone when the rename is done. A fixed list, comma-separated: a job's gate may
+# be one equality on one of these, or a parenthesised || of only such equalities.
+FORGE_REPO="runcove/artifacts,runcove/ream"
 GITHUB_REPO="tenfourty/ream"    # the gate of .github/workflows: the public GitHub mirror (publish.yml)
 USAGE="usage: $0 [--pinned-python | --dir <dir> | --github-dir <dir> | --selftest | --install-uv <bin dir> | --help]"
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." >/dev/null 2>&1 && pwd)
@@ -258,7 +265,7 @@ def read_yaml(text):
 PYEOF
 
 # check_dir <dir> [forgejo|github] — prints a refusal per problem and a final count line; rc 0 clean,
-# 1 refused, 3 cannot run (no PyYAML). forgejo (the default): sec.yml and the gate runcove/artifacts,
+# 1 refused, 3 cannot run (no PyYAML). forgejo (the default): sec.yml and the gate runcove/artifacts (or runcove/ream, FORGE_REPO),
 # the directory must exist and hold a workflow. github: the gate tenfourty/ream, no special file,
 # and a missing directory or one with no workflow is fine.
 check_dir() {
@@ -281,12 +288,24 @@ import yaml
 
 SELF = "workflow-runner-guard"
 KIND = sys.argv[2]  # "forgejo" or "github"
-GATE_REPO = sys.argv[3]
+GATE_REPOS = sys.argv[3].split(",")  # the names a gate may test: one, or the two of a rename
+GATE_REPO = " or ".join(GATE_REPOS)  # for messages
 SEC_FILE = "sec.yml" if KIND == "forgejo" else None  # in .github/workflows no file is special
 SEC_LABEL = "runcove-sec"  # the privileged dedicated runner: the image job only
 SEC_UNPRIV = "runcove-sec-unpriv"  # every other job of sec.yml
 SEC_IMAGE_JOB = "image"
-GATE = [("w", "github.repository"), ("op", "=="), ("str", GATE_REPO)]
+
+
+def is_gate_term(c):
+    """One equality `github.repository == '<an allowed name>'`, exactly (string compare, so a different
+    case or a space inside the quotes is not a name)."""
+    return (
+        len(c) == 3
+        and c[0] == ("w", "github.repository")
+        and c[1] == ("op", "==")
+        and c[2][0] == "str"
+        and c[2][1] in GATE_REPOS
+    )
 
 problems = []
 
@@ -479,8 +498,18 @@ def strip_parens(toks):
     return toks
 
 
+def is_gate_disjunction(toks):
+    """Two or more terms joined by ||, every one a plain gate equality on an allowed name (no other
+    term, no nested parentheses)."""
+    parts = split_top(toks, "||")
+    return len(parts) > 1 and all(is_gate_term(p) for p in parts)
+
+
 def conjuncts(toks):
     toks = strip_parens(toks)
+    if len(split_top(toks, "||")) > 1:
+        # a || group is one opaque conjunct: it must not be cut at the && inside one of its terms
+        return [toks]
     parts = split_top(toks, "&&")
     if len(parts) == 1:
         return [toks]
@@ -499,14 +528,19 @@ def gate_problem(expr):
             return "the `if:` mixes ${{ }} with other text"
         s = m.group(1)
     try:
-        toks = strip_parens(tokenize(s))
+        toks0 = tokenize(s)
+        toks = strip_parens(toks0)
         if len(split_top(toks, "||")) > 1:
+            # A || at the top is refused, except a whole `if:` that is one parenthesised gate disjunction.
+            if toks != toks0 and is_gate_disjunction(toks):
+                return None
             return "the `if:` has a top-level || (it could be true without the gate)"
-        found = [c for c in conjuncts(toks) if c == GATE]
+        found = [c for c in conjuncts(toks) if is_gate_term(c) or is_gate_disjunction(c)]
     except ValueError as e:
         return f"the `if:` could not be read ({e})"
     if not found:
-        return f"the `if:` has no top-level conjunct `github.repository == '{GATE_REPO}'`"
+        more = f" (or the same on {', '.join(GATE_REPOS[1:])}, or a parenthesised || of only such tests)" if len(GATE_REPOS) > 1 else ""
+        return f"the `if:` has no top-level conjunct `github.repository == '{GATE_REPOS[0]}'`{more}"
     return None
 
 
@@ -590,7 +624,7 @@ def check_file(path, rel):
                     refuse(where, "`runs-on` is an expression, which could name the dedicated runner")
             cond = job.get("if")
             if "if" not in job:
-                refuse(where, f"has no job-level `if:` (the private copy would run it: gate it with `github.repository == '{GATE_REPO}'`)")
+                refuse(where, f"has no job-level `if:` (the private copy would run it: gate it with `github.repository == '{GATE_REPOS[0]}'`)")
             elif not isinstance(cond, str):
                 refuse(where, f"`if:` is {cond!r}, not a string: write the gate, then `&& false`")
             else:
@@ -1082,6 +1116,80 @@ selftest() {
   case_ "\${{ }} mixed with other text" 1 "$d" "mixes"
   pubwf "$d" ci.yml "uses: ./.forgejo/workflows/x.yml" "if: \"$G\""
   case_ "a job-level uses" 1 "$d" "job-level \`uses:\`"
+  # --- the two-name gate of the rename (runcove/artifacts and runcove/ream, and only those) ---
+  local A="github.repository == 'runcove/artifacts'" R="github.repository == 'runcove/ream'"
+  d=$tmp/tn_pass
+  pubwf "$d" ci.yml \
+    "if: \"$R\"" \
+    "if: \"($A || $R)\"" \
+    "if: \"($R || $A)\"" \
+    "if: \"($A || $R) && !contains(github.event.head_commit.message, '[skip ci]')\"" \
+    "if: \"($A || $R) && github.ref == 'refs/heads/main' && false\"" \
+    "if: \"github.ref == 'refs/heads/main' && ($A || $R)\"" \
+    "if: \"(  $A  ||  $R  )\"" \
+    "if: \"\${{ ($A || $R) && always() }}\"" \
+    "if: \"$A && true\""
+  case_ "the single new name, the two-name disjunction in several positions, the old single name" 0 "$d" "9 jobs"
+  d=$tmp/tn_r
+  local one n=0
+  for one in \
+    "($A || true)" \
+    "($A || $R || true)" \
+    "($A || 'x')" \
+    "($A || github.repository == 'evil/x')" \
+    "($A || github.repository == 'runcove/artifacts-sec')" \
+    "($A || github.repository != 'runcove/ream')" \
+    "($A || github.repository == 'runcove/Ream')" \
+    "($A || github.repository == 'RUNCOVE/ream')" \
+    "($A || github.repository == ' runcove/ream')" \
+    "($A || github.repository == 'runcove/ream ')" \
+    "($A || github.repository == 'runcove/ream/')" \
+    "($A || GitHub.Repository == 'runcove/ream')" \
+    "($A || github.event.repository.full_name == 'runcove/ream')" \
+    "($A || ($R))" \
+    "($A || !($R))" \
+    "($A || $R && false)" \
+    "($A || github.ref == 'refs/heads/main')" \
+    "($A || $R) || true" \
+    "true || ($A || $R)" \
+    "$A || $R" \
+    "(github.ref == 'refs/heads/main' || $A || $R)" \
+    "(x && $A || true)" \
+    "($A && x || true) && y" \
+    "($A && x || $R) && y" \
+    "!($A || $R)" \
+    "($A || $R) == false" \
+    "$A != true" \
+    "github.repository == 'runcove/Ream'" \
+    "github.repository == 'runcove/ream '" \
+    "github.repository != 'runcove/ream'" \
+    "github.repository == 'runcove/rea'"; do
+    n=$((n + 1))
+    pubwf "$d" ci.yml "if: \"$one\""
+    case_ "the two-name gate: refuse [$one]" 1 "$d" "REFUSED"
+  done
+  pubwf "$d" ci.yml "if: \"($A || true)\""
+  case_ "the two-name gate: (gate || true) names the cause" 1 "$d" "top-level ||"
+  pubwf "$d" ci.yml "if: \"(github.ref == 'refs/heads/main' || $R) && true\""
+  case_ "the two-name gate: a disjunction with another term is no gate" 1 "$d" "no top-level conjunct \`github.repository == 'runcove/artifacts'\`"
+  pubwf "$d" ci.yml "if: \"($A || $R) && true\"" "if: \"($A || x)\""
+  case_ "the two-name gate: one good job does not excuse a bad one" 1 "$d" "j2"
+  # a Forgejo directory holding the two-name form still refuses the sec rules as before
+  d=$tmp/tn_sec
+  pubwf "$d" ci.yml "if: \"($A || $R)\""
+  secwf "$d" sec.yml "runs-on: runcove-sec-unpriv" "image|runs-on: runcove-sec"
+  case_ "the two-name gate beside a sec.yml on its labels" 0 "$d" "2 on the dedicated labels"
+  secwf "$d" sec.yml "runs-on: runcove-sec"
+  case_ "the two-name gate: a sec job on runcove-sec outside image is still refused" 1 "$d" "REFUSED"
+  pubwf "$d" ci.yml "runs-on: runcove-sec" "if: \"($A || $R)\""
+  case_ "the two-name gate: a public job on runcove-sec is still refused" 1 "$d" "REFUSED"
+  # the GitHub mirror's gate is not widened: the forge's names do not pass there
+  d=$tmp/tn_gh
+  pubwf "$d" publish.yml "if: \"($R || $A)\""
+  gcase_ "the two forge names are no gate in .github/workflows" 1 "$d" "REFUSED"
+  pubwf "$d" publish.yml "if: \"($H || $R)\""
+  gcase_ "the mirror gate or a forge name is no gate in .github/workflows" 1 "$d" "REFUSED"
+
   d=$tmp/r4
   mkdir -p "$d"
   printf 'name: x\n"on": push\njobs:\n  a:\n    runs-on: docker-light\n    # %s\n    steps:\n      - run: echo hi\n' "$G" >"$d/ci.yml"

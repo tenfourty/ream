@@ -60,8 +60,8 @@ the `test` job and for a rollback.
 
 Core's `pin` job, if switched back on, pins `runcove/artifacts:<sha12>`, a plain `full` image with the
 browser and without ream-homelab's plug-ins layer, so it is not a rollback for the deployed service
-(which is built on `artifacts-core`, no browser, plus the plug-ins). Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
-back to its main-only condition, keeping the `github.repository == 'runcove/artifacts'` conjunct (the workflow-runner guard
-refuses a job without it), and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
+(which is built on `artifacts-core`, no browser, plus the plug-ins). Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `(github.repository == 'runcove/artifacts' || github.repository == 'runcove/ream') && false`)
+back to its main-only condition, keeping the repository-name conjunct (the workflow-runner guard
+refuses a job without it; while the forge repo is renamed to `runcove/ream`, step 2 of 9, it accepts `runcove/artifacts`, `runcove/ream` or a parenthesised `||` of just those two, and goes back to `runcove/ream` alone after), and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
 again, which is the homelab maintainer's change; without it the pin PRs are refused. Close any open
 `core-lock/next` PR on ream-homelab by hand.

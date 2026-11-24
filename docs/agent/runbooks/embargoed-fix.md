@@ -28,7 +28,7 @@ fix touches none of them until release.
    before a test or a build. It runs again on the image runner
    right before pushing, and once more after the last push (see 4).
 3. **Tests.** The same jobs as `ci.yml` (copied; keep them in step). Every job in `ci.yml` has
-   `github.repository == 'runcove/artifacts'` in its `if:`, so none of them is dispatched in
+   `github.repository == 'runcove/artifacts'` in its `if:` (or, during the forge repo's rename to `runcove/ream`, step 2 of 9, that name or `runcove/ream` or a parenthesised `||` of just the two; `runcove/ream` alone after), so none of them is dispatched in
    artifacts-sec; every job in `sec.yml` runs on a label only this repo's dedicated runners carry
    (the image build on the privileged one, every other job on the unprivileged one). The point: the jobs of artifacts-sec
    hold its `SEC_*` secrets, so they run only on its dedicated runners. `scripts/guards/workflow-runner-guard.sh`
