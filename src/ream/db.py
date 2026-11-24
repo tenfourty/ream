@@ -608,8 +608,9 @@ def _people_slice_2(conn) -> None:
     """SQLite schema step 37 (people design, slice 2); schema.sql does the same on Postgres.
 
     `page_read` (person, artifact_id) and `human_pref` (person, key) are rebuilt, `page_pin`
-    is made and filled from `artifact.pinned_at` (kept, no longer read or written), and
-    `frame_pass` gains `person`. Every migrated row takes the owner id recorded in
+    is made and filled from `artifact.pinned_at` (kept only as a record, no longer read or written), and
+    `frame_pass` gains `person` (its rows do not count toward the owner refusal, as on
+    Postgres). Every migrated row takes the owner id recorded in
     `service_meta`; a database that holds such rows and records none is refused, because
     rows given a guessed owner would be read as a stranger's."""
     owner = conn.execute(
@@ -622,7 +623,6 @@ def _people_slice_2(conn) -> None:
             ("page_read", ""),
             ("human_pref", ""),
             ("artifact", " where pinned_at is not null"),
-            ("frame_pass", ""),
         )
     )
     if held and owner is None:

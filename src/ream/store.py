@@ -746,10 +746,13 @@ def publish(
 
 # The owner's pin (`page_pin`, people design slice 2), read as the page's `pinned_at`: what an
 # agent sees is whether THE OWNER pinned it. One `%s`: the person id (`folders.his()`), the
-# first parameter of any query that selects it.
+# first parameter of any query that selects it. The alias carries the SQLite column-type tag
+# (an expression has no declared type to convert by), as decisions.py does for its subqueries;
+# rows are read by position, so the alias changes nothing on Postgres.
 _PIN = (
     "(select pp.pinned_at from page_pin pp"
     " where pp.artifact_id = artifact.id and pp.person = %s)"
+    ' as "pinned_at [TIMESTAMPTZ]"'
 )
 _PAGE_COLUMNS = (
     "select id, title, agent, visibility, current_version, updated_at,"

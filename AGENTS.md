@@ -231,8 +231,11 @@ read of the owner id (call, `.owner_id` attribute, import) is classified in `tes
 a new one fails it until you say whether it is the request's person, the page owner or the deployment
 seed. The same test fails for a gallery write route that does not depend on `people.current`.
 Read marks, preferences and pins are per person (slice 2): `page_read` (person, artifact_id),
-`human_pref` (person, key), `page_pin` (person, artifact_id, pinned_at; `artifact.pinned_at` is kept for a
-rollback and neither read nor written), `frame_pass.person`. The gallery passes the request's person
+`human_pref` (person, key), `page_pin` (person, artifact_id, pinned_at; `artifact.pinned_at` is kept only as a
+record and neither read nor written), `frame_pass.person`. **This schema change cannot be rolled back by image
+alone:** an older image on a migrated database fails on every page open (its `mark_read` inserts into `page_read`
+without `person`, and its `ON CONFLICT (artifact_id)` matches no unique key), and pins made meanwhile are lost
+going forward. The way back is restoring the pre-upgrade backup (`docs/agent/runbooks/sqlite.md`, § backups and the restore drill). The gallery passes the request's person
 (`store.mark_read`, `store.set_pinned(person=)`, `holds.set_review_mode`, `inbox.gather(person=)`); agent
 routes and MCP read and write the owner's (`folders.his()`), with no key twin for a person's own state.
 `change-owner` moves their `person` columns too. SQLite step 37 and the end of `schema.sql` do the move.

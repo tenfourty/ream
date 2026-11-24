@@ -124,8 +124,10 @@ def test_rows_with_no_recorded_owner_are_refused_and_nothing_changes(db):
     # the old shapes are all still there
     assert _all(db, "select count(*) from page_read") == [(1,)]
     with db.connect() as conn:
-        conn.execute("select artifact_id from page_read")  # no `person` column yet
+        conn.execute("select artifact_id from page_read")  # the old shape is intact
         conn.execute("select key from human_pref")
+    with pytest.raises(Exception), db.connect() as conn:  # noqa: B017 -- "no such column"
+        conn.execute("select person from page_read")
 
 
 @pytest.mark.usefixtures("fresh_schema")

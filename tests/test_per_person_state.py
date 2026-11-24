@@ -6,6 +6,7 @@ person here is the `people.current` dependency overridden on the gallery app, wi
 """
 
 import re
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,7 +120,7 @@ def test_the_owner_pins_through_the_gallery_and_it_is_a_page_pin_row(db, owner_w
     assert [r[:2] for r in _rows(db, "select person, artifact_id from page_pin")] == [
         ("jeremy", page.id)
     ]
-    # `artifact.pinned_at` is kept for a rollback but neither read nor written.
+    # `artifact.pinned_at` is kept only as a record (not a rollback path) and neither read nor written.
     assert _rows(db, "select pinned_at from artifact where id = %s", page.id) == [
         (None,)
     ]
@@ -185,13 +186,16 @@ def test_an_unseen_reply_is_unseen_per_person(db):
         thread_root=root.id,
         agent="seat",
     )
+    # Whose thread a reply is under (`comments._HIS_THREAD`) is still any human's, not the
+    # reading person's; slice 3 settles that, so this asserts only that the READ MARK is
+    # per person: one person opening the page never clears another's unseen reply.
     assert inbox.count(db, person="jeremy")[0] == 1
-    assert inbox.count(db, person="ann")[0] == 1
     store.mark_read(db, page.id, "ann")
     assert inbox.count(db, person="ann")[0] == 0
     assert inbox.count(db, person="jeremy")[0] == 1
     assert [i.kind for i in inbox.gather(db, person="jeremy")[0]] == ["reply"]
-    assert inbox.gather(db, person="ann")[0] == []
+    store.mark_read(db, page.id, "jeremy")
+    assert inbox.count(db, person="jeremy")[0] == 0
 
 
 def test_a_frame_pass_records_who_it_was_minted_for(db, owner_wall, ann_wall):
@@ -206,3 +210,13 @@ def test_a_frame_pass_records_who_it_was_minted_for(db, owner_wall, ann_wall):
         "ann",
         "jeremy",
     ]
+
+
+def test_a_pinned_page_reads_back_with_a_datetime_on_every_read_path(db):
+    """`pinned_at` is a scalar subquery with no declared type: on SQLite it is the alias's
+    column-type tag that turns the stored text into a datetime."""
+    page = _publish(db, "Pinned")
+    store.set_pinned(db, page.id, True, agent="seat")
+    assert isinstance(store.get_owned(db, "seat", page.id).pinned_at, datetime)
+    assert isinstance(store.list_for_agent(db, "seat")[0].pinned_at, datetime)
+    assert isinstance(store.list_readable(db, "seat")[0].pinned_at, datetime)

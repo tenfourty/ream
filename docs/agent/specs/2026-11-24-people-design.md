@@ -25,8 +25,10 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   copies issuer and subject from the `service_meta` pin `oidc_owner_sub` ("<issuer> <sub>") when
   there is one. `owner._COLUMNS` gains `person.id`, so `change-owner` moves the row.
 - Slice 2 (built): `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
-  `page_pin(person, artifact_id, pinned_at)` filled once from `artifact.pinned_at` (kept, neither read
-  nor written); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
+  `page_pin(person, artifact_id, pinned_at)` filled once from `artifact.pinned_at` (kept only as a record, neither read
+  nor written; this change cannot be rolled back by image alone: an older image on a migrated database
+  fails on every page open, and pins made meanwhile are lost, so the way back is restoring the pre-upgrade
+  backup, `docs/agent/runbooks/sqlite.md`); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
   Migrated rows take the `service_meta` owner id; a database that holds such rows and records no
   owner is refused rather than guessed. SQLite does it in step 37 (a function: rebuilds and copies);
   Postgres at the end of `schema.sql`, each part guarded by its own "already done" test (the column or
