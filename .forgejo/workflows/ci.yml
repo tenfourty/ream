@@ -533,9 +533,13 @@ jobs:
       # `continue-on-error`: a Ream name that cannot be shown to hold the same image fails the job.
       # The core image's Ream name must also differ from the full image's, as the core step
       # requires of the old names. A re-run (nothing built by this run) pushes nothing, as above.
-      # The PUBLISHED lines carry the Ream name's label (`PUBLISHED ream`, `PUBLISHED ream-core`,
-      # `PUBLISHED ream-renderer`), so none matches `PUBLISHED image=`, `PUBLISHED core` or
-      # `PUBLISHED renderer`, which the pin lander reads exactly once each.
+      # The PUBLISHED lines use the SAME labels as the old names' (`PUBLISHED image=`,
+      # `PUBLISHED core image=`, `PUBLISHED renderer image=`) with the Ream path and nothing after
+      # the digest, which is the shape the pin lander binds to either name (homelab
+      # `qd-pin-lander.py`); each path differs, so each pattern still matches exactly one line. The
+      # proof of equal digests is a line of its own (`SAME-DIGEST`). A Ream tag that already exists
+      # is not pushed again: with the same digest as the old name's it logs `REUSED` (no PUBLISHED
+      # line, as for the old names) and passes; with another digest the job fails.
       - name: push Ream-named images
         env:
           REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
@@ -554,10 +558,11 @@ jobs:
           repo="git.tenfourty.site/runcove"
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
             -u artifacts-publisher --password-stdin
-          # publish <old repo name> <old ref: repo:tag@sha256:digest> <new repo name>
+          # publish <old repo name> <old ref: repo:tag@sha256:digest> <new repo name> <label>
+          # <label> is the old name's PUBLISHED label: `PUBLISHED`, `PUBLISHED core` or `PUBLISHED renderer`.
           # Sets new_digest. Runs in this shell (never in $(...)), so its exit stops the step.
           publish() {
-            old_name="$1"; old_ref="$2"; new_name="$3"
+            old_name="$1"; old_ref="$2"; new_name="$3"; label="$4"
             new="${repo}/${new_name}:${sha12}"
             case "$old_ref" in
               "${repo}/${old_name}:${sha12}@sha256:"*) ;;
@@ -566,8 +571,15 @@ jobs:
             want="${old_ref##*@}"
             [ -n "$want" ] || { echo "no digest in ${old_ref}" >&2; exit 1; }
             if pulled=$(docker pull "$new" 2>&1); then
-              echo "$new already exists in the registry: refusing to move it" >&2
-              exit 1
+              # Present already (a re-run): never pushed again. It is accepted only if it is the
+              # old name's image, and never certified by this run (REUSED, no PUBLISHED line).
+              new_digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$new" \
+                | grep -m1 "^${repo}/${new_name}@sha256:" | cut -d@ -f2)
+              [ -n "$new_digest" ] || { echo "no registry digest for the existing $new" >&2; exit 1; }
+              [ "$new_digest" = "$want" ] || { echo "the existing $new has digest ${new_digest}, but ${old_name} has ${want}" >&2; exit 1; }
+              echo "REUSED ${new_name} image=${new} digest=${new_digest} (existing tag, same digest as ${old_name}; not pushed or certified by this run)"
+              echo "SAME-DIGEST ${new_name}=${new_digest} ${old_name}=${want}"
+              return 0
             fi
             case "$pulled" in
               *"manifest unknown"*|*"not found"*) ;;
@@ -579,18 +591,20 @@ jobs:
               | grep -m1 "^${repo}/${new_name}@sha256:" | cut -d@ -f2)
             [ -n "$new_digest" ] || { echo "no registry digest for $new after the push" >&2; exit 1; }
             [ "$new_digest" = "$want" ] || { echo "$new has digest ${new_digest}, but ${old_name} has ${want}" >&2; exit 1; }
-            echo "PUBLISHED ${new_name} image=${new} digest=${new_digest} same-as=${repo}/${old_name}:${sha12}"
+            echo "SAME-DIGEST ${new_name}=${new_digest} ${old_name}=${want}"
+            # The pin lander's line: the old label, the Ream path, nothing after the digest.
+            echo "${label} image=${new} digest=${new_digest}"
           }
-          publish artifacts "$BUILD_REF" ream
+          publish artifacts "$BUILD_REF" ream "PUBLISHED"
           full_digest="$new_digest"
           if [ -z "$CORE_REF" ]; then
             echo "the core image step published no ref in a run that built the images" >&2
             exit 1
           fi
-          publish artifacts-core "$CORE_REF" ream-core
+          publish artifacts-core "$CORE_REF" ream-core "PUBLISHED core"
           [ "$new_digest" != "$full_digest" ] || { echo "ream-core digest equals ream's: the core image must be the app target" >&2; exit 1; }
           if [ -n "$RENDERER_REF" ]; then
-            publish artifacts-renderer "$RENDERER_REF" ream-renderer
+            publish artifacts-renderer "$RENDERER_REF" ream-renderer "PUBLISHED renderer"
           else
             echo "SKIPPED ream-renderer: the renderer step published no ref (it does not fail the job), so there is nothing to push under the Ream name"
           fi

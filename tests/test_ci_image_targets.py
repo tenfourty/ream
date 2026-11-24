@@ -9,7 +9,10 @@ run of the check step is the proof on the built images. The Dockerfile's side is
 `tests/test_dockerfile_targets.py`.
 """
 
+import os
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".forgejo" / "workflows"
@@ -74,9 +77,6 @@ def test_the_renderer_image_is_the_full_image_and_is_not_rebuilt_as_app():
 def test_every_image_is_also_pushed_under_its_ream_name_with_the_same_digest():
     step = _image_steps()["push Ream-named images"]
     # one push per old name, tagged from the ref the old step output (an exact digest)
-    assert 'publish artifacts "$BUILD_REF" ream\n' in step
-    assert 'publish artifacts-core "$CORE_REF" ream-core\n' in step
-    assert 'publish artifacts-renderer "$RENDERER_REF" ream-renderer\n' in step
     assert 'docker tag "$old_ref" "$new"' in step and 'docker push "$new"' in step
     assert "docker build" not in step
     # the digest is read back from the registry and must equal the old name's, or the job fails
@@ -85,10 +85,16 @@ def test_every_image_is_also_pushed_under_its_ream_name_with_the_same_digest():
     assert 'want="${old_ref##*@}"' in step
     # core still never has the full image's digest, under the Ream names either
     assert '[ "$new_digest" != "$full_digest" ]' in step
-    # a PUBLISHED-style line per name, none of which is a line the pin lander already reads
-    assert 'echo "PUBLISHED ${new_name} image=${new} digest=${new_digest}' in step
-    assert "PUBLISHED image=" not in step
-    assert "PUBLISHED core" not in step and "PUBLISHED renderer" not in step
+    # the old names' labels carry the new path, with nothing after the digest (the pin lander's shape)
+    assert 'publish artifacts "$BUILD_REF" ream "PUBLISHED"\n' in step
+    assert 'publish artifacts-core "$CORE_REF" ream-core "PUBLISHED core"\n' in step
+    assert (
+        'publish artifacts-renderer "$RENDERER_REF" ream-renderer "PUBLISHED renderer"\n'
+        in step
+    )
+    assert 'echo "${label} image=${new} digest=${new_digest}"' in step
+    # and the equality proof is a line of its own
+    assert 'echo "SAME-DIGEST ${new_name}=${new_digest} ${old_name}=${want}"' in step
 
 
 def test_the_ream_name_step_runs_after_the_old_pushes_and_cannot_be_ignored():
@@ -211,3 +217,134 @@ def test_sec_proves_public_main_is_in_the_commit_before_it_builds_and_again_befo
     for text in (steps[check], last):
         assert "SEC_PUBLIC_READ_TOKEN: ${{ secrets.SEC_PUBLIC_READ_TOKEN }}" in text
         assert "continue-on-error" not in text and "\n        if:" not in text
+
+
+# --- the Ream-name step, run against a fake docker ---------------------------------------------
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+SHA12 = SHA[:12]
+REG = "git.tenfourty.site/runcove"
+D_FULL, D_CORE, D_OTHER = ("sha256:" + c * 64 for c in "abc")
+
+FAKE_DOCKER = """#!/bin/bash
+# state: $FAKE/exists/<repo name> (a tag that is in the registry), $FAKE/digest/<repo name>
+last="${@: -1}"
+name="${last%%:*}"; name="${name##*/}"
+case "$1" in
+  login|tag|push) exit 0 ;;
+  pull)
+    if [ -e "$FAKE/exists/$name" ]; then exit 0; fi
+    echo "Error: manifest unknown"; exit 1 ;;
+  inspect)
+    if [ -s "$FAKE/digest/$name" ]; then echo "git.tenfourty.site/runcove/${name}@$(cat "$FAKE/digest/$name")"; fi ;;
+esac
+"""
+
+
+def _ream_step_script() -> str:
+    step = _image_steps()["push Ream-named images"]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+def _run_ream_step(
+    tmp_path: Path,
+    new_digests: dict[str, str],
+    existing: tuple[str, ...] = (),
+    core_ref: str | None = None,
+):
+    (tmp_path / "bin").mkdir()
+    docker = tmp_path / "bin" / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(0o755)
+    (tmp_path / "exists").mkdir()
+    (tmp_path / "digest").mkdir()
+    for name, digest in new_digests.items():
+        (tmp_path / "digest" / name).write_text(digest)
+    for name in existing:
+        (tmp_path / "exists" / name).write_text("")
+    script = tmp_path / "step.sh"
+    script.write_text("#!/bin/bash\n" + _ream_step_script())
+    env = {
+        "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        "FAKE": str(tmp_path),
+        "GITHUB_SHA": SHA,
+        "REGISTRY_PASSWORD": "not-a-secret",
+        "BUILD_REUSED": "0",
+        "BUILD_REF": f"{REG}/artifacts:{SHA12}@{D_FULL}",
+        "CORE_REF": core_ref or f"{REG}/artifacts-core:{SHA12}@{D_CORE}",
+        "RENDERER_REF": f"{REG}/artifacts-renderer:{SHA12}@{D_FULL}",
+    }
+    return subprocess.run(  # noqa: S603 -- bash on a script this test wrote
+        ["/bin/bash", str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def _lander_matches(log: str, label: str, name: str) -> list[str]:
+    """The pin lander's pattern (homelab qd-pin-lander.py), bound to one registry name."""
+    pattern = re.compile(
+        r"(?:^|\s)" + re.escape(label) + " image=" + re.escape(f"{REG}/{name}")
+        + r":([0-9a-f]{12}) digest=(sha256:[0-9a-f]{64})\s*$"
+    )  # fmt: skip
+    return [ln for ln in log.splitlines() if pattern.search(ln)]
+
+
+GOOD = {"ream": D_FULL, "ream-core": D_CORE, "ream-renderer": D_FULL}
+LABELS = (
+    ("PUBLISHED", "ream"),
+    ("PUBLISHED core", "ream-core"),
+    ("PUBLISHED renderer", "ream-renderer"),
+)
+
+
+def test_ream_step_publishes_one_lander_line_per_name_and_proves_the_digests(tmp_path):
+    done = _run_ream_step(tmp_path, GOOD)
+    assert done.returncode == 0, done.stderr
+    for label, name in LABELS:
+        assert len(_lander_matches(done.stdout, label, name)) == 1, (label, name)
+    # no Ream line is matched by the lander's pattern for another name, and none by the old paths
+    for label, name in LABELS:
+        old = name.replace("ream", "artifacts", 1)
+        assert not _lander_matches(done.stdout, label, old)
+    assert (
+        f"SAME-DIGEST ream-renderer={D_FULL} artifacts-renderer={D_FULL}" in done.stdout
+    )
+
+
+def test_ream_step_fails_when_a_pushed_digest_differs_from_the_old_names(tmp_path):
+    done = _run_ream_step(tmp_path, {**GOOD, "ream-renderer": D_OTHER})
+    assert done.returncode != 0
+    assert "ream-renderer" in done.stderr and "PUBLISHED renderer" not in done.stdout
+
+
+def test_ream_step_fails_when_the_core_digest_equals_the_full_digest(tmp_path):
+    done = _run_ream_step(
+        tmp_path,
+        {**GOOD, "ream-core": D_FULL},
+        core_ref=f"{REG}/artifacts-core:{SHA12}@{D_FULL}",
+    )
+    assert done.returncode != 0 and "must be the app target" in done.stderr
+
+
+def test_ream_step_reuses_an_existing_tag_with_the_same_digest(tmp_path):
+    done = _run_ream_step(tmp_path, GOOD, existing=("ream-core",))
+    assert done.returncode == 0, done.stderr
+    assert (
+        f"REUSED ream-core image={REG}/ream-core:{SHA12} digest={D_CORE}" in done.stdout
+    )
+    # the reused tag is not certified: no PUBLISHED line for it, the other two still have one
+    assert not _lander_matches(done.stdout, "PUBLISHED core", "ream-core")
+    assert len(_lander_matches(done.stdout, "PUBLISHED", "ream")) == 1
+    assert len(_lander_matches(done.stdout, "PUBLISHED renderer", "ream-renderer")) == 1
+
+
+def test_ream_step_fails_on_an_existing_tag_with_another_digest(tmp_path):
+    done = _run_ream_step(
+        tmp_path, {**GOOD, "ream-renderer": D_OTHER}, existing=("ream-renderer",)
+    )
+    assert done.returncode != 0
+    assert "existing" in done.stderr and "PUBLISHED renderer" not in done.stdout

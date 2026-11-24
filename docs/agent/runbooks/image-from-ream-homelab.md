@@ -22,11 +22,14 @@ here:
    image under its new name, with the same digest: `runcove/ream:<sha12>`, `runcove/ream-core:<sha12>` and
    `runcove/ream-renderer:<sha12>`. It tags each from the digest the old step read back, pushes, reads the
    digest back from the registry and fails the job unless it equals the old name's (and unless
-   `ream-core`'s differs from `ream`'s). It prints `PUBLISHED ream image=... digest=...`,
-   `PUBLISHED ream-core image=...` and `PUBLISHED ream-renderer image=...`; none of them is a line the
-   pin lander reads. It pushes nothing on a re-run. The old names stay the job's outputs and what
-   `core-lock` moves; `core-lock` switches to the new names, and the old names stop, in a later step (the
-   contract step).
+   `ream-core`'s differs from `ream`'s). It prints the old names' labels with the new path,
+   `PUBLISHED image=<...>/runcove/ream:<sha12> digest=...`, `PUBLISHED core image=<...>/ream-core:...` and
+   `PUBLISHED renderer image=<...>/ream-renderer:...`, with nothing after the digest (the shape the pin
+   lander binds to either name), and the proof of equal digests on a `SAME-DIGEST` line. A Ream tag that
+   already exists is not pushed again: with the old name's digest it logs `REUSED` (no PUBLISHED line)
+   and passes, with another digest the job fails. A run that reused the old images pushes nothing. The
+   old names stay the job's outputs and what `core-lock` moves; `core-lock` switches to the new names,
+   and the old names stop, in a later step (the contract step).
 2. `core-lock` runs `.forgejo/scripts/core-lock-pr.sh`: it force-pushes branch `core-lock/next` on
    ream-homelab with `core.lock` set to that ref, opens (or updates) the one PR `core: lock <sha12>`,
    and asks the forge to merge it when checks succeed. It touches only a PR whose head is that
