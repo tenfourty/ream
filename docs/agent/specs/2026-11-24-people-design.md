@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) and slice 4 designed, not built. Written up from the
+Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) built; slice 4 designed, not built. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -42,9 +42,7 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   from `decision.answer_record` (kept, still what the agent reads); `receipt.person`. SQLite step 38;
   Postgres at the end of `schema.sql`, its backfill guarded by the new `receipt.person` column.
   Migrated rows take the `service_meta` owner id, and rows with no recorded owner are refused.
-- Slice 3b (not built): `answers[]` on form reads. It is agent-visible, so offices review its shape first.
-  An unapplied relay already gives a person's row their own `answered_at`, never another person's
-  (see "Addressed questions as built"); 3b still needs its own rule for what the agent reads.
+- Slice 3b (built): `answers[]` on form reads; see "Slice 3b as built".
 - Stays single-owner until steps 3 and 4: `can_read`, MCP `owner_login` / `NotOwner`, page
   ownership, archive, rename, share, machines and keys (behind `people.require_owner`), plug-in answer
   sources, `pageviews` kind owner, email shares.
@@ -205,8 +203,40 @@ unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `acro
   every question (`store.set_folder_archived`), and the deleted tab's count of questions set aside
   (`store.list_deleted`); neither is a count of what a person may answer.
 
+## Slice 3b as built
+
+Every form decision read carries `answers`, added in the one serialiser `decisions.public` (the row
+holds it as a derived field, filled by `decisions._with_held` from `formanswer.answers_list`, as
+`held_by` and `receipt` are), so `/api/v1` (both words), the MCP tools and `artifacts-decide --json`
+get it together. A non-form decision has no `answers` key; an unanswered form has `[]`. No client-level
+bump: the field is additive.
+
+- Element, one for each person with a record: `person`, `answered_at`, `version`, `submit_id`, `answers`
+  (`{field: value}`), `blank`, `stale` (the names of fields answered on an older version), `sources`
+  (`{field: {source, by}}`), `source` (`page`, or the relay's source), `recorded_by` (the key that recorded
+  a relay; null for a tap), `said_at` (when a relayed answer was said), `seen_at`. No per-person history.
+- Order: oldest `answered_at` first, the person breaking a tie. Nothing is merged across people; every
+  top-level field keeps meaning the latest submitter's, and with one person `answers[0]` matches it.
+- The record is read as the form bar reads it: `newest_record` (an older image's decision record wins over
+  a stale or missing row) then `on_latest(strict=False)` onto the form's latest version.
+- `source`, `recorded_by` and `said_at` come from the history entry of the person's current `submit_id` (a
+  relay entry or a tap); a record an older image wrote has none, and the decision's own columns stand in.
+- A relay that changes nothing leaves that person's `answered_at` (and `seen_at`) as they were.
+- Seen per person: `form_answer.seen_at` (SQLite step 39; `schema.sql` for Postgres; an older image ignores
+  it). Acknowledging the form (`decisions._acknowledge`), or closing it, sets it on every row that has none.
+  A submit or applied relay clears it for that person only (`formanswer.put_person_record`), and a republish
+  that made an answer stale or reopened the form clears it for everyone (`forms._reconcile_record`), beside
+  the decision's own `acknowledged_at`, which every new answer already clears, so a wait wakes for another
+  person's answer. The waiter's own "shown once an hour" mark is `id@answered_at`, which a new answer moves.
+- `artifacts-decide` text prints one block for each person only when there are several (the
+  acknowledgement hint once, at the end); with one person it is as before.
+- MCP: the fences name `person`, `by` and `submit_id`, `source` as Ream's own fields, each by its format;
+  the answers' values, `blank` and `stale` stay fenced as free text. Only tools that return a form decision
+  row carry `answers` (the MCP `questions` tool lists plain questions).
+- Tests: `tests/test_form_answers_list.py`.
+
 ## Not yet checked
 
 Checked in slice 2: every `page_read` / `human_pref` / `pinned_at` call site (the grep is the list in
 "Slice 2 as built"), the Postgres schema of the rebuilt tables, and `migrate.copy`'s column handling
-(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (the decision's `acknowledged_at` is one value; slice 3b).
+(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (the decision's `acknowledged_at` is still one value; slice 3b adds `seen_at` per person beside it, see below).

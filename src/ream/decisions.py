@@ -221,6 +221,9 @@ class DecisionRow:
     # The one person this question is for (people design, slice 3); None: the page's owners.
     # Never sent to an agent (`public` drops it).
     addressed_to: str | None = None
+    # A form's answers one person at a time (`formanswer.answers_list`), derived on read;
+    # None for every other kind, and then `public` leaves the key out.
+    answers: list | None = None
 
 
 def may_answer(person, d) -> bool:
@@ -269,6 +272,8 @@ def public(row: DecisionRow) -> dict:
     out.pop(
         "addressed_to"
     )  # the gallery's concern: no agent reads whom a question is for
+    if out.get("answers") is None:
+        out.pop("answers", None)
     out["audience"] = out["for"] = out.pop("for_offices")
     return out
 
@@ -688,8 +693,15 @@ def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
 def _with_held(conn, rows: list[DecisionRow]) -> list[DecisionRow]:
     held = held_map(conn, rows)
     got = receipts.current_map(conn, rows)
+    from ream import formanswer  # late: formanswer reads decisions
+
     return [
-        dataclasses.replace(r, held_by=held.get(r.id, r.held_by), receipt=got.get(r.id))
+        dataclasses.replace(
+            r,
+            held_by=held.get(r.id, r.held_by),
+            receipt=got.get(r.id),
+            answers=formanswer.answers_list(conn, r.id) if r.kind == "form" else None,
+        )
         for r in rows
     ]
 
@@ -2395,6 +2407,10 @@ def _close_row(
     ).fetchone()
     if closed is None:
         return None
+    if row[_KIND_IDX] == "form":
+        from ream import formanswer  # late: formanswer reads decisions
+
+        formanswer.mark_seen(conn, row[0], now)
     emission = None
     if row[_KIND_IDX] == "question" and closed[0] is None:
         # Closed with no answer: withdrawn, or replaced by the question that
@@ -2514,6 +2530,10 @@ def _acknowledge(
         > 0
     )
     if first:
+        from ream import formanswer  # late: formanswer reads decisions
+
+        if row[_KIND_IDX] == "form":
+            formanswer.mark_seen(conn, decision_id, datetime.now(UTC))
         # Seen is a receipt: one journal row, only when this call is what set it.
         # `receipt_set` never wakes a waiter (events.list_for_agent).
         receipts.insert(conn, decision_id, "seen", agent=agent, session=session)

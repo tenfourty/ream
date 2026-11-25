@@ -1215,6 +1215,9 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table receipt add column person text",
         _people_slice_3,
     ),
+    # 25 Nov 2026: when the agent acknowledged each person's answer, people design slice 3b
+    # (see schema.sql). An older image ignores the column.
+    39: ("alter table form_answer add column seen_at timestamptz",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

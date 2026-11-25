@@ -769,6 +769,9 @@ def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> Non
             " where id = %s",
             (decision_id,),
         )
+        from ream import formanswer  # late: formanswer reads forms
+
+        formanswer.clear_seen(conn, decision_id)
         # Reads as new again, so what was said about the old answer is history.
         from ream import receipts  # late: receipts reads store, which reads forms
 

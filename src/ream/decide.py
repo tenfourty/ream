@@ -231,13 +231,29 @@ def _fmt_form(row: dict) -> list[str]:
     """A form's merged record: who and when, one `name: value` line per field (a relayed
     field says who relayed it from where), then the blanks, the stale fields with the
     version each was given on, a reopened form, and the ack hint."""
-    rec = row["answer_record"]
-    source = row.get("answer_source")
-    by = _speaker(
-        rec.get("answered_by") or row.get("answered_by"),
-        source,
-        row.get("recorded_by"),
+    people = row.get("answers") or []
+    if len(people) > 1:
+        # Several people answered: one block each, oldest first (`answers`); with one
+        # person the record below is the whole story, as it always was.
+        name = (row.get("answer_record") or {}).get("form", row.get("form_name", "?"))
+        lines = []
+        for p in people:
+            rec = {**p, "form": name, "answered_by": p.get("person")}
+            lines.extend(_form_block(rec, row, p.get("source"), p.get("recorded_by")))
+        if not row.get("acknowledged_at"):
+            lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
+        return lines
+    lines = _form_block(
+        row["answer_record"], row, row.get("answer_source"), row.get("recorded_by")
     )
+    if not row.get("acknowledged_at"):
+        lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
+    return lines
+
+
+def _form_block(rec: dict, row: dict, source, recorder) -> list[str]:
+    """One person's answer to a form (see `_fmt_form`)."""
+    by = _speaker(rec.get("answered_by") or row.get("answered_by"), source, recorder)
     how = (
         _w("{{owner_they}} submitted it")
         if source in (None, "page")
@@ -276,8 +292,6 @@ def _fmt_form(row: dict) -> list[str]:
             f" since): {item.get('name', '?')} = {text}"
             + (f"   [was: {item['label']}]" if item.get("label") else "")
         )
-    if not row.get("acknowledged_at"):
-        lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
     return lines
 
 
@@ -1770,7 +1784,9 @@ def build_parser() -> argparse.ArgumentParser:
             "A form published in a page (data-artifact-form) is answered in the gallery: "
             "`list`, `answers` and `wait` print its submitted record, one `name: value` "
             "line per field with blank and stale fields named. Read it by "
-            "answer_record, never by `answer`, which stays empty for a form. A republish "
+            "answer_record, never by `answer`, which stays empty for a form. When several "
+            "people answered it, the row (and `--json`) also carries `answers`, one entry "
+            "for each person, and these commands print a block for each. A republish "
             "that changes a field's wording or options moves {{owner_their}} old answer to the "
             "record's `stale` list; relay a form answer given elsewhere with "
             "`record ID --field NAME=VALUE ... --note`."

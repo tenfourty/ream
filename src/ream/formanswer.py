@@ -252,17 +252,143 @@ def _base_record(conn, decision_id: str, person: str, decision_record) -> dict |
 
 
 def put_person_record(
-    conn, decision_id: str, person: str, record: dict, at: datetime
+    conn,
+    decision_id: str,
+    person: str,
+    record: dict,
+    at: datetime,
+    *,
+    keep_seen: bool = False,
 ) -> None:
     """Store `record` as `person`'s record of the form. The decision's own `answer_record`
-    (what the agent reads) is written by the caller beside it, in the same transaction."""
+    (what the agent reads) is written by the caller beside it, in the same transaction.
+    A changed answer reads as unseen again (`seen_at` cleared); `keep_seen` is for a write
+    that changed nothing they said."""
+    reset = "" if keep_seen else ", seen_at = null"
     conn.execute(
-        "insert into form_answer (decision_id, person, answer_record, answered_at)"
+        "insert into form_answer (decision_id, person, answer_record, answered_at)"  # noqa: S608 -- `reset` is one of two fixed texts
         " values (%s, %s, %s, %s)"
         " on conflict (decision_id, person) do update set"
-        " answer_record = excluded.answer_record, answered_at = excluded.answered_at",
+        " answer_record = excluded.answer_record,"
+        f" answered_at = excluded.answered_at{reset}",
         (decision_id, person, jsonb(record), at),
     )
+
+
+def mark_seen(conn, decision_id: str, at: datetime) -> None:
+    """The agent has acknowledged the form's answers: every person's answer it was shown
+    reads as seen from `at` (first acknowledgement only, as the decision's own)."""
+    conn.execute(
+        "update form_answer set seen_at = %s where decision_id = %s and seen_at is null",
+        (at, decision_id),
+    )
+
+
+def clear_seen(conn, decision_id: str) -> None:
+    """The form's answers read as new again for every person (a republish that made an
+    answer stale or reopened the form)."""
+    conn.execute(
+        "update form_answer set seen_at = null where decision_id = %s", (decision_id,)
+    )
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _stale_names(record: dict) -> list[str]:
+    return [
+        s["name"]
+        for s in record.get("stale") or []
+        if isinstance(s, dict) and s.get("name")
+    ]
+
+
+def _element(person: str, record: dict, at, seen, decision_row) -> dict:
+    """One person's `answers[]` element from their (reconciled) record."""
+    history = record.get("history") or []
+    entry = next(
+        (h for h in reversed(history) if h.get("submit_id") == record.get("submit_id")),
+        None,
+    )
+    source, recorded_by, said_at = "page", None, None
+    if entry is not None and entry.get("kind") == "relay":
+        source = entry.get("source") or "page"
+        recorded_by = entry.get("recorded_by")
+        said_at = entry.get("said_at")
+    elif entry is None and decision_row is not None and decision_row[0] == person:
+        # A record an older image wrote has no history entry to read: the decision's own columns.
+        source = decision_row[1] or "page"
+        recorded_by = decision_row[2]
+        said_at = _iso(decision_row[3])
+    return {
+        "person": person,
+        "answered_at": record.get("answered_at") or _iso(at),
+        "version": record.get("version"),
+        "submit_id": record.get("submit_id"),
+        "answers": dict(record.get("answers") or {}),
+        "blank": list(record.get("blank") or []),
+        "stale": _stale_names(record),
+        "sources": dict(record.get("sources") or {}),
+        "source": source,
+        "recorded_by": recorded_by,
+        "said_at": said_at,
+        "seen_at": _iso(seen),
+    }
+
+
+def answers_list(conn, decision_id: str) -> list[dict]:
+    """Every person's answer to a form, as the agent reads it (`answers[]`): oldest
+    `answered_at` first, the person breaking a tie. One element for each person who has a
+    record of it, brought onto the form's latest version as the form bar does it
+    (`on_latest(strict=False)`). Nothing is merged across people."""
+    dec = conn.execute(
+        "select answer_record, answered_by, answer_source, recorded_by, said_at"
+        " from decision where id = %s",
+        (decision_id,),
+    ).fetchone()
+    if dec is None:
+        return []
+    held = dec[0] if isinstance(dec[0], dict) else None
+    rows = {
+        p: (rec, at, seen)
+        for p, rec, at, seen in conn.execute(
+            "select person, answer_record, answered_at, seen_at from form_answer"
+            " where decision_id = %s",
+            (decision_id,),
+        ).fetchall()
+    }
+    # An older image writes only the decision's record: its submitter has no (current) row.
+    if held and held.get("answered_by"):
+        rows.setdefault(held["answered_by"], (None, None, None))
+    if not rows:
+        return []
+    latest = conn.execute(
+        "select max(version_n) from decision_form where decision_id = %s",
+        (decision_id,),
+    ).fetchone()[0]
+    fields, complete = [], False
+    if latest is not None:
+        fields = forms._fields(conn, decision_id, latest)
+        complete = bool(
+            conn.execute(
+                "select complete_all from decision_form"
+                " where decision_id = %s and version_n = %s",
+                (decision_id, latest),
+            ).fetchone()[0]
+        )
+    out = []
+    for person, (row_record, at, seen) in rows.items():
+        record = newest_record(person, row_record, held)
+        if not record:
+            continue
+        if latest is not None:
+            record = on_latest(
+                conn, decision_id, record, latest, fields, complete, strict=False
+            )
+        out.append(_element(person, record, at, seen, dec[1:]))
+    out.sort(key=lambda e: (e["answered_at"] or "", e["person"]))
+    return out
 
 
 def submit(
@@ -597,7 +723,9 @@ def relay(
                     (his, decision_id),
                 ).fetchone()
                 at = stood[0] if stood[1] == his else stood[2]
-                put_person_record(conn, decision_id, his, record, at or now)
+                put_person_record(
+                    conn, decision_id, his, record, at or now, keep_seen=True
+                )
             return {"record": record, "applied": [], "skipped": skipped}
         record["answered_at"] = entry["answered_at"]
         record["submit_id"] = entry["submit_id"]

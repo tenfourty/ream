@@ -1479,6 +1479,9 @@ create table if not exists form_answer (
     answered_at   timestamptz not null,
     primary key (decision_id, person)
 );
+-- 25 Nov 2026 (people slice 3b): when the agent acknowledged this person's answer; null until it did.
+-- An older image ignores the column.
+alter table form_answer add column if not exists seen_at timestamptz;
 do $$
 begin
     if not exists (

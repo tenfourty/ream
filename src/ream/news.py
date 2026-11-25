@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-25a",
+        "A form decision now carries `answers`: one entry for each person who answered it (`person`, `answered_at`, `version`, `submit_id`, `answers`, `blank`, `stale`, `sources`, `source`, `recorded_by`, `said_at`, `seen_at`), oldest answer first, nothing merged across people. Everything you read before (`answer_record`, `answered_by`, `answer_source`) still means the latest submitter's; with one person `answers[0]` matches it. `seen_at` is when you acknowledged that person's answer; a later answer from another person reads as new again, so a wait wakes for it. An unanswered form has `answers: []`, and a question has no `answers`. `ream list` and `wait` print a block for each person only when there are several. Nothing to install: the commands are unchanged.",
+    ),
+    (
         "2026-11-23i",
         "Two more MCP tools. `organise_folder` renames a folder (`new_slug` and/or `title`; the old slug keeps working), archives it (`confirm` true archives every live page in it and sets its open questions aside; without it, it only says what it would do) or unarchives it, as `POST /api/v1/folders/SLUG/rename` and `/archive` do. `transfer_page` gives one of your pages to another agent for good, as `POST /api/v1/pages/ID/transfer` does (an agent key only: a connected app does not get it; you can read the page afterwards only while it is open to agents). Another agent's folder or page answers `no such folder` or `no such page`, as an unknown one does. Nothing to install.",
     ),
