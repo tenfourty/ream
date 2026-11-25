@@ -254,6 +254,29 @@ def test_read_only_cards_sit_under_their_own_heading_not_waiting_on_you(
     assert 'id="open-asks"' in ann_wall.get(f"/a/{page.id}").text
 
 
+def test_a_reader_with_both_kinds_of_question_gets_both_sections(
+    db, question, owner_wall, ann_wall
+):
+    page, mine = question  # unaddressed: the owner's
+    theirs = decisions.ask(
+        db, agent="ops", artifact_id=page.id, question="for ann?", options=OPTIONS
+    )
+    _address(db, theirs.id, "ann")
+    seen = owner_wall.get(f"/a/{page.id}").text
+    on_you = seen[seen.index('id="open-asks"') : seen.index('id="other-asks"')]
+    others = seen[seen.index('id="other-asks"') :]
+    # his own question has the buttons, under "Waiting on you"; ann's is read-only under
+    # "Waiting on others", and neither card is in the other's section
+    assert "Waiting on you" in seen and "Waiting on others" in seen
+    assert f'action="/d/{mine.id}/answer"' in on_you and "which?" in on_you
+    assert theirs.id not in on_you and "for ann?" not in on_you
+    assert 'class="ask readonly"' in others and "For ann to answer" in others
+    assert "for ann?" in others and "which?" not in others
+    assert f'action="/d/{theirs.id}/answer"' not in seen
+    # only his own is counted as open for him
+    assert "Open questions (1)" in seen
+
+
 def test_a_settled_item_says_whose_answer_it_is_and_its_thread_is_not_yours(
     db, question, owner_wall, ann_wall
 ):

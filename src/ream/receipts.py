@@ -56,6 +56,11 @@ class NotAnswered(Exception):
     """`done` on a decision he has not answered yet (409)."""
 
 
+class AnswerTooNew(NotAnswered):
+    """`seen` on an answer stamped later than this acknowledgement (clock skew between
+    servers): it was not shown to the caller, so it is not seen (409)."""
+
+
 def normalise_state(state: str) -> str:
     state = _ALIASES.get(state, state)
     if state not in STATES:
@@ -303,6 +308,11 @@ def declare(
 
     if state == "seen":
         row = decisions._acknowledge(conn, agent, decision_id, session=session)
+        if row.receipt is None:
+            # `_acknowledge` stamped nothing: the answer is dated after its stamp.
+            raise AnswerTooNew(
+                "the answer is newer than this acknowledgement; read it, then say seen again"
+            )
         return row.receipt
 
     for field, body in (("note", note), ("link", link or "")):

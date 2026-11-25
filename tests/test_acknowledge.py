@@ -144,3 +144,65 @@ def test_an_answer_newer_than_the_ack_stamp_is_not_acknowledged(db):
             "select count(*) from receipt where subject_id = %s", (d.id,)
         ).fetchone()
     assert seen == 0
+
+
+def test_a_seen_receipt_for_an_answer_newer_than_the_stamp_is_refused_not_null(
+    client, db
+):
+    """Clock skew can date an answer after the ack stamp. The receipt route used to answer
+    200 with a null body there; it now refuses (409) and says why, and nothing is marked."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    d = _decision(db)
+    later = datetime.now(UTC) + timedelta(hours=1)
+    with db.connect() as conn:
+        conn.execute(
+            "update decision set answered_at = %s where id = %s", (later, d.id)
+        )
+
+    r = client.post(
+        f"/api/v1/decisions/{d.id}/receipt",
+        json={"state": "seen"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert r.status_code == 409, r.text
+    assert r.json() is not None and "newer" in r.json()["detail"]
+    got = decisions.get_owned(db, "ops-seat", d.id)
+    assert got.acknowledged_at is None and got.receipt is None
+
+
+def test_the_ack_locks_the_decision_row_before_it_takes_the_stamp(db, monkeypatch):
+    """The lock alone, apart from the update's refusal of a later answer: whatever commits
+    after the stamp was taken must have waited for the row, so the lock select has to run
+    before the clock is read. SQLite has no row lock, so the clause is swapped for a marker
+    comment and the order of the marker and the clock read is what is pinned."""
+    d = _decision(db)
+    events: list[str] = []
+
+    class Spy(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            events.append("stamp")
+            return datetime.now(tz)
+
+    class Conn:
+        def __init__(self, real):
+            self._real = real
+
+        def for_update(self, suffix=""):
+            return f" /*lock{suffix}*/"
+
+        def execute(self, sql, *args, **kwargs):
+            if "/*lock" in sql:
+                assert sql.lstrip().startswith("select") and "from decision" in sql
+                events.append("lock")
+            return self._real.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(decisions, "datetime", Spy)
+    with db.connect() as conn, conn.transaction():
+        decisions._acknowledge(Conn(conn), "ops-seat", d.id)
+
+    assert events[:2] == ["lock", "stamp"], events

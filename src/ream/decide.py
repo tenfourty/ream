@@ -2735,10 +2735,10 @@ def main(argv: list[str] | None = None) -> int:
                 body,
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
+            row = row if isinstance(row, dict) else {}  # a server may answer no body
             note = f": {row['note']}" if row.get("note") else ""
-            print(
-                f"{args.decision}: receipt {str(row['state']).replace('_', '-')}{note}"
-            )
+            state = str(row.get("state") or args.state).replace("_", "-")
+            print(f"{args.decision}: receipt {state}{note}")
             return 0
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"

@@ -399,8 +399,13 @@ def answers_list(conn, decision_id: str) -> list[dict]:
             )
         if used_held:
             # The decision's own (newer) record is the one read: its time is the one
-            # `seen_at` must reach, not the older row's.
-            at = _when(record.get("answered_at")) or at
+            # `seen_at` must reach, not the older row's. With no readable time there is
+            # nothing to compare, so it reads as unseen.
+            held_at = _when(record.get("answered_at"))
+            if held_at is None:
+                seen = None
+            else:
+                at = held_at
         out.append(_element(person, record, at, seen, dec[1:]))
     out.sort(key=lambda e: (e["answered_at"] or "", e["person"]))
     return out

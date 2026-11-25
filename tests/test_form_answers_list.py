@@ -347,6 +347,35 @@ def test_a_newer_decision_record_is_seen_against_its_own_time(db, made):
     assert only["seen_at"] is None
 
 
+def test_a_newer_decision_record_with_no_readable_time_reads_as_unseen(db, made):
+    # the row's own time is no stand-in for the decision's record's: with nothing to
+    # compare `seen_at` against, the answer is unseen rather than seen on the row's say-so
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    with db.connect() as conn:
+        conn.execute(
+            "update form_answer set answered_at = %s, seen_at = %s"
+            " where decision_id = %s",
+            (old, old + timedelta(minutes=1), made["id"]),
+        )
+        (rec,) = conn.execute(
+            "select answer_record from decision where id = %s", (made["id"],)
+        ).fetchone()
+        rec = {
+            **rec,
+            "answered_by": "ann",
+            "submit_id": "from-an-older-image",
+            "answered_at": "not a time",
+        }
+        conn.execute(
+            "update decision set answer_record = %s where id = %s",
+            (jsonb(rec), made["id"]),
+        )
+    (only,) = answers_of(db, made)
+    assert only["submit_id"] == "from-an-older-image"
+    assert only["seen_at"] is None
+
+
 def test_the_new_column_is_there_on_both_databases(db: Database):
     with db.connect() as conn:
         conn.execute("select seen_at from form_answer limit 1").fetchall()
