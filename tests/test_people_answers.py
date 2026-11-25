@@ -172,8 +172,10 @@ def test_the_gallery_draws_the_form_with_the_readers_own_answers(
     page, did = form
     _address(db, did, None)
     _submit(owner_wall, page, {"region": "a"})
-    formanswer.submit(db, did, version=1, values={"region": "b"}, by="ann")
     mine = owner_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
+    # the bar is drawn only to a person who may answer the form: it is Ann's from here
+    _address(db, did, "ann")
+    formanswer.submit(db, did, version=1, values={"region": "b"}, by="ann")
     hers = ann_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
     assert mine["carried"]["region"] == "a"
     assert hers["carried"]["region"] == "b"

@@ -30,7 +30,9 @@ KINDS = {REQUEST, PAGE_OWNER, SEED}
 SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("admin.py", "cmd_list_apps"): (SEED, 1),
     ("comments.py", "reopen"): (REQUEST, 1),
-    ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 2),
+    ("decisions.py", "addressed_ok_id"): (PAGE_OWNER, 1),
+    ("decisions.py", "addressed_sql"): (PAGE_OWNER, 1),
+    ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 1),
     ("formanswer.py", "submit"): (REQUEST, 1),
     ("formanswer.py", "relay"): (PAGE_OWNER, 1),
     ("formrecord.py", "source_of"): (SEED, 1),

@@ -269,9 +269,7 @@ def test_the_wall_says_waiting_only_to_the_person_who_may_answer(
 
 def test_a_form_for_ann_gets_no_submit_bar_for_the_owner(db, form):
     page, did = form
-    names = lambda who: [
-        f["decision_id"] for f in forms_ui.payload(db, page.id, who)["forms"]
-    ]
-    assert names("jeremy") == [did] and names("ann") == []
+    names = lambda who: [f["form"] for f in forms_ui.payload(db, page.id, who)["forms"]]
+    assert names("jeremy") == ["rollout"] and names("ann") == []
     _address(db, did, "ann")
-    assert names("jeremy") == [] and names("ann") == [did]
+    assert names("jeremy") == [] and names("ann") == ["rollout"]
