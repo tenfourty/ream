@@ -8,9 +8,19 @@ second person is the `people.current` dependency overridden on the gallery app, 
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import test_mcp_reach
 from fastapi.testclient import TestClient
 
-from ream import decisions, formanswer, forms_ui, inbox, people, receipts, store
+from ream import (
+    decisions,
+    formanswer,
+    forms_ui,
+    inbox,
+    keys,
+    people,
+    receipts,
+    store,
+)
 from ream.app import create_gallery_app
 
 SAME = {"sec-fetch-site": "same-origin"}
@@ -206,7 +216,50 @@ def test_only_the_person_it_is_for_is_given_buttons_on_the_page(
     _address(db, row.id, "ann")
     assert _has_buttons(ann_wall, page, row.id)
     assert not _has_buttons(owner_wall, page, row.id)
-    assert "which?" not in owner_wall.get(f"/a/{page.id}").text
+    # read-only for the owner: the question and whom it is for, no form, the slot kept
+    seen = owner_wall.get(f"/a/{page.id}").text
+    assert "which?" in seen and "For ann to answer" in seen
+    assert 'class="ask readonly"' in seen and 'name="letter"' not in seen
+    assert f'data-decision-id="{row.id}"' in seen
+
+
+def test_a_settled_list_counts_and_hints_only_for_what_the_reader_may_answer(
+    db, question, owner_wall, ann_wall
+):
+    page, row = question
+    _address(db, row.id, "ann")
+    ann_wall.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers=SAME,
+        follow_redirects=False,
+    )
+    seen = owner_wall.get(f"/a/{page.id}").text
+    assert "0 questions you have already settled" not in seen
+    assert "1 settled for someone else" in seen
+    assert "nothing here is locked" not in seen
+    assert "1 question you have already settled" in ann_wall.get(f"/a/{page.id}").text
+
+
+def test_partner_items_are_the_owners_alone(db, owner_wall, ann_wall, monkeypatch):
+    from ream import gallery, readside
+
+    monkeypatch.setattr(readside, "count_waiting", lambda db, limit=500: 2)
+    called = []
+    monkeypatch.setattr(
+        inbox, "_slack_items", lambda db, limit: (called.append(1), ([], False))[1]
+    )
+    monkeypatch.setattr(
+        gallery, "_render_slack_status", lambda pending, settled: "<p>SLACKSTATUS</p>"
+    )
+    assert inbox.count(db, person="jeremy")[0] == 2
+    assert inbox.count(db, person="ann")[0] == 0
+    inbox.gather(db, person="ann")
+    assert called == []
+    inbox.gather(db, person="jeremy")
+    assert called == [1]
+    assert "SLACKSTATUS" in owner_wall.get("/inbox").text
+    assert "SLACKSTATUS" not in ann_wall.get("/inbox").text
 
 
 def test_an_answered_question_offers_no_change_to_someone_who_may_not_answer_it(
@@ -273,3 +326,78 @@ def test_a_form_for_ann_gets_no_submit_bar_for_the_owner(db, form):
     assert names("jeremy") == ["rollout"] and names("ann") == []
     _address(db, did, "ann")
     assert names("jeremy") == [] and names("ann") == ["rollout"]
+
+
+# --- an app and a key relaying on a question for someone else --------------------------------
+
+
+@pytest.fixture()
+def office_question(db):
+    keys.mint(db, agent="office")
+    page = store.publish(db, "office", "Board", test_mcp_reach.PAGE.format("x"))
+    store.set_agents_can_read(db, page.id, False, agent="office")
+    return decisions.ask(
+        db, agent="office", artifact_id=page.id, question="Which?", options=OPTIONS
+    )
+
+
+def test_an_app_cannot_pass_on_an_answer_for_someone_else(db, office_question):
+    app = test_mcp_reach._app(db)
+    call = test_mcp_reach._as(db, app)
+    _address(db, office_question.id, "ann")
+    out = test_mcp_reach._tool(
+        call, "record_answer", decision_id=office_question.id, letter="a", words="x"
+    )
+    assert out["isError"] is True
+    assert decisions.get_owned(db, "office", office_question.id).answer is None
+    # a missing question reads the same
+    missing = test_mcp_reach._tool(
+        call, "record_answer", decision_id="nope-no-such", letter="a", words="x"
+    )
+    assert out["content"][0]["text"] == missing["content"][0]["text"]
+    with pytest.raises(store.NotFound):
+        decisions.record_elsewhere(
+            db,
+            office_question.id,
+            letter="a",
+            note="x",
+            source="mcp",
+            recorded_by=app.agent,
+            by_app=True,
+        )
+    # unaddressed, the app still relays as the owner
+    _address(db, office_question.id, None)
+    done = test_mcp_reach._tool(
+        call, "record_answer", decision_id=office_question.id, letter="a", words="x"
+    )
+    assert done["isError"] is False, done
+    assert decisions.get_owned(db, "office", office_question.id).answered_by == "jeremy"
+
+
+def test_an_app_cannot_pass_on_a_form_answer_for_someone_else(db):
+    from test_mcp_relay import _form
+
+    _page, did = _form(db)
+    call = test_mcp_reach._as(db, test_mcp_reach._app(db))
+    _address(db, did, "ann")
+    out = test_mcp_reach._tool(
+        call, "record_answer", decision_id=did, fields={"why": "x"}, words="x"
+    )
+    assert out["isError"] is True
+    assert _rows(db, "select * from form_answer") == []
+
+
+def test_a_keys_relay_route_files_it_for_ann_and_never_names_her(db, question):
+    client = TestClient(create_gallery_app(db))
+    token, _ = keys.mint(db, agent="ops")
+    _, row = question
+    _address(db, row.id, "ann")
+    got = client.post(
+        f"/api/v1/decisions/{row.id}/record",
+        json={"letter": "a", "note": "she said a", "source": "telegram"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["answered_by"] == "ann"
+    assert "addressed_to" not in str(body)
