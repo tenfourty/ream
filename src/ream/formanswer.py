@@ -461,7 +461,7 @@ def relay(
         raise SubmitRefused(f"unknown answer source {source!r}")
     with db.connect() as conn:
         row = conn.execute(
-            "select d.artifact_id, d.form_name, d.session, a.agent"
+            "select d.artifact_id, d.form_name, d.session, a.agent, d.addressed_to"
             " from decision d join artifact a on a.id = d.artifact_id"
             " where d.id = %s and d.kind = 'form' and d.closed_at is null"
             " and a.deleted_at is null and a.archived_at is null",
@@ -469,7 +469,7 @@ def relay(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, form_name, asking_session, owner = row
+        artifact_id, form_name, asking_session, owner, addressed_to = row
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
             (decision_id,),
@@ -505,7 +505,9 @@ def relay(
                     "looks like it contains a secret", field=name
                 ) from exc
 
-    his = settings.owner_id()  # a relay is the owner's: what he said elsewhere
+    # A relay is what the person the question is for said elsewhere: the owner's when it is
+    # addressed to no one, else that person's (`decision.addressed_to`).
+    his = addressed_to or settings.owner_id()
     with db.connect() as conn, conn.transaction():
         decisions._require_live_page(conn, decision_id, artifact_id)
         current = conn.execute(
@@ -516,7 +518,7 @@ def relay(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        # A relay is the owner's (the answer he gave elsewhere): it merges into his own record.
+        # A relay is that person's (the answer they gave elsewhere): it merges into their own record.
         previous = on_latest(
             conn,
             decision_id,
@@ -573,16 +575,25 @@ def relay(
             # Everything was older than a later submit of his: kept in the history, no
             # change to his record and nothing for the agent to wake for.
             if previous is not None:
-                conn.execute(
-                    "update decision set answer_record = %s where id = %s",
-                    (jsonb(record), decision_id),
-                )
-                # His own answered_at stands (this relay changed nothing he said): the
-                # decision's, which a missing row (an older image wrote) takes too.
+                # The decision's record is the latest submitter's: this relay changed
+                # nothing, so it is touched only when it is already this person's.
+                held = current[0] if isinstance(current[0], dict) else {}
+                if held.get("answered_by") in (None, his):
+                    conn.execute(
+                        "update decision set answer_record = %s where id = %s",
+                        (jsonb(record), decision_id),
+                    )
+                # Their own answered_at stands (this relay changed nothing they said): the
+                # decision's when it is their answer (which a missing row, an older image's
+                # write, takes too), else the one on their own row, never another person's.
                 stood = conn.execute(
-                    "select answered_at from decision where id = %s", (decision_id,)
-                ).fetchone()[0]
-                put_person_record(conn, decision_id, his, record, stood or now)
+                    "select d.answered_at, d.answered_by, f.answered_at"
+                    " from decision d left join form_answer f"
+                    " on f.decision_id = d.id and f.person = %s where d.id = %s",
+                    (his, decision_id),
+                ).fetchone()
+                at = stood[0] if stood[1] == his else stood[2]
+                put_person_record(conn, decision_id, his, record, at or now)
             return {"record": record, "applied": [], "skipped": skipped}
         record["answered_at"] = entry["answered_at"]
         record["submit_id"] = entry["submit_id"]

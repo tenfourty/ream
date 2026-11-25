@@ -3616,15 +3616,20 @@ def _agent_pick(
 
 _WALL_PAGE = 200
 
+
 # The wall's "has an open question" test, spelled once: it orders the wall and it is one
 # of the keys the "Older pages" cursor compares.
-_WALL_WAITING = (
-    "((select count(*) from decision d"
-    "   where d.artifact_id = a.id"
-    "     and d.answer is null and d.kind <> 'form'"
-    "     and a.archived_at is null and a.deleted_at is null"
-    "     and d.closed_at is null) > 0)"
-)
+def _wall_waiting(person: str) -> str:
+    """The wall's "has an open question for `person`" test (`me.person` is in every wall query):
+    only a question they may answer counts (`decisions.addressed_sql`)."""
+    return (
+        "((select count(*) from decision d"  # noqa: S608 -- the fragment is fixed text
+        "   where d.artifact_id = a.id"
+        "     and d.answer is null and d.kind <> 'form'"
+        "     and a.archived_at is null and a.deleted_at is null"
+        f"     and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
+        "     and d.closed_at is null) > 0)"
+    )
 
 
 class _WallRows(list):
@@ -3650,7 +3655,7 @@ def _wall_cursor(row) -> str:
     )
 
 
-def _after_cursor(cursor: str) -> tuple[str, tuple]:
+def _after_cursor(cursor: str, person: str) -> tuple[str, tuple]:
     """The where-clause fragment (and its parameters) for the rows that sort after
     `cursor` in the wall's order, or ("", ()) when the cursor is not one of ours."""
     try:
@@ -3671,10 +3676,11 @@ def _after_cursor(cursor: str) -> tuple[str, tuple]:
         if unread == "1"
         else f"(not {_WALL_UNREAD} and {after})"
     )
+    waits = _wall_waiting(person)
     after = (
-        f"(not {_WALL_WAITING} or ({_WALL_WAITING} and {after}))"
+        f"(not {waits} or ({waits} and {after}))"
         if waiting == "1"
-        else f"(not {_WALL_WAITING} and {after})"
+        else f"(not {waits} and {after})"
     )
     # The flags' text repeats once per use, so the parameters are laid out in text order:
     # only `tail` carries any, and it sits innermost, once.
@@ -4951,7 +4957,12 @@ def _render_decisions(
     if not rows:
         return "", ""
 
-    open_rows = [r for r in rows if r.answer is None]
+    def _mine(r: decisions.DecisionRow) -> bool:
+        """May the reader answer it (`decisions.may_answer`)? Everything is theirs when no
+        reader is named. No button is drawn for a question that is not."""
+        return person is None or decisions.addressed_ok_id(person, r.addressed_to)
+
+    open_rows = [r for r in rows if r.answer is None and _mine(r)]
     settled_rows = [r for r in rows if r.answer is not None]
     now = datetime.now(UTC)
     on_page = {r.id for r in open_rows}
@@ -5380,13 +5391,17 @@ def _render_decisions(
                 # looking.
                 + (
                     ""
-                    if row.closed_at is not None
+                    if row.closed_at is not None or not _mine(row)
                     else '<p class="hint">Your first verdict is final.</p>'
                     if getattr(row, "kind", "question") == "review"
                     else '<p class="hint">Tap a different letter to change this '
                     "&mdash; it replaces your answer, and the note with it.</p>"
                 )
-                + ("" if row.closed_at is not None else _card(row, anchorable=False))
+                + (
+                    ""
+                    if row.closed_at is not None or not _mine(row)
+                    else _card(row, anchorable=False)
+                )
                 + "</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
@@ -5459,7 +5474,7 @@ def gallery_router(db: Database) -> APIRouter:
         At most `_WALL_PAGE` rows come back; `.more` says there are older ones and `.cursor`
         is what the "Older pages" link carries to fetch the next lot (`older`).
         """
-        after, after_params = _after_cursor(older) if older else ("", ())
+        after, after_params = _after_cursor(older, person) if older else ("", ())
         if folder_id is not None:
             scope, extra = " and a.folder_id = %s", (folder_id,)
         elif grouped:
@@ -5497,6 +5512,8 @@ def gallery_router(db: Database) -> APIRouter:
             "            and d.answer is null and d.kind <> 'form'"
             # A question SET ASIDE (its page archived or binned) is not waiting.
             "            and a.archived_at is null and a.deleted_at is null"
+            # Nor is one this reader may not answer (it is addressed to someone else).
+            f"            and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
@@ -5550,7 +5567,7 @@ def gallery_router(db: Database) -> APIRouter:
             # it would look like pinning had done nothing rather than like a
             # broken sort.
             + " order by pp.pinned_at desc nulls last,"
-            f"          {_WALL_WAITING} desc,"
+            f"          {_wall_waiting(person)} desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
@@ -5577,6 +5594,7 @@ def gallery_router(db: Database) -> APIRouter:
             "          where d.artifact_id = a.id"
             "            and d.answer is null and d.kind <> 'form'"
             "            and a.archived_at is null"
+            f"            and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
             "            and d.closed_at is null) as waiting"
             "  from artifact a join folder f on f.id = a.folder_id"
             + _PERSON_JOINS

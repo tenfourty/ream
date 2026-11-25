@@ -237,6 +237,24 @@ def addressed_ok(person, addressed_to: str | None) -> bool:
     return person.is_owner
 
 
+def addressed_ok_id(person_id: str, addressed_to: str | None) -> bool:
+    """`addressed_ok` for a caller that holds only the person's id: the owner is the person whose
+    id is `settings.owner_id()` (a read, as a write, never lets anyone else answer for the owner)."""
+    if addressed_to is not None:
+        return addressed_to == person_id
+    return person_id == settings.owner_id()
+
+
+def addressed_sql(person_id: str, column: str, person_expr: str = "%s") -> str:
+    """The SQL twin of `addressed_ok_id`: true for the rows `person_id` may answer, `column`
+    being the `addressed_to` column. `person_expr` is how the person is spelled in the query:
+    the default `%s` is one bound parameter, which the caller binds to `person_id`; a column
+    already in the query (`me.person`) needs none. It appears once, either way."""
+    if person_id == settings.owner_id():
+        return f"({column} is null or {column} = {person_expr})"
+    return f"{column} = {person_expr}"
+
+
 # Whose question it is, in SQL: the asker where an app asked on someone else's page, else the
 # page's agent. Every read and write "of one's own questions" goes through this, so an app's
 # question is its own and a key never reaches it by owning the page.
@@ -1865,6 +1883,9 @@ def record_elsewhere(
         # session, so a waiter listening for its own session never heard it --
         # found by the first outside agent (homelab-ij8.106).
         asking_session = row[_SESSION_IDX]
+        # Whose answer this is: the person the question is addressed to, else the owner (what
+        # was said elsewhere was said by them; `answered_by` and the receipt follow it).
+        said_by = row[_ADDRESSED_TO_IDX] or settings.owner_id()
 
         if _set_aside_fields(row)["set_aside"]:
             raise store.NotFound()
@@ -1906,7 +1927,7 @@ def record_elsewhere(
                     letter,
                     note,
                     answered_at,
-                    settings.owner_id(),
+                    said_by,
                     source,
                     recorded_by,
                     said_at,
@@ -1955,7 +1976,7 @@ def record_elsewhere(
                                 "body": partner.answered_body(
                                     letter=letter,
                                     note=note,
-                                    answered_by=settings.owner_id(),
+                                    answered_by=said_by,
                                     answered_at=answered_at,
                                     answer_source=source,
                                     recorded_by=recorded_by,
@@ -2644,6 +2665,7 @@ def across_seats(
     limit: int = 200,
     after: str | None = None,
     include_set_aside: bool = False,
+    person: str | None = None,
 ) -> list[CrossSeatRow]:
     """Every question on every page, oldest first -- by default only the ones
     still waiting on Jeremy.
@@ -2702,6 +2724,11 @@ def across_seats(
         # him: it is off every list of what is, exactly as the reconciler wants it.
         sql += _NOT_SET_ASIDE
     params: list[object] = []
+    if person is not None:
+        # Only what this person may answer (people design, slice 3). Unset: every row, as the
+        # agent feeds read it; they never pass a person.
+        sql += " and " + addressed_sql(person, "decision.addressed_to")
+        params.append(person)
     if after is not None:
         sql += _AFTER.format(op=">")
         params.append(after)
@@ -2938,17 +2965,22 @@ def outcomes_for_decisions(
     return out
 
 
-def open_counts(db: Database) -> tuple[int, int, int]:
+def open_counts(db: Database, person: str | None = None) -> tuple[int, int, int]:
     """(open reviews, open questions that are not held, every open row), counted without reading
     any question text: the same rows `across_seats` returns by default, and the
     same held rule, so a count and a list cannot disagree. Set-aside questions (their
-    page archived or binned) are not open here."""
+    page archived or binned) are not open here. `person` (an id) counts only what that
+    person may answer, as `across_seats(person=)` lists."""
+    where, params = "", ()
+    if person is not None:
+        where, params = " and " + addressed_sql(person, "d.addressed_to"), (person,)
     with db.connect() as conn:
         found = conn.execute(
-            "select d.id, d.kind, d.depends_on from decision d"
+            "select d.id, d.kind, d.depends_on from decision d"  # noqa: S608 -- fixed text
             " join artifact a on a.id = d.artifact_id"
             " where d.closed_at is null and d.answer is null and d.kind <> 'form'"
-            " and a.archived_at is null and a.deleted_at is null"
+            " and a.archived_at is null and a.deleted_at is null" + where,
+            params,
         ).fetchall()
         reviews = sum(1 for r in found if r[1] == "review")
         waiting = [

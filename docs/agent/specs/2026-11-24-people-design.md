@@ -169,15 +169,29 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
   image's write, stale and missing row; submit, relay, an unapplied relay, and the form bar; an older
   image's republish; an unapplied relay's `answered_at`).
 
-## Must be done before anything sets `addressed_to`
+## Addressed questions as built (before anything sets `addressed_to`)
 
-Nothing writes `addressed_to` yet, so these two are latent:
-
-- A relay (`formanswer.relay`, `decisions.record_elsewhere`) always files under the owner, even when the
-  question is addressed to someone else. It must file under the person the question is addressed to.
-- `decisions.may_answer` is enforced on writes only: the page still draws answer buttons for a
-  question the reader may not answer, and `decisions.open_counts` still counts it. Both must follow
-  `may_answer`.
+Nothing writes `addressed_to` from a route yet; these two gaps are closed so that when one does, a
+question for a person other than the owner behaves right everywhere. Agent-facing output is
+unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `across_seats` and
+`open_counts` with no person, read every row as before).
+- **A relay files under the person the question is addressed to**, else the owner. `formanswer.relay`
+  merges into that person's `form_answer` row and writes `answered_by` (record, history entry,
+  decision) as them; `decisions.record_elsewhere` writes `answered_by` (row and event body) as them,
+  so the receipt's person follows (`receipt.person` is the decision's `answered_by`). An unapplied
+  relay changes nothing: it leaves the decision's `answer_record` alone unless that is already this
+  person's, and gives their row their own `answered_at` (the decision's when the decision is theirs,
+  else the row's), never another person's.
+- **Reads follow `decisions.may_answer`.** `decisions.addressed_ok_id` / `addressed_sql` are the
+  id and SQL forms of it (the owner is `settings.owner_id()`). `across_seats(person=)` and
+  `open_counts(person)` take it, and the inbox (`gather`, `count`) passes the request's person. The
+  wall's per-page "waiting" count, its waiting sort and cursor (`_wall_waiting(person)`) and the
+  folder tiles' count use `me.person`. `_render_decisions` draws no card for an open question the
+  reader may not answer and no change-your-answer card or hint on a settled one; `forms_ui.payload`
+  draws no submit bar for a form addressed to someone else. Tests: `tests/test_people_addressed.py`.
+- Not changed, on purpose: the owner-only archive-folder sheet and the agent API's folder preview count
+  every question (`store.set_folder_archived`), and the deleted tab's count of questions set aside
+  (`store.list_deleted`); neither is a count of what a person may answer.
 
 ## Not yet checked
 

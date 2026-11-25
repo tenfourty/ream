@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ream import formanswer, formrecord, forms, people, store
+from ream import decisions, formanswer, formrecord, forms, people, store
 from ream.content import _script_json
 
 _STYLE = (
@@ -58,8 +58,22 @@ _STYLE = (
 def payload(db, artifact_id: str, person: str) -> dict:
     """The page's open forms as the bar draws them: the STORED field list at each
     form's latest version, which the script trusts over anything the page says, and
-    `person`'s own record of each (`form_answer`: what one person submitted is theirs)."""
-    shown = forms.for_page(db, artifact_id)
+    `person`'s own record of each (`form_answer`: what one person submitted is theirs). Only the
+    forms `person` may answer are drawn."""
+    with db.connect() as conn:
+        addressed = dict(
+            conn.execute(
+                "select id, addressed_to from decision"
+                " where artifact_id = %s and kind = 'form'",
+                (artifact_id,),
+            ).fetchall()
+        )
+    # A form addressed to someone else gets no submit bar here (`decisions.may_answer`).
+    shown = [
+        f
+        for f in forms.for_page(db, artifact_id)
+        if decisions.addressed_ok_id(person, addressed.get(f["decision_id"]))
+    ]
     with db.connect() as conn:
         records = {
             did: formanswer.newest_record(person, row, decision_record)

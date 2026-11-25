@@ -150,9 +150,9 @@ _REPLY_FROM_WHERE = (
 )
 
 
-def _decision_items(db: Database, limit: int) -> tuple[list[Item], bool]:
+def _decision_items(db: Database, limit: int, person: str) -> tuple[list[Item], bool]:
     out = []
-    got = decisions.across_seats(db, limit=limit)
+    got = decisions.across_seats(db, limit=limit, person=person)
     for r in got:
         d = r.decision
         if d.kind == "question" and d.held_by:
@@ -222,7 +222,7 @@ def gather(
     replies are unseen: the request's, the owner's when none is named."""
     now = now or datetime.now(UTC)
     limit = limit or _LIMIT
-    decided, capped_d = _decision_items(db, limit)
+    decided, capped_d = _decision_items(db, limit, person or folders.his())
     replied, capped_r = _reply_items(db, limit, person or folders.his())
     slacked, capped_s = _slack_items(db, limit)
     return order(decided + replied + slacked, now), capped_d or capped_r or capped_s
@@ -244,7 +244,7 @@ def count(
     """How many items `items` would hold, and whether a source is over `limit`,
     from COUNT queries and ids only: no question text and no reply bodies."""
     limit = limit or _LIMIT
-    reviews, questions, open_rows = decisions.open_counts(db)
+    reviews, questions, open_rows = decisions.open_counts(db, person or folders.his())
     me = person or folders.his()
     with db.connect() as conn:
         replies = conn.execute(
