@@ -172,7 +172,7 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
 
 ## Addressed questions as built (before anything sets `addressed_to`)
 
-Nothing writes `addressed_to` from a route yet; these two gaps are closed so that when one does, a
+Nothing writes `addressed_to` from a route yet; the gaps below are closed so that when one does, a
 question for a person other than the owner behaves right everywhere. Agent-facing output is
 unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `across_seats` and
 `open_counts` with no person, read every row as before).
@@ -187,7 +187,7 @@ unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `acro
   id and SQL forms of it (the owner is `settings.owner_id()`). `across_seats(person=)` and
   `open_counts(person)` take it, and the inbox (`gather`, `count`) passes the request's person. The
   wall's per-page "waiting" count, its waiting sort and cursor (`_wall_waiting(person)`) and the
-  folder tiles' count use `me.person`. `_render_decisions` draws no card for an open question the
+  folder tiles' count use `me.person`. `_render_decisions` draws an open question the
   reader may not answer as a read-only card (the question, whom it is for, no form, hold or live
   switch; the slot and "held on another page" text stay true) and no change-your-answer card or hint
   on a settled one; the settled heading counts only what the reader may answer, adding "N settled for
