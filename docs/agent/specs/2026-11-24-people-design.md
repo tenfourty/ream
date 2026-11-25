@@ -145,12 +145,14 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
   `tests/test_per_person_state.py` (the thread is per person).
 - Rolling back is safe for answers: an older image on a migrated database still runs (the new
   columns and table are unread by it) and writes only `decision.answer_record`, so a person's
-  `form_answer` row goes stale or is missing. The backfill does not run again, but the next submit or
-  relay on this image reads that record: when the decision's `answer_record` says `answered_by` is the
-  writer and the row is missing or names another `submit_id`, the decision's record is the base
-  (`formanswer._base_record`), and the row is repaired by the write. With one person this is the old
-  behaviour; with several it stays right because another person's record never names the writer.
-  Tests: `tests/test_people_answers.py` (an older image's write, stale and missing row, submit and relay).
+  `form_answer` row goes stale or is missing. The backfill does not run again, but every reader and
+  writer of a person's record picks the newer one by one rule (`formanswer.newest_record`): when the
+  decision's `answer_record` says `answered_by` is that person and the row is missing or names another
+  `submit_id`, the decision's record is used. The form bar (`forms_ui.payload`) draws it, and the next
+  submit or relay (including a relay that changes nothing) merges into it and writes it back as the
+  row. With one person this is the old behaviour; with several it stays right because another
+  person's record never names them. Tests: `tests/test_people_answers.py` (an older image's write,
+  stale and missing row; submit, relay, an unapplied relay, and the form bar).
 
 ## Must be done before anything sets `addressed_to`
 

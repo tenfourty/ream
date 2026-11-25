@@ -4,6 +4,8 @@ person here is the `people.current` dependency overridden on the gallery app, wi
 `people.OPEN_SIGN_IN` flipped the way step 4 will. What an agent reads over `/api/v1` is unchanged:
 `answer_record` is still the one record, and `addressed_to` is never sent."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -300,6 +302,9 @@ def test_an_answer_an_older_image_wrote_is_picked_up_by_the_next_write(
     if row_is == "missing":
         with db.connect() as conn:
             conn.execute("delete from form_answer where decision_id = %s", (did,))
+    # the form bar draws what the older image wrote, not the stale (or missing) row
+    shown = owner_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
+    assert shown["carried"]["why"] == "older"
     if write == "submit":
         formanswer.submit(db, did, version=1, values={"region": "b"}, by="jeremy")
     else:
@@ -324,3 +329,31 @@ def test_an_answer_an_older_image_wrote_is_picked_up_by_the_next_write(
     # the repaired row is what the agent reads too
     assert decisions.get_owned(db, "ops", did).answer_record == mine
     assert older["history"][:2] == mine["history"][:2]
+
+
+@pytest.mark.parametrize("row_is", ["stale", "missing"])
+def test_a_relay_that_changes_nothing_still_repairs_the_row_an_older_image_left(
+    db, form, owner_wall, row_is
+):
+    page, did = form
+    assert _submit(owner_wall, page, {"region": "a", "why": "mine"}).status_code == 200
+    _older_image_writes(db, did, "jeremy", why="older")
+    if row_is == "missing":
+        with db.connect() as conn:
+            conn.execute("delete from form_answer where decision_id = %s", (did,))
+    done = formanswer.relay(
+        db,
+        did,
+        fields_given={"region": "b"},
+        note="n",
+        source="telegram",
+        recorded_by="ops",
+        said_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    assert done["applied"] == [] and done["skipped"] == ["region"]
+    (mine,) = _rows(
+        db, "select answer_record from form_answer where decision_id = %s", did
+    )
+    assert mine[0]["answers"]["why"] == "older"
+    assert "older-image-submit" in {h["submit_id"] for h in mine[0]["history"]}
+    assert decisions.get_owned(db, "ops", did).answer_record == mine[0]

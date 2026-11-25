@@ -62,12 +62,12 @@ def payload(db, artifact_id: str, person: str) -> dict:
     shown = forms.for_page(db, artifact_id)
     with db.connect() as conn:
         records = {
-            did: rec
-            for did, rec in conn.execute(
-                "select f.decision_id, f.answer_record from form_answer f"
-                " join decision d on d.id = f.decision_id"
-                " where d.artifact_id = %s and d.kind = 'form' and f.person = %s",
-                (artifact_id, person),
+            did: formanswer.newest_record(person, row, decision_record)
+            for did, row, decision_record in conn.execute(
+                "select d.id, f.answer_record, d.answer_record from decision d"
+                " left join form_answer f on f.decision_id = d.id and f.person = %s"
+                " where d.artifact_id = %s and d.kind = 'form'",
+                (person, artifact_id),
             ).fetchall()
         }
     return {

@@ -220,14 +220,14 @@ def person_record(conn, decision_id: str, person: str) -> dict | None:
     return row[0] if row else None
 
 
-def _base_record(conn, decision_id: str, person: str, decision_record) -> dict | None:
-    """The record a write by `person` merges into. Normally their `form_answer` row; but an
-    older image (a rollback, or a pod not yet replaced) writes only `decision.answer_record`,
-    which leaves the row stale or missing. When the decision's own record is `person`'s
-    (`answered_by`) and the row is missing or names another submit, the decision's record is
-    the newer one and is used, which repairs the row at this write. Another person's record
-    never says `answered_by: <person>`, so this stays right with several people."""
-    row = person_record(conn, decision_id, person)
+def newest_record(person: str, row, decision_record) -> dict | None:
+    """`person`'s record of a form: their `form_answer` row (`row`), unless an older image
+    wrote after it. An older image (a rollback, or a pod not yet replaced) writes only
+    `decision.answer_record`, which leaves the row stale or missing. When the decision's own
+    record is `person`'s (`answered_by`) and the row is missing or names another submit, the
+    decision's record is the newer one. Another person's record never says
+    `answered_by: <person>`, so this stays right with several people. The one rule for every
+    reader and writer of a person's record (a write, the form bar)."""
     if (
         isinstance(decision_record, dict)
         and decision_record.get("answered_by") == person
@@ -235,6 +235,14 @@ def _base_record(conn, decision_id: str, person: str, decision_record) -> dict |
     ):
         return decision_record
     return row
+
+
+def _base_record(conn, decision_id: str, person: str, decision_record) -> dict | None:
+    """The record a write by `person` merges into (`newest_record`); the write then
+    stores it back as their row."""
+    return newest_record(
+        person, person_record(conn, decision_id, person), decision_record
+    )
 
 
 def put_person_record(
@@ -563,11 +571,12 @@ def relay(
                     "update decision set answer_record = %s where id = %s",
                     (jsonb(record), decision_id),
                 )
-                conn.execute(
-                    "update form_answer set answer_record = %s"
-                    " where decision_id = %s and person = %s",
-                    (jsonb(record), decision_id, his),
-                )
+                # His own answered_at stands (this relay changed nothing he said): the
+                # decision's, which a missing row (an older image wrote) takes too.
+                stood = conn.execute(
+                    "select answered_at from decision where id = %s", (decision_id,)
+                ).fetchone()[0]
+                put_person_record(conn, decision_id, his, record, stood or now)
             return {"record": record, "applied": [], "skipped": skipped}
         record["answered_at"] = entry["answered_at"]
         record["submit_id"] = entry["submit_id"]
