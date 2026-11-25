@@ -195,14 +195,20 @@ def _still_latest(conn, decision_id, latest) -> None:
         )
 
 
-def _on_latest(conn, decision_id, record, latest, fields, complete):
+def on_latest(conn, decision_id, record, latest, fields, complete, *, strict=True):
     """The record brought onto the form's latest stored version. `forms.sync` does this
-    at a republish; this catches a record left on an older version (one written before
-    the carry rules existed). Only ever forwards: a record already past `latest` means the
-    caller's read is stale (`_still_latest` refuses that first)."""
+    at a republish; this catches a record left on an older version: one written before
+    the carry rules existed, or a person's `form_answer` row after an older image
+    republished (it reconciles only `decision.answer_record`, so the row keeps its old
+    version and answers). Read-only; the one rule for the writers (submit, relay) and the
+    form bar (`forms_ui.payload`). Only ever forwards: a record already past `latest`
+    means the caller's read is stale (`_still_latest` refuses that first; `strict=False`,
+    for a reader, returns it as it is)."""
     if not record or record.get("version") == latest:
         return record
     if (record.get("version") or 0) > latest:
+        if not strict:
+            return record
         raise SubmitRefused(
             f"this form was changed (version {record.get('version')}); reload the page",
             status=409,
@@ -344,7 +350,7 @@ def submit(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        previous = _on_latest(
+        previous = on_latest(
             conn,
             decision_id,
             _base_record(conn, decision_id, by, current[0]),
@@ -511,7 +517,7 @@ def relay(
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
         # A relay is the owner's (the answer he gave elsewhere): it merges into his own record.
-        previous = _on_latest(
+        previous = on_latest(
             conn,
             decision_id,
             _base_record(conn, decision_id, his, current[0]),

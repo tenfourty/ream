@@ -357,3 +357,80 @@ def test_a_relay_that_changes_nothing_still_repairs_the_row_an_older_image_left(
     assert mine[0]["answers"]["why"] == "older"
     assert "older-image-submit" in {h["submit_id"] for h in mine[0]["history"]}
     assert decisions.get_owned(db, "ops", did).answer_record == mine[0]
+
+
+def test_an_older_images_republish_leaves_no_old_answer_in_the_bar(
+    db, form, owner_wall
+):
+    """An older image reconciles only `decision.answer_record` at a republish: the
+    changed field is blanked and goes stale there, while the person's `form_answer` row
+    stays on version 1 with the same submit_id. After the roll forward the bar must not
+    carry the old answer into the new question."""
+    page, did = form
+    assert _submit(owner_wall, page, {"region": "a", "why": "keep"}).status_code == 200
+    (before,) = _rows(
+        db, "select answer_record from form_answer where decision_id = %s", did
+    )
+    store.patch(
+        db,
+        "ops",
+        page.id,
+        "<!doctype html><html><head><title>P</title></head><body>"
+        + FORM.replace("Why <", "Because <")
+        + "</body></html>",
+        page.revision,
+    )
+    with db.connect() as conn:  # the older image never touched the row
+        conn.execute(
+            "update form_answer set answer_record = %s where decision_id = %s",
+            (jsonb(before[0]), did),
+        )
+        decided = conn.execute(
+            "select answer_record from decision where id = %s", (did,)
+        ).fetchone()[0]
+    assert before[0]["version"] == 1 and decided["version"] == 2
+    assert decided["submit_id"] == before[0]["submit_id"]
+    shown = owner_wall.get(f"/a/{page.id}/forms.json").json()["forms"][0]
+    assert shown["version"] == 2
+    assert "why" not in shown["carried"]
+    assert shown["carried"]["region"] == "a"
+    assert [s["name"] for s in shown["stale"]] == ["why"]
+    assert shown["stale"][0]["value"] == "keep"
+    # reading it stored nothing: the row is still the older image's
+    (after,) = _rows(
+        db, "select answer_record from form_answer where decision_id = %s", did
+    )
+    assert after[0]["version"] == 1
+
+
+@pytest.mark.parametrize("row_is", ["stale", "missing"])
+def test_an_unapplied_relay_keeps_the_decisions_answered_at_on_the_row(
+    db, form, owner_wall, row_is
+):
+    page, did = form
+    assert _submit(owner_wall, page, {"region": "a", "why": "mine"}).status_code == 200
+    _older_image_writes(db, did, "jeremy", why="older")
+    with db.connect() as conn:
+        long_ago = datetime.now(UTC) - timedelta(days=2)
+        conn.execute(
+            "update decision set answered_at = %s where id = %s", (long_ago, did)
+        )
+        if row_is == "missing":
+            conn.execute("delete from form_answer where decision_id = %s", (did,))
+    done = formanswer.relay(
+        db,
+        did,
+        fields_given={"region": "b"},
+        note="n",
+        source="telegram",
+        recorded_by="ops",
+        said_at=datetime.now(UTC) - timedelta(days=3),
+    )
+    assert done["applied"] == []
+    (row,) = _rows(
+        db,
+        "select f.answered_at, d.answered_at from form_answer f"
+        " join decision d on d.id = f.decision_id where f.decision_id = %s",
+        did,
+    )
+    assert row[0] == row[1]

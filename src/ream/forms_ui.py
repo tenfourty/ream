@@ -70,6 +70,20 @@ def payload(db, artifact_id: str, person: str) -> dict:
                 (person, artifact_id),
             ).fetchall()
         }
+        # A record left on an older version (an older image republished and moved only the
+        # decision's) is brought onto the latest the way a write does, before it is drawn.
+        records = {
+            f["decision_id"]: formanswer.on_latest(
+                conn,
+                f["decision_id"],
+                records.get(f["decision_id"]),
+                f["version"],
+                f["fields"],
+                f["complete"],
+                strict=False,
+            )
+            for f in shown
+        }
     return {
         "artifact_id": artifact_id,
         "forms": [

@@ -43,6 +43,10 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   Postgres at the end of `schema.sql`, its backfill guarded by the new `receipt.person` column.
   Migrated rows take the `service_meta` owner id, and rows with no recorded owner are refused.
 - Slice 3b (not built): `answers[]` on form reads. It is agent-visible, so offices review its shape first.
+  In a multi-person form an unapplied relay must not give the owner's row another person's
+  `answered_at`: `decision.answered_at` is whoever answered last, and today the unapplied relay copies
+  it onto the owner's `form_answer.answered_at` (right with one person, pinned by
+  `test_an_unapplied_relay_keeps_the_decisions_answered_at_on_the_row`). 3b needs its own rule for it.
 - Stays single-owner until steps 3 and 4: `can_read`, MCP `owner_login` / `NotOwner`, page
   ownership, archive, rename, share, machines and keys (behind `people.require_owner`), plug-in answer
   sources, `pageviews` kind owner, email shares.
@@ -143,16 +147,27 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
 - Tests: `tests/test_people_answers.py` (two people), `tests/test_people_slice3_migration.py` (both
   backends), `tests/test_migrate.py`'s copy round trip, `tests/test_owner.py`,
   `tests/test_per_person_state.py` (the thread is per person).
-- Rolling back is safe for answers: an older image on a migrated database still runs (the new
-  columns and table are unread by it) and writes only `decision.answer_record`, so a person's
-  `form_answer` row goes stale or is missing. The backfill does not run again, but every reader and
-  writer of a person's record picks the newer one by one rule (`formanswer.newest_record`): when the
-  decision's `answer_record` says `answered_by` is that person and the row is missing or names another
-  `submit_id`, the decision's record is used. The form bar (`forms_ui.payload`) draws it, and the next
-  submit or relay (including a relay that changes nothing) merges into it and writes it back as the
-  row. With one person this is the old behaviour; with several it stays right because another
-  person's record never names them. Tests: `tests/test_people_answers.py` (an older image's write,
-  stale and missing row; submit, relay, an unapplied relay, and the form bar).
+- Rolling back is safe for answers, in two cases an older image can produce on a migrated database
+  (its code runs; the new columns and table are unread by it):
+  1. It writes a submit or relay: only `decision.answer_record` changes, so a person's `form_answer`
+     row goes stale or is missing. The backfill does not run again, but every reader and writer of a
+     person's record picks the newer one by one rule (`formanswer.newest_record`): when the
+     decision's `answer_record` says `answered_by` is that person and the row is missing or names
+     another `submit_id`, the decision's record is used. The form bar (`forms_ui.payload`) draws it,
+     and the next submit or relay (including a relay that changes nothing) merges into it and writes
+     it back as the row.
+  2. It republishes a page with a changed field: it reconciles only `decision.answer_record` (the
+     changed answer blanked and moved to `stale`), and the row stays on the old version with the
+     same `submit_id`, so `newest_record` returns the row. Every reader and writer then brings the
+     record onto the form's latest version, read-only, through `formanswer.on_latest` (the writes
+     before merging, `forms_ui.payload` before `formrecord.gallery_view`), so the bar does not carry
+     the old answer into the new question and shows it stale, as before slice 3. The row itself is
+     rewritten by the next write.
+  With one person this is the old behaviour; with several it stays right because another person's
+  record never names them. Not covered: an older image's record for a person who is not the
+  decision's `answered_by` (it cannot make one). Tests: `tests/test_people_answers.py` (an older
+  image's write, stale and missing row; submit, relay, an unapplied relay, and the form bar; an older
+  image's republish; an unapplied relay's `answered_at`).
 
 ## Must be done before anything sets `addressed_to`
 
