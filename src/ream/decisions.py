@@ -1886,6 +1886,10 @@ def record_elsewhere(
         # Whose answer this is: the person the question is addressed to, else the owner (what
         # was said elsewhere was said by them; `answered_by` and the receipt follow it).
         said_by = row[_ADDRESSED_TO_IDX] or settings.owner_id()
+        # A signed-in app is the owner's (only the owner signs in): it cannot pass on what
+        # someone else said, so a question for another person is out of its reach.
+        if by_app and not addressed_ok_id(settings.owner_id(), row[_ADDRESSED_TO_IDX]):
+            raise store.NotFound()
 
         if _set_aside_fields(row)["set_aside"]:
             raise store.NotFound()

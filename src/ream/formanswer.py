@@ -445,6 +445,7 @@ def relay(
     recorded_by: str,
     said_at: datetime | None = None,
     keep_taps: bool = False,
+    by_app: bool = False,
 ) -> dict:
     """Store an answer he gave somewhere that is not the page, FIELD BY FIELD, with its
     source (3.4, 3.6). A relayed field is kept as a relay (`sources`), never counts as his
@@ -470,6 +471,9 @@ def relay(
         if row is None:
             raise store.NotFound()
         artifact_id, form_name, asking_session, owner, addressed_to = row
+        # A signed-in app is the owner's: a form for another person is out of its reach.
+        if by_app and not decisions.addressed_ok_id(settings.owner_id(), addressed_to):
+            raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
             (decision_id,),

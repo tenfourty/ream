@@ -4959,10 +4959,10 @@ def _render_decisions(
 
     def _mine(r: decisions.DecisionRow) -> bool:
         """May the reader answer it (`decisions.may_answer`)? Everything is theirs when no
-        reader is named. No button is drawn for a question that is not."""
+        reader is named. A question that is not is drawn read-only, with no button."""
         return person is None or decisions.addressed_ok_id(person, r.addressed_to)
 
-    open_rows = [r for r in rows if r.answer is None and _mine(r)]
+    open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
     now = datetime.now(UTC)
     on_page = {r.id for r in open_rows}
@@ -5157,6 +5157,15 @@ def _render_decisions(
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
         if anchorable and row.answer is None and not is_review:
             anchor += f' id="q-{escape(row.id)}"'
+        if row.answer is None and not _mine(row):
+            # Read-only: whose it is, and nothing to press (no form, hold or live switch).
+            return (
+                f'<div class="ask readonly"{anchor}>'
+                f'<p class="q">{tag}{escape(row.question)}</p>'
+                f"{_context_block(row)}"
+                f'<p class="hint">For {escape(row.addressed_to or "someone else")} '
+                "to answer.</p></div>"
+            )
         if row.held_by and row.answer is None and not is_review:
             # Held: no form at all, one line saying what it waits on. It keeps
             # its data-decision-id, so a slot for it still gets this note.
@@ -5227,7 +5236,9 @@ def _render_decisions(
         (
             r
             for r in open_rows
-            if getattr(r, "kind", "question") == "question" and not r.held_by
+            if getattr(r, "kind", "question") == "question"
+            and not r.held_by
+            and _mine(r)
         ),
         key=lambda r: _inbox_key(r, now),
     )
@@ -5250,7 +5261,7 @@ def _render_decisions(
         hint = (
             ""
             if all(
-                getattr(r, "kind", "question") == "review" or r.held_by
+                getattr(r, "kind", "question") == "review" or r.held_by or not _mine(r)
                 for r in open_rows
             )
             else (
@@ -5407,16 +5418,21 @@ def _render_decisions(
         # Collapsed, and counted in its own summary. Four settled questions took
         # the whole first screen of a page whose point was the one still open;
         # closed, the same four are a single line he can open when he wants them.
-        n = len(entries)
+        mine_settled = [r for r in settled_rows if _mine(r)]
+        n = len(mine_settled)
+        others = len(entries) - n
         noun = "question" if n == 1 else "questions"
+        title = f"{n} {noun} you have already settled" if n or not others else ""
+        if others:
+            title += (" and " if title else "") + f"{others} settled for someone else"
         below.append(
             f'<details class="asks settled-list"{" open" if any_fresh else ""}>'
             "<summary><h2>"
-            f"{n} {noun} you have already settled</h2></summary>"
+            f"{title}</h2></summary>"
             + "".join(entries)
             + (
                 ""
-                if all(getattr(r, "kind", "question") == "review" for r in settled_rows)
+                if all(getattr(r, "kind", "question") == "review" for r in mine_settled)
                 else '<p class="hint">Open one to see the options again, or to change '
                 "your mind &mdash; nothing here is locked.</p>"
             )
@@ -6327,9 +6343,14 @@ def gallery_router(db: Database) -> APIRouter:
         outcomes = decisions.outcomes_for_decisions(
             db, [i.id for i in rows if i.kind == "question"]
         )
-        slack_status = _render_slack_status(
-            readside.open_copies(db, waiting_on_him=False),
-            readside.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+        # Partner (Slack) questions are the owner's alone: their answer route is owner-only.
+        slack_status = (
+            _render_slack_status(
+                readside.open_copies(db, waiting_on_him=False),
+                readside.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+            )
+            if person.is_owner
+            else ""
         )
         return HTMLResponse(
             _shell(

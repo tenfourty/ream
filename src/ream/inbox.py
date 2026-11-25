@@ -224,7 +224,12 @@ def gather(
     limit = limit or _LIMIT
     decided, capped_d = _decision_items(db, limit, person or folders.his())
     replied, capped_r = _reply_items(db, limit, person or folders.his())
-    slacked, capped_s = _slack_items(db, limit)
+    # Partner (Slack) questions are the owner's: /pq/.../answer is owner-only.
+    slacked, capped_s = (
+        _slack_items(db, limit)
+        if (person or folders.his()) == folders.his()
+        else ([], False)
+    )
     return order(decided + replied + slacked, now), capped_d or capped_r or capped_s
 
 
@@ -250,7 +255,7 @@ def count(
         replies = conn.execute(
             f"select count(*){_REPLY_FROM_WHERE}", (me, me)
         ).fetchone()[0]
-    slacked = readside.count_waiting(db, limit)
+    slacked = readside.count_waiting(db, limit) if me == folders.his() else 0
     capped = open_rows >= limit or replies >= limit or slacked >= limit
     return reviews + questions + replies + slacked, capped
 

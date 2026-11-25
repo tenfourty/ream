@@ -43,10 +43,8 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   Postgres at the end of `schema.sql`, its backfill guarded by the new `receipt.person` column.
   Migrated rows take the `service_meta` owner id, and rows with no recorded owner are refused.
 - Slice 3b (not built): `answers[]` on form reads. It is agent-visible, so offices review its shape first.
-  In a multi-person form an unapplied relay must not give the owner's row another person's
-  `answered_at`: `decision.answered_at` is whoever answered last, and today the unapplied relay copies
-  it onto the owner's `form_answer.answered_at` (right with one person, pinned by
-  `test_an_unapplied_relay_keeps_the_decisions_answered_at_on_the_row`). 3b needs its own rule for it.
+  An unapplied relay already gives a person's row their own `answered_at`, never another person's
+  (see "Addressed questions as built"); 3b still needs its own rule for what the agent reads.
 - Stays single-owner until steps 3 and 4: `can_read`, MCP `owner_login` / `NotOwner`, page
   ownership, archive, rename, share, machines and keys (behind `people.require_owner`), plug-in answer
   sources, `pageviews` kind owner, email shares.
@@ -133,8 +131,8 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
 - A form is answered per person: `formanswer.submit` merges a person's submit into their own
   `form_answer` row (not another person's) and also writes `decision.answer_record`, so the agent's
   record is the latest submitter's. With one person that is the record as before. How several
-  people's answers reach the agent is slice 3b's `answers[]`. A relay (`formanswer.relay`) is the
-  owner's and merges into the owner's row. A republish brings every person's row onto the new
+  people's answers reach the agent is slice 3b's `answers[]`. A relay (`formanswer.relay`) is
+  the addressed person's (the owner's when `addressed_to` is null) and merges into their row. A republish brings every person's row onto the new
   version (`forms._reconcile_record`). The gallery's form bar (`forms_ui.payload`) draws the
   request person's own record.
 - `receipt.person` is the decision's `answered_by` when the receipt was written, never sent to an
@@ -168,6 +166,9 @@ Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP ch
   decision's `answered_by` (it cannot make one). Tests: `tests/test_people_answers.py` (an older
   image's write, stale and missing row; submit, relay, an unapplied relay, and the form bar; an older
   image's republish; an unapplied relay's `answered_at`).
+  Once a route writes `addressed_to`, an older image ignores `may_answer` on reads and writes: it
+  draws the buttons and takes an answer from the owner on a question addressed to someone else, and
+  files a relay as the owner's. Do not write `addressed_to` from a route until no older image runs.
 
 ## Addressed questions as built (before anything sets `addressed_to`)
 
@@ -187,8 +188,17 @@ unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `acro
   `open_counts(person)` take it, and the inbox (`gather`, `count`) passes the request's person. The
   wall's per-page "waiting" count, its waiting sort and cursor (`_wall_waiting(person)`) and the
   folder tiles' count use `me.person`. `_render_decisions` draws no card for an open question the
-  reader may not answer and no change-your-answer card or hint on a settled one; `forms_ui.payload`
-  draws no submit bar for a form addressed to someone else. Tests: `tests/test_people_addressed.py`.
+  reader may not answer as a read-only card (the question, whom it is for, no form, hold or live
+  switch; the slot and "held on another page" text stay true) and no change-your-answer card or hint
+  on a settled one; the settled heading counts only what the reader may answer, adding "N settled for
+  someone else". `forms_ui.payload` draws no submit bar for a form addressed to someone else.
+- **A signed-in app relays only for the owner** (only the owner signs in): `record_elsewhere` and
+  `formanswer.relay` with `by_app` refuse a question addressed to anyone else as `store.NotFound`,
+  the answer for a decision out of reach. A key's relay keeps the rule above.
+- **Partner (Slack) items are the owner's**: `/pq/.../answer` is owner-only, so the inbox lists and
+  counts them, and shows their status block, only to the owner. Tests: `tests/test_people_addressed.py`.
+- Known item for when a second person can sign in: the owner-only archive sheet's "N questions
+  waiting on you" (`gallery.py`, `folder_archive_sheet`) counts every question the folder holds.
 - Not changed, on purpose: the owner-only archive-folder sheet and the agent API's folder preview count
   every question (`store.set_folder_archived`), and the deleted tab's count of questions set aside
   (`store.list_deleted`); neither is a count of what a person may answer.

@@ -2079,6 +2079,7 @@ def _record_form(
             recorded_by=agent,
             said_at=said_at,
             keep_taps=by_app,
+            by_app=by_app,
         )
     except formanswer.SubmitRefused as exc:
         # 422 a bad value; 409 the form changed while this was relayed: send it again.
