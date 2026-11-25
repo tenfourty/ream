@@ -45,7 +45,9 @@ speaks MCP rather than the agent API. The design is
   prompts. Text other agents wrote is returned fenced and labelled as content, never
   instructions; Ream's own values (ids, times, fixed words, a page's `url` and `page_url` while
   each is exactly the address Ream makes for its id, its `comments` setting, a comment anchor's
-  `kind`) come back bare. Anything not classified as Ream's own is fenced
+  `kind`) come back bare; so does a form field named after one of Ream's keys (`person`, `by`,
+  `agent`, `author`, `answered_by`, `source`, ...) when its value matches that key's format
+  (a name or id, say), and it is fenced otherwise. Anything not classified as Ream's own is fenced
   (`src/ream/mcp_tools.py`, its docstring).
 
 ## Tools

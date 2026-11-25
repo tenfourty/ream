@@ -529,12 +529,13 @@ the row has kind "form" and `answer_record`: `form`, `version`, `answered_by`,
 `answered_at`, `answers` (one entry per field, blank ones "" or []), `blank`,
 `stale` and `history` (every submit). `answer` stays null for a form, so test
 `answer_record` (or `answered_at`), never `answer`, to know it was answered.
-`answer_record` is the latest submitter's. When several people answer one form the row also
-carries `answers`: a list with one entry for each person (`person`, `answered_at`, `version`,
-`submit_id`, `answers`, `blank`, `stale`, `sources`, `source`, `recorded_by`, `said_at`,
-`seen_at`), oldest `answered_at` first and nothing merged; with one person `answers[0]` matches
-`answer_record`. `[]` before anyone answers; a question has no `answers`. `ack` sets `seen_at`
-on each entry it showed, and a later answer from another person is new again.
+`answer_record` is the latest submitter's. Every form row also carries `answers`: `[]` until
+someone answers, then a list with one entry for each person who answered it (`person`,
+`answered_at`, `version`, `submit_id`, `answers`, `blank`, `stale`, `sources`, `source`,
+`recorded_by`, `said_at`, `seen_at`), oldest `answered_at` first and nothing merged; with one
+person `answers[0]` matches `answer_record`. A question has no `answers`. `sources` there maps
+each answered field to `{source, by, at, version, label}`. `ack` sets `seen_at` on each entry it
+showed, and a later answer from another person is new again.
 Text values go through the secret scanner like comments: a hit refuses the submit
 and names the field. A submit made on an older version of the form is a 409; {{owner_they}}
 reload{{owner_s}} the page. Acknowledge with `ream ack <id>`; close the form

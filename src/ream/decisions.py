@@ -2469,7 +2469,8 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),
             ).fetchone()
-    return _row_to_decision(row)
+    with db.connect() as conn:
+        return _with_held(conn, [_row_to_decision(row)])[0]
 
 
 def acknowledge(
@@ -2504,7 +2505,7 @@ def acknowledge(
     """
     if conn is not None:
         return _acknowledge(conn, agent, decision_id, session=session)
-    with db.connect() as own:
+    with db.connect() as own, own.transaction():
         return _acknowledge(own, agent, decision_id, session=session)
 
 
@@ -2519,13 +2520,14 @@ def _acknowledge(
     ).fetchone()
     if row is None:
         raise store.NotFound()
+    stamp = datetime.now(UTC)
     first = (
         row[12] is None  # acknowledged_at
         and conn.execute(
             # Conditional, so two simultaneous acks write one seen row.
             "update decision set acknowledged_at = %s, acknowledged_by = %s"
             " where id = %s and acknowledged_at is null",
-            (datetime.now(UTC), agent, decision_id),
+            (stamp, agent, decision_id),
         ).rowcount
         > 0
     )
@@ -2533,7 +2535,7 @@ def _acknowledge(
         from ream import formanswer  # late: formanswer reads decisions
 
         if row[_KIND_IDX] == "form":
-            formanswer.mark_seen(conn, decision_id, datetime.now(UTC))
+            formanswer.mark_seen(conn, decision_id, stamp)
         # Seen is a receipt: one journal row, only when this call is what set it.
         # `receipt_set` never wakes a waiter (events.list_for_agent).
         receipts.insert(conn, decision_id, "seen", agent=agent, session=session)
@@ -2641,9 +2643,10 @@ def uncollected(
 
     with db.connect() as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+        decided = _with_held(conn, [_row_to_decision(row) for row in rows])
 
     out = []
-    for row in rows:
+    for row, dec in zip(rows, decided, strict=True):
         answered_at, last_read_at = row[8], row[-1]
         owning_agent, artifact_title = row[-3], row[-2]
         # "Since the answer" is the comparison, not "recently": a seat read an
@@ -2653,7 +2656,7 @@ def uncollected(
         listening = last_read_at is not None and last_read_at > answered_at
         out.append(
             UncollectedRow(
-                decision=_row_to_decision(row),
+                decision=dec,
                 state="stuck" if listening else "no_reader",
                 last_read_at=last_read_at.isoformat() if last_read_at else None,
                 agent=owning_agent,

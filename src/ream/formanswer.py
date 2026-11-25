@@ -277,18 +277,14 @@ def put_person_record(
 
 def mark_seen(conn, decision_id: str, at: datetime) -> None:
     """The agent has acknowledged the form's answers: every person's answer it was shown
-    reads as seen from `at` (first acknowledgement only, as the decision's own)."""
+    reads as seen from `at`. Only an answer given by `at` is marked: one submitted after
+    the acknowledgement stamp was taken was not shown to the agent and stays unseen. A row
+    whose `seen_at` is older than its `answered_at` (an older image changed the answer
+    without clearing it) counts as unseen too."""
     conn.execute(
-        "update form_answer set seen_at = %s where decision_id = %s and seen_at is null",
-        (at, decision_id),
-    )
-
-
-def clear_seen(conn, decision_id: str) -> None:
-    """The form's answers read as new again for every person (a republish that made an
-    answer stale or reopened the form)."""
-    conn.execute(
-        "update form_answer set seen_at = null where decision_id = %s", (decision_id,)
+        "update form_answer set seen_at = %s where decision_id = %s"
+        " and answered_at <= %s and (seen_at is null or seen_at < answered_at)",
+        (at, decision_id, at),
     )
 
 
@@ -333,7 +329,10 @@ def _element(person: str, record: dict, at, seen, decision_row) -> dict:
         "source": source,
         "recorded_by": recorded_by,
         "said_at": said_at,
-        "seen_at": _iso(seen),
+        # A seen stamp older than the answer is stale (an older image wrote the answer).
+        "seen_at": _iso(
+            None if seen is not None and at is not None and seen < at else seen
+        ),
     }
 
 

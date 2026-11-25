@@ -732,7 +732,9 @@ def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> Non
         + conn.for_update(" of decision"),
         (decision_id,),
     ).fetchone()
-    # Each person's own record (`form_answer`) is brought onto the new version the same way.
+    # Each person's own record (`form_answer`) is brought onto the new version the same way;
+    # one that went stale or reopened reads as unseen again, the others keep their seen.
+    any_news = False
     for person, mine in conn.execute(
         "select person, answer_record from form_answer where decision_id = %s",
         (decision_id,),
@@ -746,32 +748,38 @@ def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> Non
             version_n,
             form.complete_all,
         )
+        mine_news = carried["stale"] != (mine.get("stale") or []) or (
+            carried["reopened"] and not mine.get("reopened")
+        )
+        any_news = any_news or mine_news
+        reset = ", seen_at = null" if mine_news else ""
         conn.execute(
-            "update form_answer set answer_record = %s"
-            " where decision_id = %s and person = %s",
+            "update form_answer set answer_record = %s"  # noqa: S608 -- `reset` is one of two fixed texts
+            f"{reset} where decision_id = %s and person = %s",
             (jsonb(carried), decision_id, person),
         )
     record = row[0] if row else None
-    if not record or record.get("version") == version_n:
-        return
-    old = _fields(conn, decision_id, record.get("version") or 0)
-    grown = formrecord.reconcile(record, old, form.fields, version_n, form.complete_all)
-    news = grown["stale"] != (record.get("stale") or []) or (
-        grown["reopened"] and not record.get("reopened")
-    )
-    conn.execute(
-        "update decision set answer_record = %s where id = %s",
-        (jsonb(grown), decision_id),
-    )
+    news = any_news
+    if record and record.get("version") != version_n:
+        old = _fields(conn, decision_id, record.get("version") or 0)
+        grown = formrecord.reconcile(
+            record, old, form.fields, version_n, form.complete_all
+        )
+        news = (
+            news
+            or grown["stale"] != (record.get("stale") or [])
+            or (grown["reopened"] and not record.get("reopened"))
+        )
+        conn.execute(
+            "update decision set answer_record = %s where id = %s",
+            (jsonb(grown), decision_id),
+        )
     if news:
         conn.execute(
             "update decision set acknowledged_at = null, acknowledged_by = null"
             " where id = %s",
             (decision_id,),
         )
-        from ream import formanswer  # late: formanswer reads forms
-
-        formanswer.clear_seen(conn, decision_id)
         # Reads as new again, so what was said about the old answer is history.
         from ream import receipts  # late: receipts reads store, which reads forms
 

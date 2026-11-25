@@ -502,9 +502,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 23 Nov 2026 for the marked changes view over MCP (the changes paragraph says `read_page` takes `changes_to` and `changes_format marked`); skill.md and agent.json did not move. Re-taken again for the MCP organise_folder tool (its name in the MCP tool list). Re-taken again for the MCP organise_folder tool (its name in the MCP tool list).
 # agents.txt re-taken again on 23 Nov 2026 for the MCP transfer_page tool (its name in the MCP tool list); skill.md and agent.json did not move.
 # agents.txt re-taken on 24 Nov 2026: comment_image named in the MCP tool list; skill.md and agent.json did not move.
-# agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog); skill.md and agent.json did not move.
+# agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog; reworded after review so every form row carries it, `sources` elements described); skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "9e23a7f841f639a21f107bbf646c3bb25dbdcafc7b11b8b68caf664b6a0d310f",
+    "agents.txt": "f44f2cc563b1e8e23fa366226c25f83d3a73da82709bcae73a11d17da773839a",
     "skill.md": "46e99b142ada0f82581fc4f4a69b5a7f0ad3dce66fc515339e755a26e065e4ef",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
@@ -550,7 +550,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
-    "artifacts-decide": "b73e3fd38fa7e84ad8d92d3e3b3e9c5dfd630a3532ef5dd6f50a33522bbcb274",
+    "artifacts-decide": "46400af192a20cbd8f26fbfd6830b398fa0a8b986563cd6de11ef91ebcad19ac",
 }
 
 

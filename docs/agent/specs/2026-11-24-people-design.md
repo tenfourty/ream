@@ -213,7 +213,8 @@ bump: the field is additive.
 
 - Element, one for each person with a record: `person`, `answered_at`, `version`, `submit_id`, `answers`
   (`{field: value}`), `blank`, `stale` (the names of fields answered on an older version), `sources`
-  (`{field: {source, by}}`), `source` (`page`, or the relay's source), `recorded_by` (the key that recorded
+  (`{field: {source, by, at, version, label}}`: who gave it, when, on which form version, and the
+  wording it answered), `source` (`page`, or the relay's source), `recorded_by` (the key that recorded
   a relay; null for a tap), `said_at` (when a relayed answer was said), `seen_at`. No per-person history.
 - Order: oldest `answered_at` first, the person breaking a tie. Nothing is merged across people; every
   top-level field keeps meaning the latest submitter's, and with one person `answers[0]` matches it.
@@ -225,12 +226,19 @@ bump: the field is additive.
 - Seen per person: `form_answer.seen_at` (SQLite step 39; `schema.sql` for Postgres; an older image ignores
   it). Acknowledging the form (`decisions._acknowledge`), or closing it, sets it on every row that has none.
   A submit or applied relay clears it for that person only (`formanswer.put_person_record`), and a republish
-  that made an answer stale or reopened the form clears it for everyone (`forms._reconcile_record`), beside
-  the decision's own `acknowledged_at`, which every new answer already clears, so a wait wakes for another
+  that made a person's own answer stale or reopened the form clears it for that person only (`forms._reconcile_record`, row by row; others stay seen), beside
+  the decision's own `acknowledged_at` (cleared when any person's row, or the decision's record, has news; every new answer already clears it), so a wait wakes for another
   person's answer. The waiter's own "shown once an hour" mark is `id@answered_at`, which a new answer moves.
 - `artifacts-decide` text prints one block for each person only when there are several (the
   acknowledgement hint once, at the end); with one person it is as before.
-- MCP: the fences name `person`, `by` and `submit_id`, `source` as Ream's own fields, each by its format;
+- Acknowledging marks only rows answered by the acknowledge stamp (an answer submitted after it stays
+  unseen), and a `seen_at` older than `answered_at` (an older image changed the answer) reads as unseen
+  in `_element` and is re-marked by the next acknowledge. `close` and `uncollected` also carry `answers`.
+- Known, left as they are: `answers_list` costs a few queries per form row on list routes; a republish
+  cannot change `addressed_to` (checked: nothing in `forms.py` or `store.py` writes it after the ask), so
+  no row of a person the form is no longer addressed to can become visible that way.
+- MCP: a form field named after a Ream key (`person`, `by`, `agent`, `author`, `answered_by`, `source`, ...)
+  passes bare when its value matches that key's format, and is fenced otherwise. The fences name `person`, `by` and `submit_id`, `source` as Ream's own fields, each by its format;
   the answers' values, `blank` and `stale` stay fenced as free text. Only tools that return a form decision
   row carry `answers` (the MCP `questions` tool lists plain questions).
 - Tests: `tests/test_form_answers_list.py`.

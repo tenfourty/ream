@@ -240,6 +240,8 @@ def _fmt_form(row: dict) -> list[str]:
         for p in people:
             rec = {**p, "form": name, "answered_by": p.get("person")}
             lines.extend(_form_block(rec, row, p.get("source"), p.get("recorded_by")))
+        if (row.get("answer_record") or {}).get("reopened"):
+            lines.append("  REOPENED: a required field has no current answer")
         if not row.get("acknowledged_at"):
             lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
         return lines
@@ -1784,9 +1786,10 @@ def build_parser() -> argparse.ArgumentParser:
             "A form published in a page (data-artifact-form) is answered in the gallery: "
             "`list`, `answers` and `wait` print its submitted record, one `name: value` "
             "line per field with blank and stale fields named. Read it by "
-            "answer_record, never by `answer`, which stays empty for a form. When several "
-            "people answered it, the row (and `--json`) also carries `answers`, one entry "
-            "for each person, and these commands print a block for each. A republish "
+            "answer_record, never by `answer`, which stays empty for a form. A form row also "
+            "carries `answers` (and `--json` shows it): `[]` until someone answers, then one "
+            "entry for each person who answered it; with several people these commands print "
+            "a block for each. A republish "
             "that changes a field's wording or options moves {{owner_their}} old answer to the "
             "record's `stale` list; relay a form answer given elsewhere with "
             "`record ID --field NAME=VALUE ... --note`."

@@ -297,3 +297,106 @@ def test_the_new_column_is_there_on_both_databases(db: Database):
     with db.connect() as conn:
         conn.execute("select seen_at from form_answer limit 1").fetchall()
     assert settings.owner_id()
+
+
+def _republish(client, made, body):
+    rev = client.get(
+        f"/api/v1/pages/{made['page']['id']}", headers=auth(made["token"])
+    ).json()["revision"]
+    got = client.patch(
+        f"/api/v1/pages/{made['page']['id']}",
+        json={"body": body, "expected_revision": rev},
+        headers=auth(made["token"]),
+    )
+    assert got.status_code == 200, got.text
+
+
+def _ack(client, made):
+    assert (
+        client.post(
+            f"/api/v1/decisions/{made['id']}/acknowledge", headers=auth(made["token"])
+        ).status_code
+        == 200
+    )
+
+
+def _seen(db, made):
+    return {e["person"]: e["seen_at"] for e in answers_of(db, made)}
+
+
+def test_a_republish_unsees_only_the_person_whose_answer_went_stale(client, db, made):
+    # ann answered `why`; bob, the latest submitter, left it blank
+    formanswer.submit(
+        db, made["id"], version=1, values={"region": "a", "why": "x"}, by="ann"
+    )
+    formanswer.submit(db, made["id"], version=1, values={"region": "b"}, by="bob")
+    _ack(client, made)
+    assert all(_seen(db, made).values())
+    _republish(client, made, page(FORM.replace("Why <input", "Reason <input")))
+    seen = _seen(db, made)
+    assert seen["ann"] is None and seen["bob"]
+    assert decisions.get_owned(db, "ops", made["id"]).acknowledged_at is None
+
+
+def test_a_republish_unsees_the_latest_submitter_alone_when_only_theirs_went_stale(
+    client, db, made
+):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    formanswer.submit(
+        db, made["id"], version=1, values={"region": "b", "why": "y"}, by="bob"
+    )
+    _ack(client, made)
+    _republish(client, made, page(FORM.replace("Why <input", "Reason <input")))
+    seen = _seen(db, made)
+    assert seen["bob"] is None and seen["ann"]
+    assert decisions.get_owned(db, "ops", made["id"]).acknowledged_at is None
+
+
+def test_a_republish_that_changes_nobodys_answer_keeps_everyone_seen(client, db, made):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    formanswer.submit(db, made["id"], version=1, values={"region": "b"}, by="bob")
+    _ack(client, made)
+    _republish(client, made, page(FORM.replace("Notes", "Remarks")))
+    assert all(_seen(db, made).values())
+    assert decisions.get_owned(db, "ops", made["id"]).acknowledged_at is not None
+
+
+def test_an_answer_given_after_the_acknowledge_stamp_stays_unseen(db, made):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    stamp = datetime.now(UTC)
+    formanswer.submit(db, made["id"], version=1, values={"region": "b"}, by="bob")
+    with db.connect() as conn:
+        formanswer.mark_seen(conn, made["id"], stamp)
+    seen = _seen(db, made)
+    assert seen["ann"] and seen["bob"] is None
+
+
+def test_a_seen_stamp_older_than_the_answer_reads_unseen_and_is_marked_again(
+    client, db, made
+):
+    # an older image changes `answered_at` and leaves `seen_at` alone
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    _ack(client, made)
+    assert _seen(db, made)["ann"]
+    later = datetime.now(UTC) + timedelta(hours=1)
+    with db.connect() as conn:
+        conn.execute(
+            "update form_answer set answered_at = %s where decision_id = %s",
+            (later, made["id"]),
+        )
+    assert _seen(db, made)["ann"] is None
+    with db.connect() as conn:
+        formanswer.mark_seen(conn, made["id"], later + timedelta(hours=1))
+    assert _seen(db, made)["ann"]
+
+
+def test_close_and_uncollected_carry_answers(client, db, made):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    (row,) = decisions.uncollected(db, agent="ops", stuck_after_seconds=-1)
+    assert [e["person"] for e in row.decision.answers] == ["ann"]
+    closed = client.post(
+        f"/api/v1/decisions/{made['id']}/close", headers=auth(made["token"])
+    )
+    assert closed.status_code == 200
+    assert [e["person"] for e in closed.json()["answers"]] == ["ann"]
+    assert decisions.public(decisions.close(db, "ops", made["id"]))["answers"]
