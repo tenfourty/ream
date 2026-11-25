@@ -241,6 +241,56 @@ def test_a_settled_list_counts_and_hints_only_for_what_the_reader_may_answer(
     assert "1 question you have already settled" in ann_wall.get(f"/a/{page.id}").text
 
 
+def test_read_only_cards_sit_under_their_own_heading_not_waiting_on_you(
+    db, question, owner_wall, ann_wall
+):
+    page, row = question
+    _address(db, row.id, "ann")
+    seen = owner_wall.get(f"/a/{page.id}").text
+    assert "Waiting on others" in seen and 'id="other-asks"' in seen
+    # nothing waits on the owner, so no "Waiting on you" section at all
+    assert 'id="open-asks"' not in seen
+    assert 'id="other-asks"' not in ann_wall.get(f"/a/{page.id}").text
+    assert 'id="open-asks"' in ann_wall.get(f"/a/{page.id}").text
+
+
+def test_a_settled_item_says_whose_answer_it_is_and_its_thread_is_not_yours(
+    db, question, owner_wall, ann_wall
+):
+    page, row = question
+    _address(db, row.id, "ann")
+    ann_wall.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a", "note": "go"},
+        headers=SAME,
+        follow_redirects=False,
+    )
+    reader, _ = keys.mint(db, agent="reader")
+    assert (
+        owner_wall.post(
+            f"/api/v1/decisions/{row.id}/replies",
+            json={"body": "what cost?"},
+            headers={"Authorization": f"Bearer {reader}"},
+        ).status_code
+        == 201
+    )
+    seen = owner_wall.get(f"/a/{page.id}").text
+    assert "answered by ann" in seen
+    assert "Replies under the note" in seen and "Replies under your note" not in seen
+    mine = ann_wall.get(f"/a/{page.id}").text
+    assert "answered by" not in mine and "Replies under your note" in mine
+
+
+def test_the_read_only_card_is_styled_as_not_actionable():
+    from ream import gallery
+
+    css = gallery._CSS if hasattr(gallery, "_CSS") else ""
+    assert ".ask.readonly{" in css
+    assert ".ask.readonly button,.ask.readonly form{display:none}" in css
+    block = css[css.index(".ask.readonly{") :].split("}", 1)[0]
+    assert "var(--muted)" in block and "#" not in block
+
+
 def test_partner_items_are_the_owners_alone(db, owner_wall, ann_wall, monkeypatch):
     from ream import gallery, readside
 

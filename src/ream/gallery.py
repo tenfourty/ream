@@ -299,6 +299,12 @@ main{display:block}
   padding-left:var(--space-7);margin:var(--space-2) 0 var(--space-6)}
 .ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
 .ask.held .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
+.ask.readonly{border-left-color:var(--line);box-shadow:none;background:transparent;
+  color:var(--muted);cursor:default}
+.ask.readonly .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
+.ask.readonly button,.ask.readonly form{display:none}
+.byother{font:.68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin-left:var(--space-5)}
 .ask .qroute{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qasker,.settled-body .qasker{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qroute.waiting_now{color:var(--ok)}
@@ -1409,6 +1415,7 @@ var contentOrigin;
 try{contentOrigin=new URL(iframe.src).origin}catch(e){return}
 var decisionEls=new Map();var lastSent="";
 var asksSection=document.getElementById("open-asks");
+var othersSection=document.getElementById("other-asks");
 document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
@@ -1498,10 +1505,12 @@ window.addEventListener("message",function(event){
       // A heading with nothing under it reads as a fault. When every open
       // question has been lifted into the page, the section they came from is
       // an empty "Waiting on you" and its hint, stranded above the frame.
-      if(asksSection){
-        asksSection.style.display =
-          asksSection.querySelector("[data-decision-id]") ? "" : "none";
-      }
+      [asksSection,othersSection].forEach(function(sec){
+        if(sec){
+          sec.style.display =
+            sec.querySelector("[data-decision-id]") ? "" : "none";
+        }
+      });
     }
   }catch(e){}
 });
@@ -4967,7 +4976,9 @@ def _render_decisions(
     now = datetime.now(UTC)
     on_page = {r.id for r in open_rows}
 
-    def _note_thread(row: decisions.DecisionRow) -> tuple[str, bool]:
+    def _note_thread(
+        row: decisions.DecisionRow, theirs: bool = False
+    ) -> tuple[str, bool]:
         """The short thread under his note, and whether it holds a message from
         an agent newer than his previous visit. Empty until someone has replied:
         the form that continues a thread needs a thread to continue."""
@@ -4985,14 +4996,15 @@ def _render_decisions(
         earlier = (
             answered is not None and (_moment(first.created_at) or answered) < answered
         )
-        head = ("About an earlier answer" if earlier else "Replies under your note") + (
+        under = "the note" if theirs else "your note"
+        head = ("About an earlier answer" if earlier else f"Replies under {under}") + (
             '<span class="ntag">new reply</span>' if fresh else ""
         )
         root = first.thread_root or first.id
         form = (
             f'<form class="nreply" method="post" action="/c/{escape(row.artifact_id)}">'
             f'<input type="hidden" name="thread_root" value="{escape(root)}">'
-            '<input name="body" placeholder="Reply" aria-label="Reply under your note">'
+            f'<input name="body" placeholder="Reply" aria-label="Reply under {under}">'
             '<button type="submit">Send</button></form>'
         )
         html = (
@@ -5255,14 +5267,16 @@ def _render_decisions(
             f"<h2>Open questions ({len(answerable)})</h2><ul>{items}</ul></nav>"
         )
 
-    if open_rows:
+    mine_open = [r for r in open_rows if _mine(r)]
+    others_open = [r for r in open_rows if not _mine(r)]
+    if mine_open:
         # A review's first verdict is final, so the "pick a different one" hint
         # belongs only to ordinary questions; a review card carries its own.
         hint = (
             ""
             if all(
-                getattr(r, "kind", "question") == "review" or r.held_by or not _mine(r)
-                for r in open_rows
+                getattr(r, "kind", "question") == "review" or r.held_by
+                for r in mine_open
             )
             else (
                 '<p class="hint">Pick a letter and it is saved straight away; add a note '
@@ -5272,8 +5286,16 @@ def _render_decisions(
         )
         above.append(
             '<section class="asks" id="open-asks"><h2>Waiting on you</h2>'
-            + "".join(_card(row) for row in open_rows)
+            + "".join(_card(row) for row in mine_open)
             + hint
+            + "</section>"
+        )
+    if others_open:
+        # Read-only cards are not waiting on this reader, so they do not sit under that
+        # heading: their own section says whose they are.
+        above.append(
+            '<section class="asks others" id="other-asks"><h2>Waiting on others</h2>'
+            + "".join(_card(row) for row in others_open)
             + "</section>"
         )
 
@@ -5373,7 +5395,13 @@ def _render_decisions(
                     f'<span class="relayed" title="Recorded by {who} from '
                     f'{where}; not tapped on this page">via {where}</span>'
                 )
-            thread_html, fresh = _note_thread(row)
+            theirs = person is not None and row.answered_by not in (None, person)
+            if theirs:
+                relayed += (
+                    '<span class="byother">answered by '
+                    f"{escape(row.answered_by)}</span>"
+                )
+            thread_html, fresh = _note_thread(row, theirs)
             any_fresh = any_fresh or fresh
             entries.append(
                 f'<details class="settled"'
@@ -6845,12 +6873,12 @@ def gallery_router(db: Database) -> APIRouter:
         text = f"{pages} {'page goes' if pages == 1 else 'pages go'} to Archived. "
         if asked:
             text += (
-                f"{asked} {'question' if asked == 1 else 'questions'} waiting on you will "
+                f"{asked} {'question' if asked == 1 else 'questions'} waiting for an answer will "
                 "be set aside, and the agents that asked are told; they come back when "
                 "you unarchive."
             )
         else:
-            text += "No questions are waiting on you. Unarchive brings the pages back."
+            text += "No questions are waiting for an answer. Unarchive brings the pages back."
         body = (
             _CONNECT_CSS + '<div class="cx"><section class="archive-sheet">'
             f"<h2>Archive &lsquo;{escape(title)}&rsquo;?</h2><p>{escape(text)}</p>"

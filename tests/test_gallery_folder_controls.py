@@ -190,7 +190,8 @@ def test_the_archive_sheet_counts_come_from_the_preview_and_change_nothing(clien
     html = client.get(f"/f/{fid}/archive").text
     assert "Archive &lsquo;Roadmap&rsquo;?" in html
     assert "2 pages go to Archived." in html
-    assert "3 questions waiting on you will be set aside" in html
+    assert "3 questions waiting for an answer will be set aside" in html
+    assert "waiting on you" not in html  # the count is every question, not the reader's
     assert "the agents that asked are told; they come back when you unarchive." in html
     assert 'name="confirm" value="1"' in html and ">Archive</button>" in html
     assert f'href="/f/{fid}">Cancel' in html
@@ -238,7 +239,7 @@ def test_archiving_his_mixed_folder_archives_every_agents_page(client, db):
     ask(db, "beta", b)
     html = client.get(f"/f/{fid}/archive").text
     assert "2 pages go to Archived." in html
-    assert "1 question waiting on you will be set aside" in html
+    assert "1 question waiting for an answer will be set aside" in html
     post(client, f"/f/{fid}/archive", archived="1", confirm="1")
     assert count(db, "select count(*) from artifact where archived_at is not null") == 2
     assert "decision_set_aside" in kinds(db, "beta")

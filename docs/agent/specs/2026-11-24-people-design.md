@@ -190,15 +190,17 @@ unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `acro
   folder tiles' count use `me.person`. `_render_decisions` draws an open question the
   reader may not answer as a read-only card (the question, whom it is for, no form, hold or live
   switch; the slot and "held on another page" text stay true) and no change-your-answer card or hint
-  on a settled one; the settled heading counts only what the reader may answer, adding "N settled for
+  on a settled one; read-only cards sit under their own "Waiting on others" heading, so "Waiting on you"
+  appears only when something waits on the reader; a settled item another person answered says
+  "answered by <id>" and its note thread reads "Replies under the note"; the settled heading counts only what the reader may answer, adding "N settled for
   someone else". `forms_ui.payload` draws no submit bar for a form addressed to someone else.
 - **A signed-in app relays only for the owner** (only the owner signs in): `record_elsewhere` and
   `formanswer.relay` with `by_app` refuse a question addressed to anyone else as `store.NotFound`,
   the answer for a decision out of reach. A key's relay keeps the rule above.
 - **Partner (Slack) items are the owner's**: `/pq/.../answer` is owner-only, so the inbox lists and
   counts them, and shows their status block, only to the owner. Tests: `tests/test_people_addressed.py`.
-- Known item for when a second person can sign in: the owner-only archive sheet's "N questions
-  waiting on you" (`gallery.py`, `folder_archive_sheet`) counts every question the folder holds.
+- Archive sheet: it says "N questions waiting for an answer", not "waiting on you", because the count is
+  every question the folder holds (`gallery.py`, `folder_archive_sheet`).
 - Not changed, on purpose: the owner-only archive-folder sheet and the agent API's folder preview count
   every question (`store.set_folder_archived`), and the deleted tab's count of questions set aside
   (`store.list_deleted`); neither is a count of what a person may answer.
