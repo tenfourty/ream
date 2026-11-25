@@ -14,7 +14,7 @@ from test_mcp_reach import _as_key, _tool
 
 from ream import decide, decisions, formanswer, keys, mcp, mcp_tools, settings, store
 from ream.app import create_gallery_app
-from ream.db import Database
+from ream.db import Database, jsonb
 
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 ELEMENT = {
@@ -291,6 +291,60 @@ def test_text_with_one_person_is_the_record_as_before():
     }
     base = decide._fmt(row)
     assert decide._fmt({**row, "answers": [{"person": "jeremy"}]}) == base
+
+
+def test_a_reopened_form_with_several_people_prints_reopened_once():
+    rec = {
+        "form": "f",
+        "version": 1,
+        "answered_by": "ann",
+        "answered_at": "t",
+        "answers": {"a": "1"},
+        "blank": [],
+        "reopened": True,
+    }
+    row = {
+        "id": "x",
+        "question": "q",
+        "kind": "form",
+        "answered_at": "t",
+        "answer_record": rec,
+        "answer_source": "page",
+        "answers": [
+            {"person": "ann", "answers": {"a": "1"}, "blank": []},
+            {"person": "bob", "answers": {"a": "2"}, "blank": []},
+        ],
+    }
+    assert decide._fmt(row).count("REOPENED") == 1
+
+
+def test_a_newer_decision_record_is_seen_against_its_own_time(db, made):
+    # an older image wrote only the decision's record, after the row's `seen_at`
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"}, by="ann")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    new = old + timedelta(hours=1)
+    with db.connect() as conn:
+        conn.execute(
+            "update form_answer set answered_at = %s, seen_at = %s"
+            " where decision_id = %s",
+            (old, old + timedelta(minutes=1), made["id"]),
+        )
+        (rec,) = conn.execute(
+            "select answer_record from decision where id = %s", (made["id"],)
+        ).fetchone()
+        rec = {
+            **rec,
+            "answered_by": "ann",
+            "submit_id": "from-an-older-image",
+            "answered_at": new.isoformat(),
+        }
+        conn.execute(
+            "update decision set answer_record = %s where id = %s",
+            (jsonb(rec), made["id"]),
+        )
+    (only,) = answers_of(db, made)
+    assert only["submit_id"] == "from-an-older-image"
+    assert only["seen_at"] is None
 
 
 def test_the_new_column_is_there_on_both_databases(db: Database):

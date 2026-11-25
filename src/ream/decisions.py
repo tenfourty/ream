@@ -2512,10 +2512,13 @@ def acknowledge(
 def _acknowledge(
     conn, agent: str, decision_id: str, *, session: str | None = None
 ) -> DecisionRow:
+    # The row is locked BEFORE the stamp is taken: a submit that commits in between
+    # would clear `acknowledged_at` and stamp a later `answered_at`, and an ack stamped
+    # earlier than that answer must not read as having seen it.
     row = conn.execute(
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        f" where decision.id = %s and {_ASKER} = %s",
+        f" where decision.id = %s and {_ASKER} = %s" + conn.for_update(" of decision"),
         (decision_id, agent),
     ).fetchone()
     if row is None:
@@ -2524,10 +2527,12 @@ def _acknowledge(
     first = (
         row[12] is None  # acknowledged_at
         and conn.execute(
-            # Conditional, so two simultaneous acks write one seen row.
+            # Conditional, so two simultaneous acks write one seen row; an answer
+            # newer than the stamp was not shown to this ack, so it is not acknowledged.
             "update decision set acknowledged_at = %s, acknowledged_by = %s"
-            " where id = %s and acknowledged_at is null",
-            (stamp, agent, decision_id),
+            " where id = %s and acknowledged_at is null"
+            " and (answered_at is null or answered_at <= %s)",
+            (stamp, agent, decision_id, stamp),
         ).rowcount
         > 0
     )

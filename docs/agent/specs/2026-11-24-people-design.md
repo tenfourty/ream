@@ -224,7 +224,7 @@ bump: the field is additive.
   relay entry or a tap); a record an older image wrote has none, and the decision's own columns stand in.
 - A relay that changes nothing leaves that person's `answered_at` (and `seen_at`) as they were.
 - Seen per person: `form_answer.seen_at` (SQLite step 39; `schema.sql` for Postgres; an older image ignores
-  it). Acknowledging the form (`decisions._acknowledge`), or closing it, sets it on every row that has none.
+  it). Acknowledging the form (`decisions._acknowledge`), or closing it, marks the rows it was shown (answered by the stamp; see the last bullet).
   A submit or applied relay clears it for that person only (`formanswer.put_person_record`), and a republish
   that made a person's own answer stale or reopened the form clears it for that person only (`forms._reconcile_record`, row by row; others stay seen), beside
   the decision's own `acknowledged_at` (cleared when any person's row, or the decision's record, has news; every new answer already clears it), so a wait wakes for another

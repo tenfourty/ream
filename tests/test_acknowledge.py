@@ -9,6 +9,8 @@ that waits for completion fires on decisions that are being handled correctly,
 gets muted, and then misses the one that was genuinely lost.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -121,3 +123,24 @@ def test_the_route_needs_a_key_and_belongs_to_the_caller(client, db):
     assert ok.status_code == 200
     assert ok.json()["acknowledged_by"] == "ops-seat"
     assert ok.json()["closed_at"] is None
+
+
+def test_an_answer_newer_than_the_ack_stamp_is_not_acknowledged(db):
+    """A submit that commits between taking the stamp and the update would leave the
+    decision reading acknowledged while its new answer is unseen: the update refuses an
+    answer later than the stamp, and no receipt is written."""
+    d = _decision(db)
+    later = datetime.now(UTC) + timedelta(hours=1)
+    with db.connect() as conn:
+        conn.execute(
+            "update decision set answered_at = %s where id = %s", (later, d.id)
+        )
+
+    got = decisions.acknowledge(db, "ops-seat", d.id)
+
+    assert got.acknowledged_at is None and got.acknowledged_by is None
+    with db.connect() as conn:
+        (seen,) = conn.execute(
+            "select count(*) from receipt where subject_id = %s", (d.id,)
+        ).fetchone()
+    assert seen == 0

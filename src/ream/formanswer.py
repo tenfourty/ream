@@ -292,6 +292,17 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _when(value) -> datetime | None:
+    """A record's stored `answered_at` (an ISO string) as a time, or None when unreadable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        got = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return got if got.tzinfo is not None else got.replace(tzinfo=UTC)
+
+
 def _stale_names(record: dict) -> list[str]:
     return [
         s["name"]
@@ -381,10 +392,15 @@ def answers_list(conn, decision_id: str) -> list[dict]:
         record = newest_record(person, row_record, held)
         if not record:
             continue
+        used_held = record is not row_record
         if latest is not None:
             record = on_latest(
                 conn, decision_id, record, latest, fields, complete, strict=False
             )
+        if used_held:
+            # The decision's own (newer) record is the one read: its time is the one
+            # `seen_at` must reach, not the older row's.
+            at = _when(record.get("answered_at")) or at
         out.append(_element(person, record, at, seen, dec[1:]))
     out.sort(key=lambda e: (e["answered_at"] or "", e["person"]))
     return out
