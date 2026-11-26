@@ -26,7 +26,7 @@ speaks MCP rather than the agent API. The design is
   needed, never printed or logged); optional `REAM_OIDC_SCOPES` (default `openid profile email
   groups`, must include `openid`), `REAM_OIDC_OWNER_CLAIM` (default `preferred_username`) and
   `REAM_OIDC_OWNER_VALUE` (default the owner id; with `email`, `email_verified` must be true) say who the one reader is, and
-  `REAM_OIDC_OWNER_SUBJECT` pins the provider `sub` (unset: the first owner sign-in pins issuer+sub and a different sub is refused later), and `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
+  `REAM_OIDC_OWNER_SUBJECT` pins the provider `sub` (unset: the first owner sign-in pins issuer+sub and a different sub is refused later; set with the issuer, it also fills or rewrites person #1's issuer and `sub` at every start, logs a WARNING naming no value when that changed a different stored pair, and refuses to start, `IdentityHeld`, if another person holds that pair), and `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
   issuer or an unreadable or empty secret file refuses to start, naming the setting. The sign-in
   pages are built: `/oauth/authorize` (consent, three boxes), `/oauth/token` (authorization_code
   and refresh_token, strict rotation) and `/oauth/revoke` (RFC 7009). An app is idle-lapsed after

@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) built; slice 4 designed, not built. Written up from the
+Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) built; slice 4 (gallery sign-in) built, off by default. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -242,6 +242,31 @@ bump: the field is additive.
   the answers' values, `blank` and `stale` stay fenced as free text. Only tools that return a form decision
   row carry `answers` (the MCP `questions` tool lists plain questions).
 - Tests: `tests/test_form_answers_list.py`.
+
+## Slice 4 as built
+
+Gallery sign-in, off by default: `REAM_GALLERY_SIGN_IN`, `REAM_SIGN_IN_WHO`, `src/ream/signin.py` (the
+gate, the `/signin`, `/signin/callback` and `/signout` routes, the session and in-flight tables,
+`signin.sweep` in `maintenance.nightly`), `people.current` answering the person the gate found, and
+`oidc.person_login`. Runbook: `docs/agent/runbooks/gallery-sign-in.md`. Tests:
+`tests/test_gallery_sign_in.py`, `tests/test_gallery_sign_in_off.py`,
+`tests/test_gate_covers_every_route.py`, `tests/test_browser_session_cookie.py` (the guard that the
+session cookie never reaches the content domain, in a real browser).
+
+Where it differs from the design above:
+
+- `/signout` answers 200 with a link to sign in again, not a redirect: the gallery's CSP
+  (`form-action 'self'`) blocks a redirect out of a form post, and a redirect to sign in would leave
+  for the provider.
+- `/signin` and `/signin/callback` pass a rate limiter (`ratelimit.FailedAuthLimiter`) that counts
+  every call from an address and answers 429 once an address has earned it.
+- The gate keeps a response's own `private` `Cache-Control` (the icon, a thumbnail keep their longer
+  policy) and otherwise stamps `private, no-store`; every gated response also varies on `Cookie`.
+- `keys.agent_for` skips a name a person holds (and `rename` and `mcp_apps` refuse a person's id as an
+  agent or app name), so an agent can never act as a person.
+- "Not yours answers identically to no such page" is tested only on the owner-only routes until
+  `people.OPEN_SIGN_IN` is flipped: with one person who may sign in there is no second reader to
+  test it against.
 
 ## Not yet checked
 
