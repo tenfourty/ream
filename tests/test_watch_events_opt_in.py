@@ -1,8 +1,9 @@
 """The watching kinds appear on no feed that did not ask, and wake no waiter that did not ask
 (agents design, slice 3, "Guards"; decision A). `GET /events`, `events.list_for_agent`,
-`events.wait_for_agent`, MCP `wait_for_answer` and every caller without the flag answer exactly
-as they did before the kinds existed; `include=watched` (alone, or in a comma list with
-`receipts`) and MCP `whats_new` add them. Both databases."""
+`events.wait_for_agent` and every caller without the flag answer exactly as they did before the
+kinds existed; `include=watched` (alone, or in a comma list with `receipts`) and MCP `whats_new`
+add them. MCP `wait_for_answer` is never woken by them, but returns them once something else
+wakes it (so the cursor it shares with `whats_new` never skips one). Both databases."""
 
 from __future__ import annotations
 
@@ -232,7 +233,7 @@ def test_whats_new_includes_the_watching_kinds_labelled_by_kind(
     assert all(e["artifact_id"] == mcp_world for e in out["events"])
 
 
-def test_wait_for_answer_does_not_include_or_wake_on_them(client, token, mcp_world):
+def test_wait_for_answer_is_not_woken_by_them(client, token, mcp_world):
     error, out = call_tool(client, token, "wait_for_answer", seconds=1)
     assert not error
     assert out["events"] == [] and out["timed_out"] is True
