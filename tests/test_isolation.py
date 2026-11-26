@@ -38,9 +38,20 @@ def _row_counts(db) -> dict[str, int]:
         }
 
 
-def _assert_clean(db) -> None:
+def _filled(db) -> dict[str, int]:
+    """The tables holding rows, bar the one record the `db` fixture seeds on purpose: the owner
+    of a started service (`owner.check`), which `agents.owner_sql` reads. Leftover data from
+    another test would still show, and so would a changed or second seed row."""
     counts = _row_counts(db)
-    assert {t: n for t, n in counts.items() if n} == {}
+    with db.connect() as conn:
+        meta = conn.execute("select key, value from service_meta").fetchall()
+    assert [tuple(r) for r in meta] == [("owner_id", "jeremy")]
+    counts["service_meta"] -= 1
+    return {t: n for t, n in counts.items() if n}
+
+
+def _assert_clean(db) -> None:
+    assert _filled(db) == {}
     with db.connect() as conn:
         sequences = conn.execute(
             "select sequencename, last_value from pg_sequences"
@@ -100,7 +111,7 @@ def _write_every_family(db) -> None:
 
 @pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_every_table_is_empty_at_the_start(db):
-    assert set(_row_counts(db).values()) == {0}
+    assert _filled(db) == {}
 
 
 @pytest.mark.postgres_only  # reads Postgres's catalogue
