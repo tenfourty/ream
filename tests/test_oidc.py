@@ -848,3 +848,96 @@ def test_start_up_refuses_backslash_whitespace_and_empty_port(tmp_path, bad):
         found = [p for p in current.problems() if "BACKCHANNEL" in p]
     assert len(found) == 1 and "must be scheme://host" in found[0], found
     assert bad not in found[0]
+
+
+# --- exchange and person_login (people design, slice 4) --------------------------------------
+
+
+def _exchange(provider, claims_for=None, nonce_sent=None):
+    start = oidc.begin(CALLBACK)
+    provider.id_token_override = provider.sign(
+        provider.good(start.nonce, **(claims_for or {}))
+    )
+    return oidc.exchange("c", start.verifier, nonce_sent or start.nonce, CALLBACK)
+
+
+def _person_pair(db, who):
+    with db.connect() as conn:
+        return tuple(
+            conn.execute(
+                "select issuer, subject from person where id = %s", (who,)
+            ).fetchone()
+        )
+
+
+def test_exchange_returns_the_checked_claims_and_asks_nobody_who_they_are(provider):
+    claims = _exchange(provider, {"sub": "u-9", "preferred_username": "mallory"})
+    assert claims["sub"] == "u-9" and claims["preferred_username"] == "mallory"
+    assert claims["iss"] == ISSUER
+
+
+def test_exchange_checks_the_token_as_finish_does(provider):
+    with pytest.raises(oidc.SignInRefused, match="different sign-in"):
+        _exchange(provider, nonce_sent="not-the-nonce")
+
+
+def test_finish_is_owner_login_of_exchange(provider, db):
+    start = oidc.begin(CALLBACK)
+    provider.id_token_override = provider.sign(provider.good(start.nonce))
+    claims = oidc.exchange("c", start.verifier, start.nonce, CALLBACK)
+    assert oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK) == (
+        oidc.owner_login(db, claims)
+    )
+    stranger = provider.sign(provider.good(start.nonce, preferred_username="mallory"))
+    provider.id_token_override = stranger
+    with pytest.raises(oidc.NotOwner):
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
+
+
+def test_person_login_for_the_owner_fills_person_one_once(provider, db):
+    from ream import owner
+
+    owner.check(db, settings.owner_id())
+    claims = _exchange(provider)
+    login = oidc.person_login(db, claims)
+    assert (login.person, login.subject) == (settings.owner_id(), "u-1")
+    assert _person_pair(db, login.person) == (ISSUER, "u-1")
+    assert oidc.person_login(db, claims) == login
+    assert _person_pair(db, login.person) == (ISSUER, "u-1")
+
+
+def test_person_login_for_a_stranger_stores_nothing(provider, db):
+    from ream import owner
+
+    owner.check(db, settings.owner_id())
+    claims = _exchange(provider, {"sub": "u-9", "preferred_username": "mallory"})
+    with pytest.raises(oidc.NotOwner):
+        oidc.person_login(db, claims)
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from person").fetchone()[0] == 1
+    assert _person_pair(db, settings.owner_id()) == (None, None)
+    assert not _pin(db)
+
+
+def test_anyone_is_the_owner_path_while_sign_in_is_not_open(provider, db):
+    from ream import owner
+
+    owner.check(db, settings.owner_id())
+    claims = _exchange(provider, {"sub": "u-9", "preferred_username": "mallory"})
+    with pytest.raises(oidc.NotOwner):
+        oidc.person_login(db, claims, who="anyone")
+
+
+def test_anyone_finds_or_makes_a_person_once_sign_in_is_open(provider, db, monkeypatch):
+    from ream import owner, people
+
+    owner.check(db, settings.owner_id())
+    monkeypatch.setattr(people, "OPEN_SIGN_IN", True)
+    claims = _exchange(
+        provider, {"sub": "u-9", "preferred_username": "Mallory", "name": "M"}
+    )
+    login = oidc.person_login(db, claims, who="anyone")
+    assert (login.person, login.subject) == ("mallory", "u-9")
+    assert oidc.person_login(db, claims, who="anyone").person == "mallory"
+    assert _person_pair(db, "mallory") == (ISSUER, "u-9")
+    assert not _pin(db)
