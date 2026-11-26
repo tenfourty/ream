@@ -13,13 +13,11 @@ body of `current`; the handlers that take it do not change again.
 from __future__ import annotations
 
 import re
-import secrets
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request
 
 from ream import keys, settings
-from ream.settings import OWNER_ID
 
 # Precedent: `clientlevel.COMMENTS_REQUIRED`. Whether anyone but the owner may sign in.
 OPEN_SIGN_IN = False
@@ -78,11 +76,16 @@ class NameTaken(Exception):
     """No readable id is free for this login, or the pair is held by someone else."""
 
 
+def _usable(raw: str) -> str:
+    """`raw` as lower-case ASCII letters and digits with single hyphens, cut to leave room for a
+    suffix; empty when it holds no ASCII letter or digit."""
+    return re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:_ID_ROOM].strip("-")
+
+
 def normalise_id(raw: str) -> str:
     """`raw` as an id the OWNER_ID pattern accepts: lower case, every run of other characters
     one hyphen, hyphens trimmed, cut to leave room for a suffix. Empty gives `person`."""
-    cut = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:_ID_ROOM].strip("-")
-    return cut or "person"
+    return _usable(raw) or "person"
 
 
 def _held_names(conn, name: str) -> bool:
@@ -114,10 +117,16 @@ def _free_id(conn, base: str) -> str:
 def _readable_base(
     preferred: str | None, email: str | None, email_verified: bool
 ) -> str:
-    if preferred and preferred.strip():
-        return normalise_id(preferred)
+    """The id a new login asks for: its `preferred_username` if that holds an ASCII letter or
+    digit, else the local part of a verified email likewise, else `person`."""
+    if preferred:
+        base = _usable(preferred)
+        if base:
+            return base
     if email and email_verified and "@" in email:
-        return normalise_id(email.split("@", 1)[0])
+        base = _usable(email.split("@", 1)[0])
+        if base:
+            return base
     return "person"
 
 
@@ -146,6 +155,10 @@ def find_or_make(
         ).fetchone()
         kept_email = email if email_verified and email else None
         if row is not None:
+            if row[0] == settings.current().owner_id:
+                raise NameTaken(
+                    "the owner's sign-in identity is decided by the owner login"
+                )
             conn.execute(
                 "update person set email = coalesce(%s, email), name = coalesce(%s, name)"
                 " where id = %s",
@@ -157,10 +170,6 @@ def find_or_make(
                 ).fetchone()
             )
         new_id = _free_id(conn, _readable_base(preferred, email, email_verified))
-        if not OWNER_ID.fullmatch(
-            new_id
-        ):  # pragma: no cover -- normalise_id builds to fit
-            new_id = _free_id(conn, f"person-{secrets.token_hex(3)}")
         conn.execute(
             "insert into person (id, issuer, subject, email, name) values (%s, %s, %s, %s, %s)",
             (new_id, issuer, subject, kept_email, name or None),
@@ -168,10 +177,13 @@ def find_or_make(
         return _person((new_id, name or None))
 
 
-def fill_owner_identity(conn, issuer: str, subject: str) -> bool:
+def fill_owner_identity(
+    conn, issuer: str, subject: str, *, refresh: bool = False
+) -> bool:
     """Give person #1 the (issuer, subject) of the owner's login when the row has none. Returns
-    whether it did. A row that has a pair is left alone; a pair another person holds raises
-    `NameTaken` (the unique key would refuse it anyway)."""
+    whether it did. A row that has a pair is left alone, unless `refresh`: then the row takes
+    the login's pair whatever it held (the caller has just proved the login is the owner's). A
+    pair another person holds raises `NameTaken` (the unique key would refuse it anyway)."""
     owner_id = settings.current().owner_id
     holder = conn.execute(
         "select id from person where issuer = %s and subject = %s", (issuer, subject)
@@ -180,6 +192,12 @@ def fill_owner_identity(conn, issuer: str, subject: str) -> bool:
         if holder[0] != owner_id:
             raise NameTaken("another person holds the owner's sign-in identity")
         return False
+    if refresh:
+        done = conn.execute(
+            "update person set issuer = %s, subject = %s where id = %s",
+            (issuer, subject, owner_id),
+        )
+        return done.rowcount == 1
     done = conn.execute(
         "update person set issuer = %s, subject = %s"
         " where id = %s and issuer is null and subject is null",

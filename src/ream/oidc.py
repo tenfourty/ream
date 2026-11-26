@@ -565,13 +565,30 @@ def person_login(db: Database, claims: dict, *, who: str = "owner") -> Login:
     """The Login for a gallery sign-in with checked `claims`; `who` is `REAM_SIGN_IN_WHO`. With
     `owner` (and whatever is passed while `people.OPEN_SIGN_IN` is False) it is `owner_login`, and person #1 takes the
     login's issuer and subject if the row has none; `NotOwner` for anyone else, nothing stored.
-    With `anyone` the person is found or made by (issuer, subject) (`people.find_or_make`); that
-    path is unreachable until `OPEN_SIGN_IN` is True."""
+    With `anyone` (unreachable until `OPEN_SIGN_IN` is True) ownership is still decided by
+    `owner_login` alone: when it accepts, person #1 takes the login's pair (filled, or refreshed
+    when it differs); when it refuses, the person is found or made by (issuer, subject)
+    (`people.find_or_make`), which never answers person #1. A `people.NameTaken` surfaces as
+    `SignInRefused`."""
+    try:
+        return _person_login(db, claims, who)
+    except people.NameTaken as e:
+        raise SignInRefused("This sign-in cannot be given a name in this Ream") from e
+
+
+def _person_login(db: Database, claims: dict, who: str) -> Login:
     cfg = settings.current()
-    if who != "anyone" or not people.OPEN_SIGN_IN:
+    anyone = who == "anyone" and people.OPEN_SIGN_IN
+    try:
         login = owner_login(db, claims)
+    except NotOwner:
+        if not anyone:
+            raise
+    else:
         with db.connect() as conn:
-            people.fill_owner_identity(conn, cfg.oidc_issuer, login.subject)
+            people.fill_owner_identity(
+                conn, cfg.oidc_issuer, login.subject, refresh=anyone
+            )
         return login
     found = people.find_or_make(
         db,

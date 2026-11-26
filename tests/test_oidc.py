@@ -941,3 +941,81 @@ def test_anyone_finds_or_makes_a_person_once_sign_in_is_open(provider, db, monke
     assert oidc.person_login(db, claims, who="anyone").person == "mallory"
     assert _person_pair(db, "mallory") == (ISSUER, "u-9")
     assert not _pin(db)
+
+
+@pytest.fixture()
+def open_sign_in(provider, db, monkeypatch):
+    from ream import owner, people
+
+    owner.check(db, settings.owner_id())
+    monkeypatch.setattr(people, "OPEN_SIGN_IN", True)
+    return provider
+
+
+def _anyone(provider, db, **claims):
+    return oidc.person_login(db, _exchange(provider, claims), who="anyone")
+
+
+def test_anyone_gives_person_one_to_the_owner_login_and_fills_its_pair(
+    open_sign_in, db
+):
+    login = _anyone(open_sign_in, db)
+    assert (login.person, login.subject) == (settings.owner_id(), "u-1")
+    assert _person_pair(db, login.person) == (ISSUER, "u-1")
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from person").fetchone()[0] == 1
+
+
+def test_anyone_never_gives_person_one_to_a_login_the_owner_reader_refuses(
+    open_sign_in, db
+):
+    owner_id = settings.owner_id()
+    assert _anyone(open_sign_in, db).person == owner_id  # pins u-1, fills person #1
+    # a stranger, and one who only borrows the owner's name
+    assert (
+        _anyone(open_sign_in, db, sub="u-9", preferred_username="mal").person == "mal"
+    )
+    assert (
+        _anyone(open_sign_in, db, sub="u-8", preferred_username="x", email=None).person
+        != owner_id
+    )
+    borrowed = _anyone(open_sign_in, db, sub="u-7", preferred_username=owner_id)
+    # the owner's claim value with another subject: refused as owner, a new person
+    assert borrowed.person == f"{owner_id}-2"
+    assert _person_pair(db, owner_id) == (ISSUER, "u-1")
+
+
+def test_the_old_account_of_a_moved_owner_is_not_the_owner_and_the_new_one_is(
+    open_sign_in, db
+):
+    owner_id = settings.owner_id()
+    assert _anyone(open_sign_in, db).person == owner_id
+    assert _person_pair(db, owner_id) == (ISSUER, "u-1")
+    with settings.override(oidc_owner_subject="u-2"):
+        with pytest.raises(oidc.SignInRefused):
+            _anyone(open_sign_in, db)  # u-1: the pair person #1 still holds
+        new = _anyone(open_sign_in, db, sub="u-2")
+        assert (new.person, new.subject) == (owner_id, "u-2")
+        assert _person_pair(db, owner_id) == (ISSUER, "u-2")
+        # u-1 again: person #1 no longer holds its pair, so it is a new person, not the owner
+        assert _anyone(open_sign_in, db).person == f"{owner_id}-2"
+        assert _person_pair(db, owner_id) == (ISSUER, "u-2")
+
+
+def test_a_removed_pin_moves_the_owner_the_same_way(open_sign_in, db):
+    owner_id = settings.owner_id()
+    assert _anyone(open_sign_in, db).person == owner_id
+    with db.connect() as conn:
+        conn.execute("delete from service_meta where key = %s", (oidc.PIN_KEY,))
+    assert _anyone(open_sign_in, db, sub="u-2").person == owner_id  # pins u-2
+    assert _person_pair(db, owner_id) == (ISSUER, "u-2")
+    assert _anyone(open_sign_in, db).person == f"{owner_id}-2"  # u-1: not the owner now
+
+
+def test_a_name_that_cannot_be_given_is_a_refused_sign_in(open_sign_in, db):
+    with db.connect() as conn:
+        for n in range(2, 100):
+            conn.execute("insert into person (id) values (%s)", (f"mal-{n}",))
+        conn.execute("insert into person (id) values ('mal')")
+    with pytest.raises(oidc.SignInRefused):
+        _anyone(open_sign_in, db, sub="u-9", preferred_username="mal")

@@ -168,3 +168,36 @@ def test_fill_owner_identity_fills_once_and_refuses_a_pair_someone_holds(db):
         )
         with pytest.raises(people.NameTaken):
             people.fill_owner_identity(conn, ISS, "s2")
+
+
+def test_a_preferred_name_with_no_ascii_falls_back_to_the_verified_email(db):
+    owner.check(db, "jeremy")
+    got = _make(db, "s1", preferred="陳大文", email="Ann.Lee@x.example", verified=True)
+    assert got.id == "ann-lee"
+    unverified = _make(db, "s2", preferred="陳大文", email="bob@x.example")
+    assert unverified.id == "person"
+
+
+def test_find_or_make_never_returns_the_owners_row(db):
+    owner.check(db, "jeremy")
+    with db.connect() as conn:
+        assert people.fill_owner_identity(conn, ISS, "s1") is True
+    with pytest.raises(people.NameTaken):
+        _make(db, "s1", preferred="jeremy")
+
+
+def test_fill_owner_identity_refreshes_only_when_asked(db):
+    owner.check(db, "jeremy")
+    with db.connect() as conn:
+        assert people.fill_owner_identity(conn, ISS, "s1") is True
+        assert people.fill_owner_identity(conn, ISS, "s2", refresh=True) is True
+        assert people.fill_owner_identity(conn, ISS, "s2", refresh=True) is False
+        row = conn.execute(
+            "select issuer, subject from person where id = 'jeremy'"
+        ).fetchone()
+        assert tuple(row) == (ISS, "s2")
+        conn.execute(
+            "insert into person (id, issuer, subject) values ('ann', %s, 's3')", (ISS,)
+        )
+        with pytest.raises(people.NameTaken):
+            people.fill_owner_identity(conn, ISS, "s3", refresh=True)
