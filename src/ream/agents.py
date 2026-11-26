@@ -61,10 +61,13 @@ def set_person(db, agent: str, person: str, by: str) -> bool:
             "select 1 from mcp_agent where agent = %s", (agent,)
         ).fetchone():
             raise Refused(f"{agent} is an app agent: it already belongs to its person")
+        # Its live keys are locked, so a revocation of the last one running now either finishes
+        # first (then none is live here) or waits for this mark and deletes it.
         if not conn.execute(
-            "select 1 from agent_key where agent = %s and revoked_at is null limit 1",
+            "select 1 from agent_key"  # noqa: S608 -- clause from the db layer, no caller input
+            " where agent = %s and revoked_at is null" + conn.for_update(),
             (agent,),
-        ).fetchone():
+        ).fetchall():
             raise Refused(f"no agent named {agent} holds a live key")
         if not conn.execute("select 1 from person where id = %s", (person,)).fetchone():
             raise Refused(f"no person with id {person!r}")

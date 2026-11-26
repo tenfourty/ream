@@ -353,8 +353,9 @@ form field `belongs_to`, empty means shared; behind `people.require_owner`). Run
 - **Watching.** `watches._reads` asks `agents.person_of` (app or personal key), so fan-out and the cap use the same
   clause as `_owned`; clearing a key's person makes it read as a key at once and its closed-page watches go silent.
 - **`/me` and `whoami`.** `me_view` adds `belongs_to` and `shown_as` only when the key is personal (`shown_as` is the via line
-  `<person name>, via <agent name>`, built in `agents.shown` from the `Shown.machine` field, so `/me`, `whoami` and the
-  cards share the sanitising and escaping of apps; `Shown.via` stays None, which is what marks an app). A shared key's answer is byte-identical.
+  `<person name>, via <agent name>`, built in `agents.shown` from the `Shown.machine` field, so `/me` and `whoami` share
+  the sanitising of apps; `Shown.via` stays None, which is what marks an app, so the gallery's cards still show a
+  personal key by its agent name alone: drawing the line there is left for later). A shared key's answer is byte-identical.
 - **Comments.** A personal key may post plain comments on every page it can read: its reads widen, and with them
   where it may comment; it changes only its own pages (update, delete, transfer, the agents-can-read toggle, moves to a
   folder and asking are unchanged: `tests/test_personal_key.py`).

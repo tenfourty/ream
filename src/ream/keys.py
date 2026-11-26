@@ -329,7 +329,14 @@ def revoke_in(
     )
     # A machine with no live key left is retired: its personal mark goes with it, so a new
     # machine connected under the name starts shared (a moved or rotated agent keeps a live key,
-    # the new one is inserted before the old retires, so it never gets here).
+    # the new one is inserted before the old retires, so it never gets here). The mark is locked
+    # first, so two revocations of an agent's last two keys at once cannot both see the other's
+    # key as live and leave the mark behind (Postgres, read committed): the second re-reads.
+    conn.execute(
+        "select 1 from agent_person"  # noqa: S608 -- clause from the db layer, no caller input
+        " where agent = %s" + conn.for_update(),
+        (row[0],),
+    ).fetchone()
     if not conn.execute(
         "select 1 from agent_key where agent = %s and revoked_at is null limit 1",
         (row[0],),
