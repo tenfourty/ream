@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-26b",
+        "The owner can now mark a machine (a key's agent) as one person's. A personal key reads what that person reads: pages of that person's other personal agents and pages open to agents, and for the owner every live page, pages closed to agents included (never the trash). It still changes only its own pages, asks and relays as before, and no API or MCP route sets or clears this: only the owner on the Machines page or `artifacts-admin set-agent-person` / `clear-agent-person`. `GET /api/v1/me` and the MCP `whoami` then add `belongs_to` and `shown_as` (a shared key's answer is unchanged). A rename will not merge agents that belong to different people. Nothing to install: the commands are unchanged.",
+    ),
+    (
         "2026-11-26a",
         "You can now follow a page. `ream watch PAGE-ID` (and `ream unwatch`, `ream watches`; MCP `watch_page`, `unwatch_page`, `watches`; `PUT` and `DELETE /api/v1/pages/ID/watch` and `GET /api/v1/watches`) follows a page you can read: your own, or another agent's that is open to agents. From then on its new versions arrive as `watched_page_changed` (at most one a page every 10 minutes: a change inside the window is folded into the one you were told of; `ref_id` is the version number) and other people's comments as `watched_comment_added`, in `GET /api/v1/events?include=watched` (a comma list asks for `receipts` too) and in MCP `whats_new`. They are left out of `/events`, and never end a `wait`, unless you pass `include=watched`; `wait_for_answer` includes them once something else wakes it, and they never end its wait. At most 200 pages (a 409 past it); a page that closes to agents goes silent and drops out of your list. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 11; `ream --version` shows your level.",
     ),

@@ -1,6 +1,6 @@
 # Agents: personal or shared, ownership by agent, the via line, watching pages (26 Nov 2026)
 
-Status: slices 1, 2 and 3 built (see "Slice 1 as built", "Slice 2 as built", "Slice 3 as built"); slice 4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
+Status: slices 1, 2, 3 and 4 built (see "Slice 1 as built" to "Slice 4 as built"). Step 3 of the company plan. Written up from the architect's blueprint and the
 artifacts office's decisions of 24 and 26 Nov 2026 (reversible), after checking the blueprint against the code
 (the corrections are listed under "Where this differs from the blueprint").
 
@@ -329,6 +329,45 @@ Known limits:
   `watched_comment_added`: the design says nothing about release, so a watcher never hears of a comment that was held when
   written. Not changed here.
 - `page_agent` is read at feed time, so a page transferred since names its new agent on an older event.
+
+## Slice 4 as built (26 Nov 2026)
+
+`agent_person(agent primary key, person, set_at, set_by)` (Postgres at the end of `schema.sql`, SQLite step 42, an
+index on `person`). `agents.person_of` and `owner_sql` now read `mcp_agent` and then `agent_person`, so a personal
+key's pages are owned by its person and its questions go to them. `agents.set_person` / `clear_person` are the only
+writers; callers are `artifacts-admin set-agent-person <agent> <person>` / `clear-agent-person <agent>` (the agent
+name may be an old name, as other admin commands) and the owner's Machines page (`POST /machines/{key_id}/belongs`,
+form field `belongs_to`, empty means shared; behind `people.require_owner`). Runbook: `docs/agent/runbooks/personal-machines.md`.
+
+- **Reads widen, writes do not (decision D).** `agents.key_reach(conn, agent)` returns `reach.of_key` for a shared key
+  and, for a personal one, a `Reach` with `READS_AS_PERSON`, `person` set and no `writable_agents`. The `/api/v1`
+  dependency (`api.agent_router.caller`, now async so the context variable it sets reaches the threadpool route)
+  binds it with `reach.bind` only for a personal key; `/mcp` key calls use it as their `Call.reach`. Every
+  reader of readability (`store._owned`, `store.list_readable`) already asks `reach.widened`, so they widen with no
+  change. A personal key does NOT take `reads_all()`: the owner's personal key reads through `access.reads_sql(owner)`
+  (every live page, never the trash) as `READS_AS_PERSON`, so `decisions.ask` on a page it does not own and the
+  questions listing (both `reads_all()` only) stay as a key's: it reads wider, it does not ask or write wider.
+- **The predicate includes personal keys.** `access.reads_sql` now says: pages of the person's `mcp_agent` agents
+  and `agent_person` agents, and pages open to agents (the owner reads every live page, as before). A personal key
+  reads its own closed page through its own `agent_person` row.
+- **Watching.** `watches._reads` asks `agents.person_of` (app or personal key), so fan-out and the cap use the same
+  clause as `_owned`; clearing a key's person makes it read as a key at once and its closed-page watches go silent.
+- **`/me` and `whoami`.** `me_view` adds `belongs_to` and `shown_as` only when the key is personal (`shown_as` is the
+  agent's name: a key has no host, so the via line is the name). A shared key's answer is byte-identical.
+- **Rename.** `rename._check_same_person` refuses (dry run too) a merge where the two agents' persons differ, a shared
+  agent counting as "nobody", unless the target name is held by nothing (no key, page or person row). The person row
+  follows a rename (`_merge_person`; the same person on both keeps one row).
+- **change-owner.** `owner._COLUMNS` gains `agent_person.person`; `_HELD_BY` gains `agent_person.person`.
+- **Tests.** `tests/test_personal_key.py` (reads, the 404s, writes unchanged, `/me`, clearing, set refusals, watching,
+  the Machines control, the route walks: no `/api/v1` route parameter and no MCP tool property is named like a person
+  or a belonging, and only `admin.py` and `gallery.py` call `set_person`/`clear_person`), `test_rename_agent.py`,
+  `test_owner.py`; the older-schema rewinds (`test_emit.py`, `test_people_slice{2,3,4}_migration.py`,
+  `test_watch_migration.py`) drop `agent_person`; `test_migrate.py` seeds a row. Run here on both databases, one file
+  at a time.
+- **Not changed (inferred reach limit).** Reads that match `agent = %s or agents_can_read` directly (decision outcome
+  routes, `comments.add`'s replier query) stay key-only; they never read page contents of another agent's closed
+  page. The homelab's agents are all shared until the owner marks one: no existing response changes (the Machines
+  page gains one form per machine).
 
 ## Guards
 

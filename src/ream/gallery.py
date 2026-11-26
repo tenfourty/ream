@@ -2006,8 +2006,50 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     return "".join(parts)
 
 
+def _machine_people(db) -> tuple[list[tuple[str, str]], dict[str, str]]:
+    """The people a machine can be marked for (id, shown name) and which agent is whose
+    (`agent_person`), for the Machines page."""
+    with db.connect() as conn:
+        found = conn.execute("select id, name from person order by id").fetchall()
+        mine = dict(conn.execute("select agent, person from agent_person").fetchall())
+    return [(r[0], agents.person_label(r[0], r[1])) for r in found], mine
+
+
+def _machine_page_people(db) -> dict:
+    rows, mine = _machine_people(db)
+    return {"people_rows": rows, "mine": mine}
+
+
+def _belongs_form(ident: str, agent: str, people_rows, mine) -> str:
+    """The control that marks a machine as one person's, or shared again. A personal machine reads
+    what its person reads and still changes only its own pages."""
+    if not people_rows:
+        return ""
+    current = mine.get(agent, "")
+    options = [
+        f'<option value=""{" selected" if not current else ""}>Shared (the house\u2019s)</option>'
+    ] + [
+        f'<option value="{escape(pid)}"{" selected" if pid == current else ""}>'
+        f"{escape(label)}</option>"
+        for pid, label in people_rows
+    ]
+    return (
+        f'<form method="post" action="/machines/{ident}/belongs" class="row">'
+        '<label>Belongs to <select name="belongs_to">' + "".join(options) + "</select>"
+        '</label><button class="btn" type="submit">Save</button></form>'
+        '<p class="muted">A personal machine reads what its person reads, pages closed to '
+        "agents included for the owner. It still changes only its own pages.</p>"
+    )
+
+
 def _machines_page(
-    machines, confirm: str = "", note: str = "", apps=(), confirm_app: str = ""
+    machines,
+    confirm: str = "",
+    note: str = "",
+    apps=(),
+    confirm_app: str = "",
+    people_rows=(),
+    mine=None,
 ) -> str:
     """Every connected machine: its name (his to change), when it connected,
     when it was last used, which sessions have published with it, and how many
@@ -2056,6 +2098,12 @@ def _machines_page(
                 f'<input name="label" value="{escape(m.name)}" aria-label="Name" autocomplete="off">'
                 '<button class="btn" type="submit">Rename</button>'
                 f'<a class="btn" href="/machines?revoke={ident}">Revoke</a></form>'
+            )
+        if confirm != m.id:
+            action += _belongs_form(ident, m.agent, people_rows, mine or {})
+        if mine and m.agent in mine:
+            facts.append(
+                f"<dt>Belongs to</dt><dd>{escape(dict(people_rows).get(mine[m.agent], mine[m.agent]))}</dd>"
             )
         parts.append(
             f"<section><h2>{escape(m.name)}</h2><dl>{''.join(facts)}</dl>{action}</section>"
@@ -7587,6 +7635,7 @@ def gallery_router(db: Database) -> APIRouter:
                     confirm=revoke,
                     apps=mcp_apps.listed(db, person.id),
                     confirm_app=revoke_app,
+                    **_machine_page_people(db),
                 ),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -7604,6 +7653,43 @@ def gallery_router(db: Database) -> APIRouter:
         if not keys.set_label(db, key_id, cleaned):
             raise HTTPException(404, "no such machine")
         return RedirectResponse("/machines", status_code=303)
+
+    @router.post("/machines/{key_id}/belongs", response_class=HTMLResponse)
+    def machine_belongs(
+        key_id: str,
+        request: Request,
+        belongs_to: str = Form(""),
+        person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
+        """Mark a machine as one person's, or shared again (agents design, slice 4). The owner's
+        alone, as the page is; no /api/v1 or MCP route does this."""
+        _same_origin_write(request)
+        with db.connect() as conn:
+            row = conn.execute(
+                "select agent from agent_key where id = %s", (key_id,)
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such machine")
+        try:
+            if belongs_to:
+                done = agents.set_person(db, row[0], belongs_to, person.id)
+                note = (
+                    f"{row[0]} now belongs to {belongs_to}." if done else "No change."
+                )
+            else:
+                agents.clear_person(db, row[0])
+                note = f"{row[0]} is shared."
+        except agents.Refused as exc:
+            note = f"Not changed: {exc}."
+        return HTMLResponse(
+            _shell(
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db), note=note, **_machine_page_people(db)
+                ),
+            ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
 
     @router.post("/machines/{key_id}/revoke", response_class=HTMLResponse)
     def machine_revoke(
@@ -7623,7 +7709,12 @@ def gallery_router(db: Database) -> APIRouter:
             else "That key was already revoked."
         )
         return HTMLResponse(
-            _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
+            _shell(
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db), note=note, **_machine_page_people(db)
+                ),
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 

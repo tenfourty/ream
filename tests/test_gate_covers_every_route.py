@@ -82,6 +82,7 @@ GATED = {
     "/machines/apps/{app_id}/revoke",
     "/machines/{key_id}/rename",
     "/machines/{key_id}/revoke",
+    "/machines/{key_id}/belongs",
     "/pq/{question_id}/answer",
     "/select",
     "/signout",
