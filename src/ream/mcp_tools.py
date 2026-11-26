@@ -269,6 +269,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "answered_by",
             "acknowledged_by",
             "recorded_by",
+            "page_agent",
             # A form's `answers[]` (people slice 3b): the person, and who gave a field.
             "person",
             "by",
@@ -987,16 +988,41 @@ def _save_seen(call: Call, seq: int) -> None:
 def _event_writer(obj: dict, key: str):
     """An event's text is its actor's. When the owner is the actor his own words (`note`)
     go back bare, but the summary still quotes agents' text (an answer's option label, a
-    quoted passage), so it is fenced and labelled with the page's agent."""
+    quoted passage), so it is fenced and labelled with the page's agent. For a watcher's event
+    `agent` is the watcher, so the page's agent is `page_agent` (`_with_page_agent`); when
+    that is unknown the text is fenced under a label saying so, never left bare."""
     if "actor" not in obj:
         return None
     if obj["actor"] != settings.owner_id():
         return obj["actor"] or None
-    # A watcher's event (`agent` is the watcher, not the page's agent): the owner's comment
-    # is his own words whichever field carries it.
     if obj.get("kind") in events.WATCHED_KINDS:
-        return OWNER
+        return OWNER if key == "note" else obj.get("page_agent") or _UNKNOWN_WRITER
     return OWNER if key == "note" else obj.get("agent") or None
+
+
+_UNKNOWN_WRITER = "an unknown writer"
+
+
+def _with_page_agent(db, rows: list[dict]) -> list[dict]:
+    """Each watched event with `page_agent`: the agent that owns the page it is about (the
+    writer of its title, a change's summary and a mark's quote), read now."""
+    ids = sorted({r["artifact_id"] for r in rows if r["kind"] in events.WATCHED_KINDS})
+    if not ids:
+        return rows
+    marks = ", ".join(["%s"] * len(ids))
+    with db.connect() as conn:
+        owners = dict(
+            conn.execute(
+                f"select id, agent from artifact where id in ({marks})",  # noqa: S608 -- only placeholders are interpolated
+                tuple(ids),
+            ).fetchall()
+        )
+    return [
+        {**r, "page_agent": owners.get(r["artifact_id"], "")}
+        if r["kind"] in events.WATCHED_KINDS
+        else r
+        for r in rows
+    ]
 
 
 @tool(
@@ -1056,7 +1082,7 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
         for row in rows
     ]
     return {
-        "events": jsonable_encoder(out),
+        "events": jsonable_encoder(_with_page_agent(call.db, out)),
         "since": since,
         "cursor": cursor,
         "more": len(rows) >= limit,

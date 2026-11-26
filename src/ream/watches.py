@@ -129,6 +129,7 @@ def fan_out(
     summary: str,
     ref_id: str | None = None,
     skip: tuple[str, ...] = (),
+    note: str = "",
     data: dict | None = None,
 ) -> list[events.Emission]:
     """Write one event of `kind` to each watcher of `page` who may hear it, on `conn` (the
@@ -177,6 +178,7 @@ def fan_out(
                     actor=actor,
                     summary=summary,
                     ref_id=ref_id,
+                    note=note,
                     session=session,
                     data={"title": title, **(data or {})},
                 ),

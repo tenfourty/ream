@@ -1006,6 +1006,9 @@ def add(
                     summary=said,
                     ref_id=comment_id,
                     skip=already,
+                    # The owner's own plain words ride in `note`, which the MCP fence returns
+                    # bare; the summary (a mark's quote is the page's text) never is.
+                    note=body if author_kind == "human" and not LABEL.get(kind) else "",
                 )
                 if watcher_emissions and callers_txn and after_commit is None:
                     raise ValueError(
