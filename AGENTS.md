@@ -134,8 +134,8 @@ answers 401, except the fixed open list (`/healthz`, `/favicon.svg`, `/signin`, 
 (`REAM_OIDC_*`), needs `REAM_GALLERY_ORIGIN` to be https (loopback excepted), and needs `<gallery origin>/signin/callback` registered at the
 provider as a second redirect address. The session is the host-only `__Host-ream_session` cookie, 12 hours, never sent to the content domain
 (`tests/test_browser_session_cookie.py`). `REAM_SIGN_IN_WHO` (`owner`, the default, or `anyone`, refused to start while `people.OPEN_SIGN_IN` is
-False) says who may sign in. **Rolling back below this image with sign-in on and no authenticating proxy is FORBIDDEN: an older image ignores
-the setting and serves the gallery open; put a deny rule at the proxy first.** Runbook: `docs/agent/runbooks/gallery-sign-in.md`.
+False) says who may sign in. **Rolling back below this image, or turning sign-in off, with no authenticating proxy is FORBIDDEN: an older image
+ignores the setting and serves the gallery open, and off removes the gate; restore authentication or a deny rule at the proxy first.** Runbook: `docs/agent/runbooks/gallery-sign-in.md`.
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once

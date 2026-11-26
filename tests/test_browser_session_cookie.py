@@ -42,8 +42,11 @@ pytestmark = [
     ),
 ]
 
-GALLERY = "https://gallery.tenfourty.site"
-CONTENT_DOMAIN = "tenfourty.com"
+GALLERY_HOST = "gallery.tenfourty.site"
+GALLERY = f"https://{GALLERY_HOST}"
+# A sibling of the gallery host under the SAME registrable domain: a session cookie scoped to the
+# parent domain (`Domain=tenfourty.site`) WOULD be sent to `<id>.tenfourty.site`, so a leak fails.
+CONTENT_DOMAIN = "tenfourty.site"
 PAGE = (
     "<!doctype html><html><head><title>B</title></head><body><p>hello</p></body></html>"
 )
@@ -91,9 +94,16 @@ def browser():
             b.close()
 
 
+def _is_content(host):
+    return host != GALLERY_HOST and host.endswith("." + CONTENT_DOMAIN)
+
+
 def _forward(ctx, live, sent, provider):
     """Serve `https://<host>/...` from the live server with that Host, the browser's own
-    headers and the Cookie header its jar holds for the URL; record (host, cookie) in `sent`."""
+    headers and the Cookie header its jar holds for the URL; record (host, cookie) in `sent`.
+    The jar's cookies for a URL are added whatever their SameSite: the gallery and the content host
+    are the same site, so a Lax cookie would be sent to both anyway; only Domain and the
+    `__Host-` prefix keep it off the content host, and those are what the test checks."""
     opener = urllib.request.build_opener(_NoRedirect)
 
     def handle(route):
@@ -111,7 +121,7 @@ def _forward(ctx, live, sent, provider):
             headers["cookie"] = jar
         sent.append((host, jar))
         headers["host"] = host
-        if req.resource_type == "document" and host.endswith("." + CONTENT_DOMAIN):
+        if req.resource_type == "document" and _is_content(host):
             headers["sec-fetch-dest"] = (
                 "iframe"  # added by the network stack, absent here
             )
@@ -161,11 +171,13 @@ def test_the_session_cookie_never_reaches_the_content_domain(served, provider, b
     ctx = browser.new_context(viewport={"width": 1000, "height": 800})
     sent: list[tuple[str, str]] = []
     ctx.route(
-        re.compile(r"^https://gallery\.tenfourty\.site/"),
+        re.compile(rf"^https://{re.escape(GALLERY_HOST)}/"),
         _forward(ctx, live, sent, provider),
     )
     ctx.route(
-        re.compile(rf"^https://[^/]+\.{re.escape(CONTENT_DOMAIN)}/"),
+        re.compile(
+            rf"^https://(?!{re.escape(GALLERY_HOST)}/)[^/]+\.{re.escape(CONTENT_DOMAIN)}/"
+        ),
         _forward(ctx, live, sent, provider),
     )
     pg = ctx.new_page()
@@ -180,7 +192,7 @@ def test_the_session_cookie_never_reaches_the_content_domain(served, provider, b
 
     # The session is in the browser, host-only on the gallery host...
     session = [c for c in ctx.cookies() if c["name"] == signin.SESSION_COOKIE]
-    assert len(session) == 1 and session[0]["domain"] == "gallery.tenfourty.site"
+    assert len(session) == 1 and session[0]["domain"] == GALLERY_HOST
     assert session[0]["secure"] and session[0]["httpOnly"]
     assert not ctx.cookies(f"https://{ident}.{CONTENT_DOMAIN}/")
     assert not ctx.cookies(f"https://{CONTENT_DOMAIN}/")
@@ -190,13 +202,13 @@ def test_the_session_cookie_never_reaches_the_content_domain(served, provider, b
     frame.wait_for_load_state("load")
     assert frame.url.startswith(f"https://{ident}.{CONTENT_DOMAIN}/")
     assert "hello" in frame.content()
-    content = [jar for host, jar in sent if host.endswith("." + CONTENT_DOMAIN)]
+    content = [jar for host, jar in sent if _is_content(host)]
     assert content, "no request reached the content host: the check proved nothing"
 
     # ...and none of those requests carried the session, or any cookie. The gallery's did
     # (the control: a check that cannot fail proves nothing).
     assert all(signin.SESSION_COOKIE not in jar for jar in content), content
     assert all(jar == "" for jar in content), content
-    gallery = [jar for host, jar in sent if host == "gallery.tenfourty.site"]
+    gallery = [jar for host, jar in sent if host == GALLERY_HOST]
     assert any(signin.SESSION_COOKIE in jar for jar in gallery), gallery
     ctx.close()

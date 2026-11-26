@@ -106,6 +106,9 @@ def nightly(db: Database) -> None:
     image_store.sweep(db)
     try:
         oauth.sweep(db)
+    except Exception:  # noqa: BLE001 -- the rest of the night still runs
+        _log.error("oauth sweep failed", exc_info=True)
+    try:
         signin.sweep(db)
     except Exception:  # noqa: BLE001 -- the rest of the night still runs
         _log.error("sign-in sweep failed", exc_info=True)

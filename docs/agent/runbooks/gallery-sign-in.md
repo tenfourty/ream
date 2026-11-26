@@ -44,6 +44,16 @@ is ever read.
 - `REAM_SIGN_IN_WHO`: `owner` (default) or `anyone`. `anyone` refuses to start while
   `people.OPEN_SIGN_IN` is False (today it is): only the owner may sign in.
 
+## Behind a proxy
+
+Set `REAM_TRUSTED_IP_HEADER` to the header your proxy puts the caller's address in. Without it every
+caller shares the proxy's address, and `/signin` and `/signin/callback` share one rate limiter
+(10 calls in 60 s, then a 300 s block; one sign-in costs two calls), so a few strangers' requests, or
+the owner's own retries, could keep the owner at 429.
+
+Tabs restored after a browser restart reload with the session cookie, so they keep working until the
+12 hours end; after that each one is sent to sign in and, once signed in, returns to its own path.
+
 ## Registering the redirect address
 
 At the provider, add a **second** redirect URI to the same client: `<gallery origin>/signin/callback`
@@ -80,6 +90,7 @@ one by hand, delete its `person_session` row; to end every session, delete all o
 
 ## Rolling back
 
-Turning the setting off and restarting is safe on this image: the gate passes everything through and
-the sign-in routes answer 404 again; the tables stay. Rolling back to an image that predates this feature is **FORBIDDEN** while the setting is on and
+Turning the setting off and restarting removes the gate: the whole gallery is open unless something in
+front of it authenticates, and the sign-in routes answer 404 again (the tables stay). So it carries the
+same condition as a rollback: **first restore authentication or a deny rule at the proxy.** Rolling back to an image that predates this feature is **FORBIDDEN** while the setting is on and
 nothing in front authenticates (see the top of this page): put the deny rule at the proxy first.
