@@ -609,10 +609,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 23 Nov 2026 for the marked changes view over MCP (the changes paragraph says `read_page` takes `changes_to` and `changes_format marked`); skill.md and agent.json did not move. Re-taken again for the MCP organise_folder tool (its name in the MCP tool list). Re-taken again for the MCP organise_folder tool (its name in the MCP tool list).
 # agents.txt re-taken again on 23 Nov 2026 for the MCP transfer_page tool (its name in the MCP tool list); skill.md and agent.json did not move.
 # agents.txt re-taken on 24 Nov 2026: comment_image named in the MCP tool list; skill.md and agent.json did not move.
-# agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog; reworded after review so every form row carries it, `sources` elements described); skill.md and agent.json did not move.
+# agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog; reworded after review so every form row carries it, `sources` elements described); skill.md and agent.json did not move.# agents.txt and skill.md re-taken on 26 Nov 2026 for watching a page (agents slice 3: a section in agents.txt, the MCP tool list names watch_page, unwatch_page and watches, and a short paragraph in skill.md); agent.json did not move.
 GOLDEN = {
-    "agents.txt": "f44f2cc563b1e8e23fa366226c25f83d3a73da82709bcae73a11d17da773839a",
-    "skill.md": "46e99b142ada0f82581fc4f4a69b5a7f0ad3dce66fc515339e755a26e065e4ef",
+    "agents.txt": "310d79cde8e9fec891ce4b8bce8323c3811d7b7b9b9385360c98782279537046",
+    "skill.md": "4f0935373cb8d491872b6bb77b9d7d3a951ea01219234a326e5b97a630fbe874",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
