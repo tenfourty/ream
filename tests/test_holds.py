@@ -338,6 +338,26 @@ def test_a_verdict_releases_his_held_marks_without_extra_events(db, nudges):
     assert message.count("Rotate") >= 2
 
 
+def test_a_released_held_mark_note_is_only_his_words_not_the_quote(db, nudges):
+    """runcove-5t3oj.160.7: the note of a released mark's event is bare when he is the
+    actor, so it carries his words alone; the quote stays in the summary, which is fenced."""
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    mark = _human(db, page, kind="fix", anchor=RANGE, quote="Rotate", body="tighter")
+    assert mark.held
+    holds.set_review_mode(db, row.id, "live")
+    with db.connect() as conn:
+        [(summary, note)] = conn.execute(
+            "select summary, note from event"
+            " where ref_id = %s and kind = 'comment_added'",
+            (mark.id,),
+        ).fetchall()
+    assert note == "tighter"
+    assert "Rotate" not in note
+    assert "Rotate" in summary
+    assert summary.startswith("Fix:")
+
+
 def test_approved_with_held_marks_counts_as_approved_with_notes(db, nudges):
     page, row, _ = _held_review(db, marks=1)
     assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "b"
