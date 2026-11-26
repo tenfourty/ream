@@ -32,6 +32,7 @@ from markupsafe import escape
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
+    agents,
     comments,
     connect,
     decisions,
@@ -1937,6 +1938,12 @@ _APP_WORDS = {
 }
 
 
+def _app_line(app, host: str) -> str:
+    """An app of the signed-in person on `host`, as the via line (`agents.app_shown`). The
+    machines page is the owner's, so the name is the owner's."""
+    return agents.app_shown(app.agent, app.person, None, host).text()
+
+
 def _apps_section(apps, confirm_app: str = "") -> str:
     """The "Connected apps" section (spec 10): one row per live app, Revoke asking once
     more, and the lapsed and revoked ones folded away. Never a token or a hash: the page
@@ -1953,7 +1960,7 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     for item in live:
         a = item.app
         ident = escape(a.id)
-        shown = mcp_apps.via(item.host) if item.host else a.agent
+        shown = _app_line(a, item.host) if item.host else a.agent
         words = ", ".join(_APP_WORDS.get(p, p) for p in a.permissions) or "none"
         used = _ago(a.last_used_at) if a.last_used_at else "not since it connected"
         lapses = min(a.idle_expires_at, a.expires_at).strftime("%-d %b %Y")
@@ -1985,7 +1992,7 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     if gone:
         rows = []
         for i in gone:
-            who = mcp_apps.via(i.host) if i.host else i.app.agent
+            who = _app_line(i.app, i.host) if i.host else i.app.agent
             what = (
                 f"revoked {_ago(i.app.revoked_at) or 'just now'}"
                 if i.state(now) == "ended"
@@ -3636,7 +3643,7 @@ def _wall_waiting(person: str) -> str:
         "   where d.artifact_id = a.id"
         "     and d.answer is null and d.kind <> 'form'"
         "     and a.archived_at is null and a.deleted_at is null"
-        f"     and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
+        f"     and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
         "     and d.closed_at is null) > 0)"
     )
 
@@ -4596,24 +4603,32 @@ def _ago(moment: datetime | None) -> str:
     return moment.strftime("%-d %b")
 
 
-def _passed_on(row, hosts: dict[str, str] | None) -> tuple[str, str]:
+def _passed_on(row, hosts: dict[str, agents.Shown] | None) -> tuple[str, str]:
     """For an answer a signed-in app passed on (source `mcp`, MCP design 11.5): where he said
     it ("claude.ai", the app's host) and who recorded it ("Jeremy, via claude.ai"). Both
     escaped; the host comes from the app, never a literal."""
-    host = (hosts or {}).get(row.recorded_by or "") or "an app"
-    return escape(host), escape(mcp_apps.via(host))
+    found = (hosts or {}).get(row.recorded_by or "")
+    if found is None or found.via is None:
+        found = agents.unknown_app()
+    return escape(found.via), escape(found.text())
 
 
-def _asker_line(row, hosts: dict[str, str] | None) -> str:
+def _asker_line(
+    row, hosts: dict[str, agents.Shown] | None, reader: str | None = None
+) -> str:
     """For a question a signed-in app put on a page that is not its own (MCP design 11.4):
     who asked, so it is never read as the page's agent speaking. Escaped; the host comes from
     the app's own record, and an agent that is not (or is no longer) an app is shown by its
-    stored name."""
+    stored name. "your Claude" is true only for the reader the app belongs to; for anyone else
+    it is "<person name>'s Claude" (via line rule 7)."""
     asker = getattr(row, "asked_by", None)
     if not asker:
         return ""
-    host = (hosts or {}).get(asker)
-    who = f"your Claude ({host or asker})"
+    found = (hosts or {}).get(asker)
+    if found is not None and found.via and found.person not in (None, reader):
+        who = f"{found.person_name}\u2019s Claude ({found.via})"
+    else:
+        who = f"your Claude ({(found.via if found is not None else None) or asker})"
     return (
         f'<p class="qasker">From {escape(who)}, not this page\u2019s agent. '
         "Your answer goes back to it.</p>"
@@ -4941,8 +4956,9 @@ def _render_decisions(
     note_threads: dict[str, list] | None = None,
     prev_read_at: datetime | str | None = None,
     routes: dict[str, listening.Route] | None = None,
-    app_hosts: dict[str, str] | None = None,
+    app_hosts: dict[str, agents.Shown] | None = None,
     person: str | None = None,
+    page_owners: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -4984,7 +5000,9 @@ def _render_decisions(
     def _mine(r: decisions.DecisionRow) -> bool:
         """May the reader answer it (`decisions.may_answer`)? Everything is theirs when no
         reader is named. A question that is not is drawn read-only, with no button."""
-        return person is None or decisions.addressed_ok_id(person, r.addressed_to)
+        return person is None or decisions.addressed_ok_owners(
+            person, r.addressed_to, page_owners
+        )
 
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
@@ -5241,7 +5259,7 @@ def _render_decisions(
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_context_block(row)}"
-            f"{_asker_line(row, app_hosts)}"
+            f"{_asker_line(row, app_hosts, person)}"
             f"{_route_line(row)}"
             f"{_since(row)}"
             f"{hint}"
@@ -5430,7 +5448,7 @@ def _render_decisions(
                 # he sees it without opening the entry.
                 + (_presence_line(row, "span") if row.answer == "c" else "")
                 + "</summary>"
-                f'<div class="settled-body">{_asker_line(row, app_hosts)}'
+                f'<div class="settled-body">{_asker_line(row, app_hosts, person)}'
                 f"{_provenance(row, app_hosts)}{pickup}{note}"
                 f"{thread_html}"
                 # SAID WHERE THE HAND IS. The section already carries "nothing
@@ -5572,7 +5590,7 @@ def gallery_router(db: Database) -> APIRouter:
             # A question SET ASIDE (its page archived or binned) is not waiting.
             "            and a.archived_at is null and a.deleted_at is null"
             # Nor is one this reader may not answer (it is addressed to someone else).
-            f"            and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
+            f"            and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
@@ -5653,7 +5671,7 @@ def gallery_router(db: Database) -> APIRouter:
             "          where d.artifact_id = a.id"
             "            and d.answer is null and d.kind <> 'form'"
             "            and a.archived_at is null"
-            f"            and {decisions.addressed_sql(person, 'd.addressed_to', 'me.person')}"
+            f"            and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
             "            and d.closed_at is null) as waiting"
             "  from artifact a join folder f on f.id = a.folder_id"
             + _PERSON_JOINS
@@ -7188,6 +7206,17 @@ def gallery_router(db: Database) -> APIRouter:
             and r.closed_at is None
             and (found := decisions.round_presence(db, row[2], r.id)) is not None
         }
+        with db.connect() as conn:
+            page_owners = agents.page_owners(conn, row[2])
+            app_hosts = {
+                who: found
+                for r in shown_rows
+                for who in (
+                    r.recorded_by if r.answer_source == decisions.MCP_SOURCE else None,
+                    r.asked_by,
+                )
+                if who and (found := agents.shown(conn, who)).via is not None
+            }
         asks_above, settled_below = _render_decisions(
             shown_rows,
             person=person.id,
@@ -7196,15 +7225,8 @@ def gallery_router(db: Database) -> APIRouter:
             round_view=round_view,
             presence=presence,
             listening_since=events.last_read(db, row[2]),
-            app_hosts={
-                who: found.host
-                for r in shown_rows
-                for who in (
-                    r.recorded_by if r.answer_source == decisions.MCP_SOURCE else None,
-                    r.asked_by,
-                )
-                if who and (found := mcp_apps.mcp_agent(db, who)) is not None
-            },
+            page_owners=page_owners,
+            app_hosts=app_hosts,
             routes=listening.for_decisions(
                 db,
                 row[2],

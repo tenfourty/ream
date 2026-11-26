@@ -98,9 +98,14 @@ def test_may_answer_is_the_person_it_is_addressed_to_else_the_owners(db):
         options=OPTIONS,
     )
     assert row.addressed_to is None
-    assert decisions.may_answer(owner, row) and not decisions.may_answer(ANN, row)
-    ann_s = decisions.DecisionRow(**{**row.__dict__, "addressed_to": "ann"})
-    assert decisions.may_answer(ANN, ann_s) and not decisions.may_answer(owner, ann_s)
+    with db.connect() as conn:
+
+        def ok(person, d):
+            return decisions.may_answer(conn, person, d, "ops")
+
+        assert ok(owner, row) and not ok(ANN, row)
+        ann_s = decisions.DecisionRow(**{**row.__dict__, "addressed_to": "ann"})
+        assert ok(ANN, ann_s) and not ok(owner, ann_s)
 
 
 def test_an_agent_never_reads_whom_a_question_is_addressed_to(db):

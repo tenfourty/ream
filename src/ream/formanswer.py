@@ -24,6 +24,7 @@ import unicodedata
 from datetime import UTC, date, datetime
 
 from ream import (
+    agents,
     decisions,
     events,
     formrecord,
@@ -443,7 +444,9 @@ def submit(
         if row is None:
             raise store.NotFound()
         artifact_id, form_name, asking_session, addressed_to, owner, title = row
-        if person is not None and not decisions.addressed_ok(person, addressed_to):
+        if person is not None and not decisions.addressed_ok(
+            conn, person, addressed_to, owner
+        ):
             raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
@@ -618,7 +621,9 @@ def relay(
             raise store.NotFound()
         artifact_id, form_name, asking_session, owner, addressed_to = row
         # A signed-in app is the owner's: a form for another person is out of its reach.
-        if by_app and not decisions.addressed_ok_id(settings.owner_id(), addressed_to):
+        if by_app and not decisions.addressed_ok_id(
+            conn, settings.owner_id(), addressed_to, owner
+        ):
             raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
@@ -657,8 +662,8 @@ def relay(
 
     # A relay is what the person the question is for said elsewhere: the owner's when it is
     # addressed to no one, else that person's (`decision.addressed_to`).
-    his = addressed_to or settings.owner_id()
     with db.connect() as conn, conn.transaction():
+        his = addressed_to or agents.page_owners(conn, owner)[0]
         decisions._require_live_page(conn, decision_id, artifact_id)
         current = conn.execute(
             "select answer_record, closed_at from decision where id = %s"  # noqa: S608 -- fixed text

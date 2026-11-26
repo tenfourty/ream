@@ -27,15 +27,29 @@ PAGE_OWNER = "page owner (step 4)"
 SEED = "deployment seed"
 KINDS = {REQUEST, PAGE_OWNER, SEED}
 
+# Slice 1 of the agents design (docs/agent/specs/2026-11-26-agents-and-watching-design.md) reviewed
+# each PAGE_OWNER row below. The two that decided "who answers a question for the page" moved to
+# `agents.page_owners`. The rest stay, for one reason each: they name the human who answered or
+# wrote (an author or actor field compared with the owner, `mcp.comment_image_label`,
+# `mcp_tools._comment_writer`/`_event_writer`, `partner.answered_body`, `oidc.owner_login`,
+# `folders.his`) or record an answer that came in from outside as the owner's
+# (`partner_in.*`, `readside.answer_here`); none of them asks whose agent a page belongs to.
 # (file, enclosing function) -> (kind, number of calls)
 SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("admin.py", "cmd_list_apps"): (SEED, 1),
+    ("agents.py", "shared_owner"): (
+        SEED,
+        1,
+    ),  # who owns a shared agent's pages (step 4 changes it)
+    ("agents.py", "person_label"): (SEED, 1),  # the owner's shown name is `owner_name`
     ("comments.py", "reopen"): (REQUEST, 1),
-    ("decisions.py", "addressed_ok_id"): (PAGE_OWNER, 1),
-    ("decisions.py", "addressed_sql"): (PAGE_OWNER, 1),
-    ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 2),
+    # Both answering predicates now ask `agents.page_owners`/`owner_sql` (no owner-id read of their own).
+    # record_elsewhere: the `said_by` default moved to page_owners; what stays is the signed-in
+    # app's person, the owner until slice 2 gives an app its own person.
+    ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 1),
     ("formanswer.py", "submit"): (REQUEST, 1),
-    ("formanswer.py", "relay"): (PAGE_OWNER, 2),
+    # relay: the default relayer moved to page_owners; the app check stays (as record_elsewhere).
+    ("formanswer.py", "relay"): (PAGE_OWNER, 1),
     ("formrecord.py", "source_of"): (SEED, 1),
     ("mcp.py", "comment_image_label"): (PAGE_OWNER, 1),
     ("mcp_tools.py", "_comment_writer"): (PAGE_OWNER, 1),

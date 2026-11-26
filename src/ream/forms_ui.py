@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ream import decisions, formanswer, formrecord, forms, people, store
+from ream import agents, decisions, formanswer, formrecord, forms, people, store
 from ream.content import _script_json
 
 _STYLE = (
@@ -68,11 +68,17 @@ def payload(db, artifact_id: str, person: str) -> dict:
                 (artifact_id,),
             ).fetchall()
         )
+        page = conn.execute(
+            "select agent from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+        owners = agents.page_owners(conn, page[0]) if page else ()
     # A form addressed to someone else gets no submit bar here (`decisions.may_answer`).
     shown = [
         f
         for f in forms.for_page(db, artifact_id)
-        if decisions.addressed_ok_id(person, addressed.get(f["decision_id"]))
+        if decisions.addressed_ok_owners(
+            person, addressed.get(f["decision_id"]), owners
+        )
     ]
     with db.connect() as conn:
         records = {

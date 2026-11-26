@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ream import (
+    agents,
     csp,
     events,
     holds,
@@ -226,36 +227,42 @@ class DecisionRow:
     answers: list | None = None
 
 
-def may_answer(person, d) -> bool:
-    """Whether `person` (a `people.Person`) may answer decision `d` (a `DecisionRow`): the person
-    it is addressed to, or, when it is addressed to no one, the page's owners (today the owner:
-    page ownership is single-owner until step 4 of the people design)."""
-    return addressed_ok(person, d.addressed_to)
+def may_answer(conn, person, d, agent: str) -> bool:
+    """Whether `person` (a `people.Person`) may answer decision `d` (a `DecisionRow`) on a page
+    of `agent`: the person it is addressed to, or, when it is addressed to no one, the page's
+    owners (`agents.page_owners`: a personal agent's person, else the deployment's owner)."""
+    return addressed_ok_id(conn, person.id, d.addressed_to, agent)
 
 
-def addressed_ok(person, addressed_to: str | None) -> bool:
+def addressed_ok(conn, person, addressed_to: str | None, agent: str) -> bool:
     """`may_answer` for a caller that holds only the stored `addressed_to`."""
-    if addressed_to is not None:
-        return addressed_to == person.id
-    return person.is_owner
+    return addressed_ok_id(conn, person.id, addressed_to, agent)
 
 
-def addressed_ok_id(person_id: str, addressed_to: str | None) -> bool:
-    """`addressed_ok` for a caller that holds only the person's id: the owner is the person whose
-    id is `settings.owner_id()` (a read, as a write, never lets anyone else answer for the owner)."""
+def addressed_ok_id(conn, person_id: str, addressed_to: str | None, agent: str) -> bool:
+    """`addressed_ok` for a caller that holds only the person's id and the page's agent."""
+    return addressed_ok_owners(person_id, addressed_to, agents.page_owners(conn, agent))
+
+
+def addressed_ok_owners(
+    person_id: str, addressed_to: str | None, owners: tuple[str, ...]
+) -> bool:
+    """The rule itself, for a caller that already holds the page's owners: `addressed_to` is the
+    person, and when it is null the page's owners answer (never anyone else)."""
     if addressed_to is not None:
         return addressed_to == person_id
-    return person_id == settings.owner_id()
+    return person_id in owners
 
 
-def addressed_sql(person_id: str, column: str, person_expr: str = "%s") -> str:
-    """The SQL twin of `addressed_ok_id`: true for the rows `person_id` may answer, `column`
-    being the `addressed_to` column. `person_expr` is how the person is spelled in the query:
-    the default `%s` is one bound parameter, which the caller binds to `person_id`; a column
-    already in the query (`me.person`) needs none. It appears once, either way."""
-    if person_id == settings.owner_id():
-        return f"({column} is null or {column} = {person_expr})"
-    return f"{column} = {person_expr}"
+def addressed_sql(
+    column: str, person_expr: str = "%s", agent_col: str = "artifact.agent"
+) -> str:
+    """The SQL twin of `addressed_ok_id`: true for the rows the person may answer, `column` being
+    the `addressed_to` column and `agent_col` the page's agent. A row addressed to no one goes to
+    the page's owner (`agents.owner_sql`). `person_expr` is how the person is spelled in the
+    query: the default `%s` is one bound parameter, which the caller binds to the person's id; a
+    column already in the query (`me.person`) needs none. It appears once, either way."""
+    return f"coalesce({column}, {agents.owner_sql(agent_col)}) = {person_expr}"
 
 
 # Whose question it is, in SQL: the asker where an app asked on someone else's page, else the
@@ -1895,12 +1902,14 @@ def record_elsewhere(
         # session, so a waiter listening for its own session never heard it --
         # found by the first outside agent (homelab-ij8.106).
         asking_session = row[_SESSION_IDX]
-        # Whose answer this is: the person the question is addressed to, else the owner (what
+        # Whose answer this is: the person the question is addressed to, else the page's owner (what
         # was said elsewhere was said by them; `answered_by` and the receipt follow it).
-        said_by = row[_ADDRESSED_TO_IDX] or settings.owner_id()
+        said_by = row[_ADDRESSED_TO_IDX] or agents.page_owners(conn, row[-1])[0]
         # A signed-in app is the owner's (only the owner signs in): it cannot pass on what
         # someone else said, so a question for another person is out of its reach.
-        if by_app and not addressed_ok_id(settings.owner_id(), row[_ADDRESSED_TO_IDX]):
+        if by_app and not addressed_ok_id(
+            conn, settings.owner_id(), row[_ADDRESSED_TO_IDX], row[-1]
+        ):
             raise store.NotFound()
 
         if _set_aside_fields(row)["set_aside"]:
@@ -2128,7 +2137,9 @@ def answer(
         # page or from Slack. Indistinguishable from "no such decision", as closed is.
         if _set_aside_fields(row)["set_aside"]:
             raise store.NotFound()
-        if person is not None and not addressed_ok(person, row[_ADDRESSED_TO_IDX]):
+        if person is not None and not addressed_ok(
+            conn, person, row[_ADDRESSED_TO_IDX], row[-1]
+        ):
             raise store.NotFound()
 
         letters = {option["letter"] for option in options}
@@ -2759,7 +2770,7 @@ def across_seats(
     if person is not None:
         # Only what this person may answer (people design, slice 3). Unset: every row, as the
         # agent feeds read it; they never pass a person.
-        sql += " and " + addressed_sql(person, "decision.addressed_to")
+        sql += " and " + addressed_sql("decision.addressed_to")
         params.append(person)
     if after is not None:
         sql += _AFTER.format(op=">")
@@ -3005,7 +3016,10 @@ def open_counts(db: Database, person: str | None = None) -> tuple[int, int, int]
     person may answer, as `across_seats(person=)` lists."""
     where, params = "", ()
     if person is not None:
-        where, params = " and " + addressed_sql(person, "d.addressed_to"), (person,)
+        where, params = (
+            " and " + addressed_sql("d.addressed_to", agent_col="a.agent"),
+            (person,),
+        )
     with db.connect() as conn:
         found = conn.execute(
             "select d.id, d.kind, d.depends_on from decision d"  # noqa: S608 -- fixed text
