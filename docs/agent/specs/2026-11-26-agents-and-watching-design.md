@@ -1,6 +1,6 @@
 # Agents: personal or shared, ownership by agent, the via line, watching pages (26 Nov 2026)
 
-Status: slices 1 and 2 built (see "Slice 1 as built", "Slice 2 as built"); slices 3-4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
+Status: slices 1, 2 and 3 built (see "Slice 1 as built", "Slice 2 as built", "Slice 3 as built"); slice 4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
 artifacts office's decisions of 24 and 26 Nov 2026 (reversible), after checking the blueprint against the code
 (the corrections are listed under "Where this differs from the blueprint").
 
@@ -292,6 +292,42 @@ Sites classified (every reader of the reach or of readability):
   through `_owned`; a refused page is the same `NotFound` as a missing one, so the 404s are identical.
 
 Run here on SQLite and on the test fixture's default Postgres, one file at a time (not the full suite: CI).
+
+## Slice 3 as built (26 Nov 2026)
+
+`src/ream/watches.py` (new): `watch`, `unwatch`, `listing`, `fan_out`; table `page_watch` (SQLite step 41); the kinds
+`watched_page_changed` and `watched_comment_added` (`events.WATCHED_KINDS`, left out of `GET /events` and of every wait
+unless asked for); routes `PUT/DELETE /pages/{id}/watch` (both words) and `GET /watches`; MCP `watch_page`, `unwatch_page`,
+`watches`; `ream watch`, `ream unwatch`, `ream watches`; news entry 2026-11-26a; `CLIENT_LEVEL` 11. Tests:
+`tests/test_watch.py`, `test_watch_events_opt_in.py`, `test_watch_migration.py`.
+
+Choices made while building:
+
+- **Who hears a change (readability).** The fan-out re-checks, at the moment of the change, that each watcher can read the
+  page: an app watcher by `access.reads_sql(person)`, a key watcher by `agent = watcher or agents_can_read`. A page that
+  closed since goes silent for that watcher.
+- **Coalescing is one atomic conditional update.** `update page_watch set changed_notified_at = now where ... and
+  (changed_notified_at is null or <= now - 10 minutes)`; the rowcount is the claim, so two racing changes cannot both notify.
+- **The cap counts only watches the agent can still read** (what its own list shows), so a watch on a page that closed does
+  not use up a place. A rename merge can exceed the cap (it keeps one row per page from both names and does not refuse).
+- **Letting go always works.** `DELETE` of a held watch removes it even when the page is no longer readable. With no row:
+  404 for a page the caller cannot read (identical to a missing one), 200 `removed: false` for one it can.
+- **Who is not told.** The page's own agent (it has `comment_added` and its own changes) and the actor are skipped;
+  a comment that already reaches the watcher as `comment_added` is not sent twice. A held comment sends nothing.
+- **`PUT` on your own page** answers 200 and adds nothing (the owner already hears everything).
+- **Fence of a watching event.** `agent` is the watcher, so the fence cannot use it: `whats_new` adds `page_agent` (the page's
+  owner, read when the feed is read) and the labeller fences the title, a change's summary and a mark's quote under that
+  agent, another agent's comment under its author, and returns bare only the owner's own plain comment words, which ride in
+  `note`. A writer it cannot name is fenced under "an unknown writer", never as the owner.
+
+Known limits:
+
+- `wait_for_answer` shares its cursor with `whats_new` and does not include watching events, so its cursor can pass one that
+  only `whats_new` would return; documented in `docs/mcp.md` (call `whats_new` to collect them).
+- A held comment that is later released (`holds.release`) emits `comment_added` to the page's agent only, and no
+  `watched_comment_added`: the design says nothing about release, so a watcher never hears of a comment that was held when
+  written. Not changed here.
+- `page_agent` is read at feed time, so a page transferred since names its new agent on an older event.
 
 ## Guards
 
