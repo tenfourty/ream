@@ -16,8 +16,10 @@ owner as person #1 (`seed_person`); its row moves with the id.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
+from ream import settings
 from ream.db import Database, Rollback
 from ream.settings import OWNER_ID
 
@@ -42,7 +44,32 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("folder_alias.owner", ""),
     # Person #1, the owner (people design, slice 1). The other people's ids are not the owner's.
     ("person.id", ""),
+    # Per-person state (slice 2): what the owner has read, prefers and pinned, and the passes
+    # minted for them.
+    ("page_read.person", ""),
+    ("human_pref.person", ""),
+    ("page_pin.person", ""),
+    ("frame_pass.person", ""),
+    # Per-person answers and receipts (slice 3): whom a question is addressed to, each person's
+    # own record of a form, and whose answer a receipt is about.
+    ("decision.addressed_to", ""),
+    ("form_answer.person", ""),
+    ("receipt.person", ""),
+    # Gallery sign-in (slice 4): the sessions of the people signed in.
+    ("person_session.person", ""),
+    # The person each app agent belongs to (agents design, slice 1): `agents.page_owners` reads
+    # `mcp_agent.person` to decide who answers a question with no `addressed_to`. The agent's name
+    # (`<person>--<host>`) is a stored name and stays. The consents and the sign-ins in flight
+    # name the same person.
+    ("mcp_agent.person", ""),
+    ("mcp_app.person", ""),
+    ("mcp_signin.person", ""),
+    # The person a key's agent belongs to (agents design, slice 4): a personal key reads what its
+    # person reads, so `change-owner` moves it with the owner id.
+    ("agent_person.person", ""),
 )
+
+log = logging.getLogger("ream.owner")
 
 
 class OwnerMismatch(Exception):
@@ -58,8 +85,25 @@ class OwnerMismatch(Exception):
         self.configured = configured
 
 
+class IdentityHeld(Exception):
+    """Another person already holds the sign-in identity the settings give the owner."""
+
+
 class Refused(Exception):
     """A change of owner the service will not do, with a reason fit to print."""
+
+
+# Where an id already in use would collide with the rows `change_owner` moves onto it:
+# `person.id` is the primary key, and `mcp_agent` and `mcp_app` are unique per (person, client).
+# `agent_person` has no unique key on `person`, but a new owner id a person's machine already carries
+# would silently join that person's keys to the owner's.
+# (`mcp_signin.person` has no unique key, so a clash there breaks nothing.)
+_HELD_BY: tuple[tuple[str, str], ...] = (
+    ("person", "id"),
+    ("mcp_agent", "person"),
+    ("mcp_app", "person"),
+    ("agent_person", "person"),
+)
 
 
 def stored(db: Database) -> str | None:
@@ -93,11 +137,39 @@ def check(db: Database, configured: str) -> str:
 
 def seed_person(conn, owner_id: str) -> None:
     """Person #1: the owner's row in `person`, made if it is not there. The issuer and subject
-    come from the pin the owner's first OIDC sign-in wrote (`oidc.PIN_KEY`, "<issuer> <sub>"),
-    when there is one; a row that already exists is left as it is."""
+    come from `REAM_OIDC_ISSUER` + `REAM_OIDC_OWNER_SUBJECT` when both are set (the setting
+    wins over what the row holds; a WARNING, naming no value, says the row was changed), else
+    from the pin the owner's first OIDC sign-in wrote (`oidc.PIN_KEY`, "<issuer> <sub>") into a
+    row that has none. `IdentityHeld` when another person holds the pair the settings name."""
     conn.execute(
         "insert into person (id) values (%s) on conflict (id) do nothing", (owner_id,)
     )
+    cfg = settings.current()
+    if cfg.oidc_issuer and cfg.oidc_owner_subject:
+        issuer, subject = cfg.oidc_issuer, cfg.oidc_owner_subject
+        holder = conn.execute(
+            "select id from person where issuer = %s and subject = %s",
+            (issuer, subject),
+        ).fetchone()
+        if holder is not None and holder[0] != owner_id:
+            raise IdentityHeld(
+                "another person holds the sign-in identity REAM_OIDC_ISSUER and"
+                " REAM_OIDC_OWNER_SUBJECT give the owner: the owner's row cannot take it"
+            )
+        row = conn.execute(
+            "select issuer, subject from person where id = %s", (owner_id,)
+        ).fetchone()
+        if (row[0], row[1]) != (issuer, subject):
+            conn.execute(
+                "update person set issuer = %s, subject = %s where id = %s",
+                (issuer, subject, owner_id),
+            )
+            if row[0] is not None or row[1] is not None:
+                log.warning(
+                    "the owner's stored sign-in identity differed from REAM_OIDC_ISSUER and"
+                    " REAM_OIDC_OWNER_SUBJECT; the settings were used"
+                )
+        return
     pin = conn.execute(
         "select value from service_meta where key = %s", ("oidc_owner_sub",)
     ).fetchone()
@@ -114,7 +186,8 @@ def change_owner(db: Database, new: str, *, dry_run: bool) -> dict[str, int]:
     """Move the database to owner id `new`: rewrite every stored column in one transaction
     and record `new`. Returns the rows changed (or that would change) per `table.column`,
     plus `service_meta`. Raises `Refused` for an invalid id, an id some agent already
-    holds, an unrecorded database, or `new` equal to the stored one."""
+    holds, an id a person or an app agent's person already holds (the move would collide with
+    that row), an unrecorded database, or `new` equal to the stored one."""
     if not OWNER_ID.fullmatch(new):
         raise Refused(f"invalid owner id {new!r}: must match {OWNER_ID.pattern!r}")
     counts: dict[str, int] = {}
@@ -140,6 +213,22 @@ def change_owner(db: Database, new: str, *, dry_run: bool) -> dict[str, int]:
             raise Refused(
                 f"{new!r} is the name of an agent that already has keys or pages;"
                 " an owner id must not be an agent's name"
+            )
+        # The rows moved to `new` must not meet rows already there: `person.id` is the key and
+        # the app tables are unique per (person, client). Said before anything is written.
+        held = [
+            f"{table}.{col}"
+            for table, col in _HELD_BY
+            if conn.execute(
+                f"select 1 from {table} where {col} = %s limit 1",  # noqa: S608 -- fixed identifiers from _HELD_BY
+                (new,),
+            ).fetchone()
+            is not None
+        ]
+        if held:
+            raise Refused(
+                f"{new!r} is already held in {', '.join(held)}; an owner id must not be"
+                " one a person or an app agent already has"
             )
         for column, extra in _COLUMNS:
             table, col = column.split(".")

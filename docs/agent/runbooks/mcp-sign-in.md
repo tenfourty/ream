@@ -34,7 +34,10 @@ All of these are server settings; a missing or bad one refuses to start and name
    - Register `<gallery origin>/oauth/callback` as the redirect URI at the provider.
    - Optional: `REAM_OIDC_OWNER_CLAIM` / `REAM_OIDC_OWNER_VALUE` (who the reader is; with `email`
      the provider must say `email_verified`), `REAM_OIDC_OWNER_SUBJECT` (pin the provider `sub`;
-     unset, the first owner sign-in pins issuer and `sub`), `REAM_OIDC_SCOPES`.
+     unset, the first owner sign-in pins issuer and `sub`; set with the issuer, it also fills or
+     rewrites person #1's issuer and `sub` at every start, logs a WARNING without values when it
+     replaced a different stored pair, and start-up refuses with `IdentityHeld` if another person
+     holds that pair), `REAM_OIDC_SCOPES`.
 4. Which apps may ask: `REAM_MCP_ALLOWED_CLIENT_HOSTS`, `REAM_MCP_TRUSTED_CLIENT_HOSTS` (labelled
    Verified on the consent page), `REAM_MCP_SELF_REGISTRATION_REDIRECTS`. See `docs/mcp.md`.
 5. Lifetimes, all positive whole numbers: `REAM_MCP_ACCESS_TOKEN_TTL_SECS` (3600),

@@ -51,6 +51,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ValidationError
 
 from ream import (
+    agents,
     api,
     comments,
     decisions,
@@ -71,6 +72,7 @@ from ream import (
     templates,
     text,
     textvars,
+    watches,
 )
 from ream.mcp import (
     OWNER,
@@ -237,6 +239,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
         (
             "created_at",
             "updated_at",
+            "watching_since",
             "archived_at",
             "pinned_at",
             "deleted_at",
@@ -266,9 +269,15 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "answered_by",
             "acknowledged_by",
             "recorded_by",
+            "page_agent",
+            # A form's `answers[]` (people slice 3b): the person, and who gave a field.
+            "person",
+            "by",
         ),
         _agent_name,
     ),
+    "submit_id": _ID,
+    "source": one_of(*decisions.CORE_SOURCES, "slack"),
     "folder": _SLUG,
     **dict.fromkeys(("slug", "previous_slug"), _SLUG),
     "kind": _KINDS,
@@ -646,6 +655,86 @@ def _page_stats(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     return ToolOutput(pageviews.report(call.db, page_id, days), written_by=call.agent)
 
 
+# --- watch_page, unwatch_page, watches ------------------------------------------------
+#
+# Following a page (`watches.py`). They hold the caller's own list and change nothing on a
+# page, so they ask for ream:read; the events they lead to arrive in whats_new.
+
+_NEXT_WATCH = (
+    "Its new versions and other people's comments now arrive in whats_new as "
+    "watched_page_changed and watched_comment_added."
+)
+
+
+@tool(
+    "watch_page",
+    title="Follow a page",
+    description=(
+        "Follow a page you can read, yours or another agent's that is open to agents, "
+        "so that whats_new tells you when it gets a new version and when someone else "
+        "comments on it (at most one change a page every 10 minutes). At most 200 "
+        "pages. Repeating it is fine. Not for your own questions or comments: those "
+        "already reach you."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    next_step=_NEXT_WATCH,
+    fences=Fences(ream=_REAM),
+    input_schema=_schema({"page_id": PAGE_ID}, ("page_id",)),
+)
+def _watch_page(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id"})
+    page_id = _str(arguments, "page_id", required=True)
+    return jsonable_encoder(
+        api.watch_page(call.db, call.agent, page_id, call.session or None)
+    )
+
+
+@tool(
+    "unwatch_page",
+    title="Stop following a page",
+    description=(
+        "Stop following a page you followed with watch_page. Nothing else about the "
+        "page changes. Not for deleting a page: use delete_page."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    fences=Fences(ream=_REAM),
+    input_schema=_schema({"page_id": PAGE_ID}, ("page_id",)),
+)
+def _unwatch_page(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id"})
+    page_id = _str(arguments, "page_id", required=True)
+    return jsonable_encoder(api.unwatch_page(call.db, call.agent, page_id))
+
+
+@tool(
+    "watches",
+    title="Pages you follow",
+    description=(
+        "The pages you follow with watch_page and can still read, newest first. A page "
+        "that closed to you drops out of the list. Not for what is new on them: use "
+        "whats_new."
+    ),
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    # A page's title is by its agent.
+    fences=Fences(ream=_REAM, writer=_by("agent")),
+    input_schema=_schema({"limit": LIMIT}),
+)
+def _watches(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"limit"})
+    limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)
+    rows = watches.listing(call.db, call.agent)
+    return {
+        "watches": jsonable_encoder(rows[:limit]),
+        "truncated": len(rows) > limit,
+    }
+
+
 # --- get_template ---------------------------------------------------------------------
 
 
@@ -799,8 +888,9 @@ def _comment_image(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     title="Open questions",
     description=(
         "Open questions waiting on the person, in inbox order: the ones you asked (scope "
-        "mine), or every office's (scope all, needs decisions:read-all); a signed-in app "
-        "gets those on every page the person can read. Not for answers: an answered "
+        "mine), or every office's (scope all, needs decisions:read-all); the owner's "
+        "signed-in app gets those on every page the owner can read, another person's "
+        "app those on its own pages. Not for answers: an answered "
         "question leaves this list; its answer is in whats_new."
     ),
     read_only=True,
@@ -898,12 +988,41 @@ def _save_seen(call: Call, seq: int) -> None:
 def _event_writer(obj: dict, key: str):
     """An event's text is its actor's. When the owner is the actor his own words (`note`)
     go back bare, but the summary still quotes agents' text (an answer's option label, a
-    quoted passage), so it is fenced and labelled with the page's agent."""
+    quoted passage), so it is fenced and labelled with the page's agent. For a watcher's event
+    `agent` is the watcher, so the page's agent is `page_agent` (`_with_page_agent`); when
+    that is unknown the text is fenced under a label saying so, never left bare."""
     if "actor" not in obj:
         return None
     if obj["actor"] != settings.owner_id():
         return obj["actor"] or None
+    if obj.get("kind") in events.WATCHED_KINDS:
+        return OWNER if key == "note" else obj.get("page_agent") or _UNKNOWN_WRITER
     return OWNER if key == "note" else obj.get("agent") or None
+
+
+_UNKNOWN_WRITER = "an unknown writer"
+
+
+def _with_page_agent(db, rows: list[dict]) -> list[dict]:
+    """Each watched event with `page_agent`: the agent that owns the page it is about (the
+    writer of its title, a change's summary and a mark's quote), read now."""
+    ids = sorted({r["artifact_id"] for r in rows if r["kind"] in events.WATCHED_KINDS})
+    if not ids:
+        return rows
+    marks = ", ".join(["%s"] * len(ids))
+    with db.connect() as conn:
+        owners = dict(
+            conn.execute(
+                f"select id, agent from artifact where id in ({marks})",  # noqa: S608 -- only placeholders are interpolated
+                tuple(ids),
+            ).fetchall()
+        )
+    return [
+        {**r, "page_agent": owners.get(r["artifact_id"], "")}
+        if r["kind"] in events.WATCHED_KINDS
+        else r
+        for r in rows
+    ]
 
 
 @tool(
@@ -948,7 +1067,10 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
         saved = _seen(call)
         # A key that has never looked starts from now, not from its whole history.
         since = pre if saved is None else saved
-    rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
+    # whats_new is where watching arrives: the one feed that asks for the watched kinds.
+    rows = events.list_for_agent(
+        call.db, call.agent, since=since, limit=limit, include_watched=True
+    )
     cursor = events.safe_cursor(since, pre, rows, limit)
     _save_seen(call, cursor)
     out = [
@@ -960,7 +1082,7 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
         for row in rows
     ]
     return {
-        "events": jsonable_encoder(out),
+        "events": jsonable_encoder(_with_page_agent(call.db, out)),
         "since": since,
         "cursor": cursor,
         "more": len(rows) >= limit,
@@ -1033,7 +1155,8 @@ def _gone(call: Call) -> bool:
     title="Wait for an answer or comment",
     description=(
         "Wait until the person answers or comments on your pages, then answer the events "
-        "whats_new would (same cursor). Holds up to seconds (default 45, at most 50); "
+        "whats_new would, watched pages' too (same cursor; watched events alone never end "
+        "the wait). Holds up to seconds (default 45, at most 50); "
         "nothing by then answers timed_out true: call again. Use it instead of a ream "
         "wait process. Not for a look that must not block: use whats_new."
     ),
@@ -1112,10 +1235,13 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         }
         early = took < seconds - 1
         return ToolOutput(quiet, next=_NEXT_WAIT_BUSY if early else None)
-    # Woken: everything since the cursor, the agent's own events too, so the cursor
-    # whats_new shares never passes an event neither tool answered.
+    # Woken: everything since the cursor, the agent's own events and watched ones too
+    # (they never ended the wait above, but they ride along here), so the cursor whats_new
+    # shares never passes an event neither tool answered.
     pre = events.latest_seq(call.db, call.agent)
-    rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
+    rows = events.list_for_agent(
+        call.db, call.agent, since=since, limit=limit, include_watched=True
+    )
     cursor = events.safe_cursor(since, pre, rows, limit)
     # A client that hung up mid-hold never reads this answer: leave the cursor, so the
     # next wait or whats_new answers these events again rather than losing them.
@@ -1131,7 +1257,7 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     ]
     return ToolOutput(
         {
-            "events": jsonable_encoder(out),
+            "events": jsonable_encoder(_with_page_agent(call.db, out)),
             "since": since,
             "cursor": cursor,
             "more": len(rows) >= limit,
@@ -1761,7 +1887,8 @@ def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput | dict:
     call.after.extend(later)
     shown = jsonable_encoder(out)
     if call.app is not None:  # "Jeremy, via claude.ai" (11.1); stored as the agent
-        shown["author_name"] = mcp_apps.display_name(call.db, call.agent)
+        with call.db.connect() as conn:
+            shown["author_name"] = agents.shown(conn, call.agent).text()
     return ToolOutput({"comment": shown}, written_by=page.agent)
 
 

@@ -428,4 +428,6 @@ allow only the owner, by a subject rule with an explicit deny after it.
 
 The owner is person #1 in a `person` table, and a gallery request has a person (`people.current`),
 which is the owner from settings until gallery sign-in exists. Access is still single-owner. The design
-and the slices are in `docs/agent/specs/2026-11-24-people-design.md`.
+and the slices are in `docs/agent/specs/2026-11-24-people-design.md`. What a person has read (`page_read`),
+prefers (`human_pref`) and pinned (`page_pin`) is theirs, keyed by the person's id; the gallery reads and writes
+it through the request's person, and an agent's view of "has he read it" and "did he pin it" is the owner's.

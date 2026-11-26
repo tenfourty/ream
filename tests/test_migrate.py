@@ -212,7 +212,7 @@ def _seed(database: Database) -> None:
                 " answer_note, answered_at, answered_by, created_at, answer_source,"
                 " recorded_by, said_at, session, kind, review_mode, context, topic_id,"
                 " topic_title, depends_on, replaces, replaced_by, urgency, blocked_on,"
-                " needed_by, for_offices"
+                " needed_by, for_offices, addressed_to"
             ),
             [
                 "d1",
@@ -242,6 +242,7 @@ def _seed(database: Database) -> None:
                 "the deploy",
                 T1,
                 j(["beta", "gamma"]),
+                "jeremy",
             ],
         ),
         (
@@ -256,6 +257,11 @@ def _seed(database: Database) -> None:
                 " form_name"
             ),
             ["d3", "a1", 2, "Rollout ☃", j([]), T0, "form", "rollout"],
+        ),
+        (
+            "form_answer",
+            "decision_id, person, answer_record, answered_at",
+            ["d3", "jeremy", j({"answers": {"region": "Zürich"}}), T1],
         ),
         (
             "decision_form",
@@ -282,7 +288,7 @@ def _seed(database: Database) -> None:
             "receipt",
             (
                 "id, subject_kind, subject_id, state, note, link, agent, session,"
-                " comment_id, created_at, expires_at, voided_at"
+                " comment_id, created_at, expires_at, voided_at, person"
             ),
             [
                 "r1",
@@ -297,6 +303,7 @@ def _seed(database: Database) -> None:
                 T1,
                 T1,
                 None,
+                "jeremy",
             ],
         ),
         (
@@ -375,9 +382,9 @@ def _seed(database: Database) -> None:
             "frame_pass",
             (
                 "token_sha256, artifact_id, version, expires_at, used_at, created_at,"
-                " changes_from"
+                " changes_from, person"
             ),
-            ["c" * 64, "a1", 1, T1, None, T0, None],
+            ["c" * 64, "a1", 1, T1, None, T0, None, "jeremy"],
         ),
         (
             "connect_request",
@@ -400,7 +407,12 @@ def _seed(database: Database) -> None:
                 "k1",
             ],
         ),
-        ("page_read", "artifact_id, read_version, read_at", ["a1", 2, T1]),
+        (
+            "page_read",
+            "person, artifact_id, read_version, read_at",
+            ["jeremy", "a1", 2, T1],
+        ),
+        ("page_pin", "person, artifact_id, pinned_at", ["jeremy", "a1", T1]),
         (
             "page_view_day",
             "artifact_id, day, kind, views",
@@ -408,9 +420,32 @@ def _seed(database: Database) -> None:
         ),
         ("person", "id, issuer, subject, name", ["jeremy", "https://idp", "s1", "J"]),
         (
+            "person_signin",
+            (
+                "id, state_sha256, browser_sha256, oidc_nonce, oidc_verifier,"
+                " next_path, created_at, expires_at"
+            ),
+            ["si1", "st", "br", "n", "v é", "/a?b=1", T0, T1],
+        ),
+        (
+            "person_session",
+            "token_sha256, person, created_at, expires_at, last_seen_at",
+            ["tok1", "jeremy", T0, T1, T1],
+        ),
+        (
             "page_viewer",
             "artifact_id, kind, viewer, views, last_at, counted_at",
             ["a1", "agent", "beta é", 2, T1, T0],
+        ),
+        (
+            "page_watch",
+            "agent, artifact_id, created_at, session, changed_notified_at",
+            ["beta é", "a1", T0, "beta/ü", T1],
+        ),
+        (
+            "agent_person",
+            "agent, person, set_at, set_by",
+            ["beta é", "ana-é", T0, "owner/ü"],
         ),
         (
             "email_share",
@@ -430,7 +465,11 @@ def _seed(database: Database) -> None:
             "cookie_sha256, share_id, created_at, expires_at",
             ["0" * 64, "e1", T0, T1],
         ),
-        ("human_pref", "key, value, updated_at", ["theme", "dark", T0]),
+        (
+            "human_pref",
+            "person, key, value, updated_at",
+            ["jeremy", "theme", "dark", T0],
+        ),
         (
             "idempotency",
             "agent, route, key, body_sha256, status, response, expires_at",
@@ -598,6 +637,8 @@ def _seed(database: Database) -> None:
         ),
     ]
     with database.connect() as conn, conn.transaction():
+        # the `db` fixture records the owner; the seed writes its own row for it below
+        conn.execute("delete from service_meta where key = 'owner_id'")
         for table, cols, values in rows:
             marks = ", ".join(["%s"] * len(values))
             conn.execute(f"insert into {table} ({cols}) values ({marks})", values)  # noqa: S608

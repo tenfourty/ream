@@ -70,3 +70,12 @@ def test_receipt_shows_on_list_and_ack_is_still_seen(
     capsys.readouterr()
     _run(["list"], path)
     assert "working: on it" in capsys.readouterr().out
+
+
+def test_receipt_with_no_body_back_prints_the_asked_state_and_does_not_crash(
+    live, key_file, asked, monkeypatch, capsys
+):
+    path, _ = key_file
+    monkeypatch.setattr(decide, "_request", lambda *a, **k: None)
+    assert _run(["receipt", asked.id, "wont-do", "--note", "no"], path) == 0
+    assert f"{asked.id}: receipt wont-do" in capsys.readouterr().out

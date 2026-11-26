@@ -39,6 +39,7 @@ from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
+    agents,
     api,
     hosts,
     keys,
@@ -488,6 +489,11 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
 # --- whoami ---------------------------------------------------------------------------
 
 
+def _key_reach(db: Database, agent: str) -> reach.Reach:
+    with db.connect() as conn:
+        return agents.key_reach(conn, agent)
+
+
 @tool(
     "whoami",
     title="Who am I",
@@ -509,9 +515,13 @@ def _whoami(call: Call, _arguments: dict[str, Any]) -> ToolOutput:
     me = api.me_view(call.db, call.request, call.agent, call.session)
     me["permissions"] = sorted(call.permissions, key=PERMISSIONS.index)
     if call.app is not None:  # a signed-in app: who it is shown as, and its reach
-        me["shown_as"] = mcp_apps.display_name(call.db, call.agent)
+        with call.db.connect() as conn:
+            me["shown_as"] = agents.shown(conn, call.agent).text()
+        reads = "every page the owner can read, closed to agents included"
+        if call.reach.reads_person():
+            reads = f"the pages of {call.reach.person}'s own agents and the pages open to agents"
         me["reach"] = {
-            "reads": "every page the owner can read, closed to agents included",
+            "reads": reads,
             "changes_pages_of": list(call.reach.writes()),
         }
     return ToolOutput(structured=me)
@@ -1267,7 +1277,8 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
                 version=version,
                 # A key holds every permission, within its own reach (section 11.3).
                 permissions=frozenset(PERMISSIONS),
-                reach=reach.of_key(who.agent),
+                # A personal key reads wider, never writes wider (agents design, slice 4).
+                reach=await run_in_threadpool(_key_reach, db, who.agent),
             )
         # Anything else a tool raises is a bug: FastAPI's 500, logged as any route's.
         status, body = await run_in_threadpool(_dispatch, call, message)

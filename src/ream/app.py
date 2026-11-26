@@ -18,6 +18,7 @@ from ream import (
     ratelimit,
     scanslots,
     settings,
+    signin,
 )
 from ream.api import agent_card_response, agent_router
 from ream.content import create_content_app
@@ -130,6 +131,10 @@ def create_gallery_app(
     _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
+    # The gate goes in BEFORE the access log below, so the log wraps it and sees its refusals.
+    if db is not None:
+        signin.install_gate(app, db)
+
     @app.middleware("http")
     async def _log_gallery_requests(request: Request, call_next):
         """One line per GALLERY request. The content origin is never logged.
@@ -179,6 +184,7 @@ def create_gallery_app(
         app.include_router(agent_router(db, limiter))
         app.include_router(mcp_router(db, limiter))
         app.include_router(oauth_router(db, limiter))
+        app.include_router(signin.signin_router(db))
         app.include_router(gallery_router(db))
         _well_known(app)
     return app

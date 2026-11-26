@@ -102,13 +102,22 @@ def test_the_gallery_csp_names_the_content_origin_scheme(fresh):
 
 
 def test_the_real_entrypoint_logs_what_a_fresh_install_defaulted(
-    fresh, dsn, monkeypatch, caplog
+    fresh, unstarted, monkeypatch, caplog
 ):
-    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("DATABASE_URL", unstarted)
     with caplog.at_level(logging.WARNING, logger="ream.serve"):
         app_from_env()
     assert "REAM_GALLERY_ORIGIN" in caplog.text
     assert "REAM_OWNER_ID" in caplog.text
+
+
+@pytest.fixture()
+def unstarted(db) -> str:
+    """The DSN of a database no service has started: the `db` fixture records the suite's owner
+    as a started service has, and a start under the fresh-install owner would refuse it."""
+    with db.connect() as conn:
+        conn.execute("delete from service_meta where key = 'owner_id'")
+    return db.dsn
 
 
 def _serve_warnings(caplog):
@@ -120,9 +129,9 @@ def _serve_warnings(caplog):
 
 
 def test_start_up_warns_when_exposed_without_a_trusted_ip_header(
-    fresh, dsn, monkeypatch, caplog
+    fresh, unstarted, monkeypatch, caplog
 ):
-    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("DATABASE_URL", unstarted)
     monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
     monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
     monkeypatch.setenv("REAM_CONTENT_DOMAIN", "pages.example")
@@ -130,9 +139,9 @@ def test_start_up_warns_when_exposed_without_a_trusted_ip_header(
 
 
 def test_start_up_is_silent_about_the_ip_header_when_set_or_on_loopback(
-    fresh, dsn, monkeypatch, caplog
+    fresh, unstarted, monkeypatch, caplog
 ):
-    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("DATABASE_URL", unstarted)
     monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
     monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
     monkeypatch.setenv("REAM_CONTENT_DOMAIN", "pages.example")

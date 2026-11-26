@@ -1643,3 +1643,18 @@ repo under it; it does not keep git addresses alive.
 **Evidence:** homelab's probe of a throwaway repo on the live forge, 24 Nov 2026, reported in this
 project's rename thread (tracker item runcove-5t3oj.83.5). The token for the public-main read follows the rename too (a team grant stored by repo
 id; homelab, from a forge read). Branch `ci/rename-git-urls`.
+
+## The homelab's agents all stay shared; no machine is marked personal (26 Nov 2026)
+
+**Chosen:** on the homelab's Ream every agent key stays shared. No machine, Jeremy's own included, is
+tied to him as a personal key, so a page closed to agents stays closed to every agent, as before
+personal keys existed. A personal key (slice 4 of the agents design,
+`docs/agent/specs/2026-11-26-agents-and-watching-design.md`) is available to any deployment that wants
+one; this decision only sets the homelab's use of it.
+
+**Not chosen:** marking Jeremy's own machines personal, so that their agents read his closed pages as
+him and comment there. Nothing needed it, and shared keys change nothing. It is undone with one admin
+command or on the Machines page if that changes.
+
+**Evidence:** Jeremy answered (a) to the lettered question in #hq-artifacts on 26 Nov 2026 (decision
+d_01M8BV48TQYDC13ZEX9XHDZD83), after slice 4 landed at d389179. Tracker item runcove-5t3oj.160.6.

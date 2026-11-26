@@ -24,6 +24,7 @@ import unicodedata
 from datetime import UTC, date, datetime
 
 from ream import (
+    agents,
     decisions,
     events,
     formrecord,
@@ -33,6 +34,7 @@ from ream import (
     settings,
     store,
 )
+from ream import reach as caller_reach
 from ream.db import jsonb
 
 MAX_HISTORY = 50
@@ -195,20 +197,220 @@ def _still_latest(conn, decision_id, latest) -> None:
         )
 
 
-def _on_latest(conn, decision_id, record, latest, fields, complete):
+def on_latest(conn, decision_id, record, latest, fields, complete, *, strict=True):
     """The record brought onto the form's latest stored version. `forms.sync` does this
-    at a republish; this catches a record left on an older version (one written before
-    the carry rules existed). Only ever forwards: a record already past `latest` means the
-    caller's read is stale (`_still_latest` refuses that first)."""
+    at a republish; this catches a record left on an older version: one written before
+    the carry rules existed, or a person's `form_answer` row after an older image
+    republished (it reconciles only `decision.answer_record`, so the row keeps its old
+    version and answers). Read-only; the one rule for the writers (submit, relay) and the
+    form bar (`forms_ui.payload`). Only ever forwards: a record already past `latest`
+    means the caller's read is stale (`_still_latest` refuses that first; `strict=False`,
+    for a reader, returns it as it is)."""
     if not record or record.get("version") == latest:
         return record
     if (record.get("version") or 0) > latest:
+        if not strict:
+            return record
         raise SubmitRefused(
             f"this form was changed (version {record.get('version')}); reload the page",
             status=409,
         )
     old = forms._fields(conn, decision_id, record.get("version") or 0)
     return formrecord.reconcile(record, old, fields, latest, complete)
+
+
+def person_record(conn, decision_id: str, person: str) -> dict | None:
+    """One person's own record of a form (`form_answer`), or None when they have none."""
+    row = conn.execute(
+        "select answer_record from form_answer where decision_id = %s and person = %s",
+        (decision_id, person),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def newest_record(person: str, row, decision_record) -> dict | None:
+    """`person`'s record of a form: their `form_answer` row (`row`), unless an older image
+    wrote after it. An older image (a rollback, or a pod not yet replaced) writes only
+    `decision.answer_record`, which leaves the row stale or missing. When the decision's own
+    record is `person`'s (`answered_by`) and the row is missing or names another submit, the
+    decision's record is the newer one. Another person's record never says
+    `answered_by: <person>`, so this stays right with several people. The one rule for every
+    reader and writer of a person's record (a write, the form bar)."""
+    if (
+        isinstance(decision_record, dict)
+        and decision_record.get("answered_by") == person
+        and (row is None or row.get("submit_id") != decision_record.get("submit_id"))
+    ):
+        return decision_record
+    return row
+
+
+def _base_record(conn, decision_id: str, person: str, decision_record) -> dict | None:
+    """The record a write by `person` merges into (`newest_record`); the write then
+    stores it back as their row."""
+    return newest_record(
+        person, person_record(conn, decision_id, person), decision_record
+    )
+
+
+def put_person_record(
+    conn,
+    decision_id: str,
+    person: str,
+    record: dict,
+    at: datetime,
+    *,
+    keep_seen: bool = False,
+) -> None:
+    """Store `record` as `person`'s record of the form. The decision's own `answer_record`
+    (what the agent reads) is written by the caller beside it, in the same transaction.
+    A changed answer reads as unseen again (`seen_at` cleared); `keep_seen` is for a write
+    that changed nothing they said."""
+    reset = "" if keep_seen else ", seen_at = null"
+    conn.execute(
+        "insert into form_answer (decision_id, person, answer_record, answered_at)"  # noqa: S608 -- `reset` is one of two fixed texts
+        " values (%s, %s, %s, %s)"
+        " on conflict (decision_id, person) do update set"
+        " answer_record = excluded.answer_record,"
+        f" answered_at = excluded.answered_at{reset}",
+        (decision_id, person, jsonb(record), at),
+    )
+
+
+def mark_seen(conn, decision_id: str, at: datetime) -> None:
+    """The agent has acknowledged the form's answers: every person's answer it was shown
+    reads as seen from `at`. Only an answer given by `at` is marked: one submitted after
+    the acknowledgement stamp was taken was not shown to the agent and stays unseen. A row
+    whose `seen_at` is older than its `answered_at` (an older image changed the answer
+    without clearing it) counts as unseen too."""
+    conn.execute(
+        "update form_answer set seen_at = %s where decision_id = %s"
+        " and answered_at <= %s and (seen_at is null or seen_at < answered_at)",
+        (at, decision_id, at),
+    )
+
+
+def _iso(value) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _when(value) -> datetime | None:
+    """A record's stored `answered_at` (an ISO string) as a time, or None when unreadable."""
+    if not isinstance(value, str):
+        return None
+    try:
+        got = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return got if got.tzinfo is not None else got.replace(tzinfo=UTC)
+
+
+def _stale_names(record: dict) -> list[str]:
+    return [
+        s["name"]
+        for s in record.get("stale") or []
+        if isinstance(s, dict) and s.get("name")
+    ]
+
+
+def _element(person: str, record: dict, at, seen, decision_row) -> dict:
+    """One person's `answers[]` element from their (reconciled) record."""
+    history = record.get("history") or []
+    entry = next(
+        (h for h in reversed(history) if h.get("submit_id") == record.get("submit_id")),
+        None,
+    )
+    source, recorded_by, said_at = "page", None, None
+    if entry is not None and entry.get("kind") == "relay":
+        source = entry.get("source") or "page"
+        recorded_by = entry.get("recorded_by")
+        said_at = entry.get("said_at")
+    elif entry is None and decision_row is not None and decision_row[0] == person:
+        # A record an older image wrote has no history entry to read: the decision's own columns.
+        source = decision_row[1] or "page"
+        recorded_by = decision_row[2]
+        said_at = _iso(decision_row[3])
+    return {
+        "person": person,
+        "answered_at": record.get("answered_at") or _iso(at),
+        "version": record.get("version"),
+        "submit_id": record.get("submit_id"),
+        "answers": dict(record.get("answers") or {}),
+        "blank": list(record.get("blank") or []),
+        "stale": _stale_names(record),
+        "sources": dict(record.get("sources") or {}),
+        "source": source,
+        "recorded_by": recorded_by,
+        "said_at": said_at,
+        # A seen stamp older than the answer is stale (an older image wrote the answer).
+        "seen_at": _iso(
+            None if seen is not None and at is not None and seen < at else seen
+        ),
+    }
+
+
+def answers_list(conn, decision_id: str) -> list[dict]:
+    """Every person's answer to a form, as the agent reads it (`answers[]`): oldest
+    `answered_at` first, the person breaking a tie. One element for each person who has a
+    record of it, brought onto the form's latest version as the form bar does it
+    (`on_latest(strict=False)`). Nothing is merged across people."""
+    dec = conn.execute(
+        "select answer_record, answered_by, answer_source, recorded_by, said_at"
+        " from decision where id = %s",
+        (decision_id,),
+    ).fetchone()
+    if dec is None:
+        return []
+    held = dec[0] if isinstance(dec[0], dict) else None
+    rows = {
+        p: (rec, at, seen)
+        for p, rec, at, seen in conn.execute(
+            "select person, answer_record, answered_at, seen_at from form_answer"
+            " where decision_id = %s",
+            (decision_id,),
+        ).fetchall()
+    }
+    # An older image writes only the decision's record: its submitter has no (current) row.
+    if held and held.get("answered_by"):
+        rows.setdefault(held["answered_by"], (None, None, None))
+    if not rows:
+        return []
+    latest = conn.execute(
+        "select max(version_n) from decision_form where decision_id = %s",
+        (decision_id,),
+    ).fetchone()[0]
+    fields, complete = [], False
+    if latest is not None:
+        fields = forms._fields(conn, decision_id, latest)
+        complete = bool(
+            conn.execute(
+                "select complete_all from decision_form"
+                " where decision_id = %s and version_n = %s",
+                (decision_id, latest),
+            ).fetchone()[0]
+        )
+    out = []
+    for person, (row_record, at, seen) in rows.items():
+        record = newest_record(person, row_record, held)
+        if not record:
+            continue
+        used_held = record is not row_record
+        if latest is not None:
+            record = on_latest(
+                conn, decision_id, record, latest, fields, complete, strict=False
+            )
+        if used_held:
+            # The decision's own (newer) record is the one read: its time is the one
+            # `seen_at` must reach, not the older row's. With no readable time there is
+            # nothing to compare, so it reads as unseen.
+            held_at = _when(record.get("answered_at"))
+            if held_at is None:
+                seen = None
+            else:
+                at = held_at
+        out.append(_element(person, record, at, seen, dec[1:]))
+    out.sort(key=lambda e: (e["answered_at"] or "", e["person"]))
+    return out
 
 
 def submit(
@@ -218,16 +420,22 @@ def submit(
     version: int,
     values,
     by: str | None = None,
+    person=None,
 ) -> dict:
     """Record one submit of a form and return the merged record. `store.NotFound` for
     a form that does not exist or is closed (its agent said it is no longer needed);
     `SubmitRefused` for a batch the stored field list does not allow, including a
     `version` that is no longer the form's latest (409: he answered a question that
-    has since changed, and nothing is carried silently)."""
-    by = by or settings.owner_id()
+    has since changed, and nothing is carried silently).
+
+    `person` (a `people.Person`, the gallery's) is who submits and must be allowed to
+    (`decisions.may_answer`): anyone else gets `store.NotFound`, as for a form that is not
+    there. Their record is `form_answer`'s row for them; the decision's `answer_record`,
+    what the agent reads, is set to it too (several people answering one form is slice 3b)."""
+    by = by or (person.id if person is not None else settings.owner_id())
     with db.connect() as conn:
         row = conn.execute(
-            "select d.artifact_id, d.form_name, d.session, d.answer_record,"
+            "select d.artifact_id, d.form_name, d.session, d.addressed_to,"
             " a.agent, a.title from decision d"
             " join artifact a on a.id = d.artifact_id"
             " where d.id = %s and d.kind = 'form' and d.closed_at is null"
@@ -236,7 +444,11 @@ def submit(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, form_name, asking_session, _record, owner, title = row
+        artifact_id, form_name, asking_session, addressed_to, owner, title = row
+        if person is not None and not decisions.addressed_ok(
+            conn, person, addressed_to, owner
+        ):
+            raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
             (decision_id,),
@@ -288,7 +500,14 @@ def submit(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
+        previous = on_latest(
+            conn,
+            decision_id,
+            _base_record(conn, decision_id, by, current[0]),
+            latest,
+            fields,
+            complete,
+        )
         now = datetime.now(UTC)
         submit_id = ids.new_id()
         grown = formrecord.apply_submit(
@@ -326,6 +545,7 @@ def submit(
             " where id = %s and closed_at is null",
             (jsonb(record), now, by, decision_id),
         )
+        put_person_record(conn, decision_id, by, record, now)
         receipts.void(conn, decision_id)
         answered = len(fields) - len(total_blank)
         summary = f"form {form_name}: {answered} of {len(fields)} answered"
@@ -375,6 +595,7 @@ def relay(
     recorded_by: str,
     said_at: datetime | None = None,
     keep_taps: bool = False,
+    by_app: bool = False,
 ) -> dict:
     """Store an answer he gave somewhere that is not the page, FIELD BY FIELD, with its
     source (3.4, 3.6). A relayed field is kept as a relay (`sources`), never counts as his
@@ -391,7 +612,7 @@ def relay(
         raise SubmitRefused(f"unknown answer source {source!r}")
     with db.connect() as conn:
         row = conn.execute(
-            "select d.artifact_id, d.form_name, d.session, a.agent"
+            "select d.artifact_id, d.form_name, d.session, a.agent, d.addressed_to"
             " from decision d join artifact a on a.id = d.artifact_id"
             " where d.id = %s and d.kind = 'form' and d.closed_at is null"
             " and a.deleted_at is null and a.archived_at is null",
@@ -399,7 +620,16 @@ def relay(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, form_name, asking_session, owner = row
+        artifact_id, form_name, asking_session, owner, addressed_to = row
+        # A second person's app cannot relay (what it stores is the owner's answer); a signed-in
+        # app is otherwise the owner's: a form for another person is out of its reach.
+        wide = caller_reach.widened(recorded_by) if by_app else None
+        if wide is not None and wide.reads_person():
+            raise store.NotFound()
+        if by_app and not decisions.addressed_ok_id(
+            conn, settings.owner_id(), addressed_to, owner
+        ):
+            raise store.NotFound()
         latest = conn.execute(
             "select max(version_n) from decision_form where decision_id = %s",
             (decision_id,),
@@ -435,7 +665,10 @@ def relay(
                     "looks like it contains a secret", field=name
                 ) from exc
 
+    # A relay is what the person the question is for said elsewhere: the owner's when it is
+    # addressed to no one, else that person's (`decision.addressed_to`).
     with db.connect() as conn, conn.transaction():
+        his = addressed_to or agents.page_owners(conn, owner)[0]
         decisions._require_live_page(conn, decision_id, artifact_id)
         current = conn.execute(
             "select answer_record, closed_at from decision where id = %s"  # noqa: S608 -- fixed text
@@ -445,7 +678,15 @@ def relay(
         if current is None or current[1] is not None:
             raise store.NotFound()
         _still_latest(conn, decision_id, latest)
-        previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
+        # A relay is that person's (the answer they gave elsewhere): it merges into their own record.
+        previous = on_latest(
+            conn,
+            decision_id,
+            _base_record(conn, decision_id, his, current[0]),
+            latest,
+            fields,
+            complete,
+        )
         now = datetime.now(UTC)
         grown, applied, skipped = formrecord.apply_relay(
             previous,
@@ -463,7 +704,7 @@ def relay(
             "submit_id": ids.new_id(),
             "version": latest,
             "kind": "relay",
-            "answered_by": settings.owner_id(),
+            "answered_by": his,
             "source": source,
             "recorded_by": recorded_by,
             "answered_at": _stamp(now),
@@ -483,7 +724,7 @@ def relay(
             "kind": "form",
             "form": form_name,
             "content_hash": content_hash[0] if content_hash else None,
-            "answered_by": settings.owner_id(),
+            "answered_by": his,
             "sent": [],
             **{k: v for k, v in (previous or {}).items() if k not in grown},
             **grown,
@@ -494,9 +735,26 @@ def relay(
             # Everything was older than a later submit of his: kept in the history, no
             # change to his record and nothing for the agent to wake for.
             if previous is not None:
-                conn.execute(
-                    "update decision set answer_record = %s where id = %s",
-                    (jsonb(record), decision_id),
+                # The decision's record is the latest submitter's: this relay changed
+                # nothing, so it is touched only when it is already this person's.
+                held = current[0] if isinstance(current[0], dict) else {}
+                if held.get("answered_by") in (None, his):
+                    conn.execute(
+                        "update decision set answer_record = %s where id = %s",
+                        (jsonb(record), decision_id),
+                    )
+                # Their own answered_at stands (this relay changed nothing they said): the
+                # decision's when it is their answer (which a missing row, an older image's
+                # write, takes too), else the one on their own row, never another person's.
+                stood = conn.execute(
+                    "select d.answered_at, d.answered_by, f.answered_at"
+                    " from decision d left join form_answer f"
+                    " on f.decision_id = d.id and f.person = %s where d.id = %s",
+                    (his, decision_id),
+                ).fetchone()
+                at = stood[0] if stood[1] == his else stood[2]
+                put_person_record(
+                    conn, decision_id, his, record, at or now, keep_seen=True
                 )
             return {"record": record, "applied": [], "skipped": skipped}
         record["answered_at"] = entry["answered_at"]
@@ -510,13 +768,14 @@ def relay(
             (
                 jsonb(record),
                 now,
-                settings.owner_id(),
+                his,
                 source,
                 recorded_by,
                 said_at,
                 decision_id,
             ),
         )
+        put_person_record(conn, decision_id, his, record, now)
         receipts.void(conn, decision_id)
         answered = len(fields) - len(record["blank"])
         summary = (

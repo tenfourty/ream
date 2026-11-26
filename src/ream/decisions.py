@@ -42,6 +42,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ream import (
+    agents,
     csp,
     events,
     holds,
@@ -135,7 +136,7 @@ _COLUMNS = (
     ' as "archived_at [TIMESTAMPTZ]",'
     " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
     ' as "deleted_at [TIMESTAMPTZ]",'
-    " decision.answer_record, decision.asked_by"
+    " decision.answer_record, decision.asked_by, decision.addressed_to"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -145,6 +146,7 @@ _KIND_IDX = 18
 _ANSWER_SOURCE_IDX = 14
 _REVIEW_MODE_IDX = 19
 _ASKED_BY_IDX = 34
+_ADDRESSED_TO_IDX = 35
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,50 @@ class DecisionRow:
     # not own (MCP design 11.4). None: the page's agent, as every question was before. The
     # answer goes to this agent, and only this agent may close the question.
     asked_by: str | None = None
+    # The one person this question is for (people design, slice 3); None: the page's owners.
+    # Never sent to an agent (`public` drops it).
+    addressed_to: str | None = None
+    # A form's answers one person at a time (`formanswer.answers_list`), derived on read;
+    # None for every other kind, and then `public` leaves the key out.
+    answers: list | None = None
+
+
+def may_answer(conn, person, d, agent: str) -> bool:
+    """Whether `person` (a `people.Person`) may answer decision `d` (a `DecisionRow`) on a page
+    of `agent`: the person it is addressed to, or, when it is addressed to no one, the page's
+    owners (`agents.page_owners`: a personal agent's person, else the deployment's owner)."""
+    return addressed_ok_id(conn, person.id, d.addressed_to, agent)
+
+
+def addressed_ok(conn, person, addressed_to: str | None, agent: str) -> bool:
+    """`may_answer` for a caller that holds only the stored `addressed_to`."""
+    return addressed_ok_id(conn, person.id, addressed_to, agent)
+
+
+def addressed_ok_id(conn, person_id: str, addressed_to: str | None, agent: str) -> bool:
+    """`addressed_ok` for a caller that holds only the person's id and the page's agent."""
+    return addressed_ok_owners(person_id, addressed_to, agents.page_owners(conn, agent))
+
+
+def addressed_ok_owners(
+    person_id: str, addressed_to: str | None, owners: tuple[str, ...]
+) -> bool:
+    """The rule itself, for a caller that already holds the page's owners: `addressed_to` is the
+    person, and when it is null the page's owners answer (never anyone else)."""
+    if addressed_to is not None:
+        return addressed_to == person_id
+    return person_id in owners
+
+
+def addressed_sql(
+    column: str, person_expr: str = "%s", agent_col: str = "artifact.agent"
+) -> str:
+    """The SQL twin of `addressed_ok_id`: true for the rows the person may answer, `column` being
+    the `addressed_to` column and `agent_col` the page's agent. A row addressed to no one goes to
+    the page's owner (`agents.owner_sql`). `person_expr` is how the person is spelled in the
+    query: the default `%s` is one bound parameter, which the caller binds to the person's id; a
+    column already in the query (`me.person`) needs none. It appears once, either way."""
+    return f"coalesce({column}, {agents.owner_sql(agent_col)}) = {person_expr}"
 
 
 # Whose question it is, in SQL: the asker where an app asked on someone else's page, else the
@@ -230,6 +276,11 @@ def public(row: DecisionRow) -> dict:
     `for_offices` under its contract name `audience`, and under the old name `for`
     too, for one release (core-and-plugins design, section 6)."""
     out = dict(row.__dict__)
+    out.pop(
+        "addressed_to"
+    )  # the gallery's concern: no agent reads whom a question is for
+    if out.get("answers") is None:
+        out.pop("answers", None)
     out["audience"] = out["for"] = out.pop("for_offices")
     return out
 
@@ -583,6 +634,7 @@ def _row_to_decision(row) -> DecisionRow:
         **_set_aside_fields(row),
         answer_record=row[33],
         asked_by=row[34],
+        addressed_to=row[_ADDRESSED_TO_IDX],
     )
 
 
@@ -648,8 +700,15 @@ def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
 def _with_held(conn, rows: list[DecisionRow]) -> list[DecisionRow]:
     held = held_map(conn, rows)
     got = receipts.current_map(conn, rows)
+    from ream import formanswer  # late: formanswer reads decisions
+
     return [
-        dataclasses.replace(r, held_by=held.get(r.id, r.held_by), receipt=got.get(r.id))
+        dataclasses.replace(
+            r,
+            held_by=held.get(r.id, r.held_by),
+            receipt=got.get(r.id),
+            answers=formanswer.answers_list(conn, r.id) if r.kind == "form" else None,
+        )
         for r in rows
     ]
 
@@ -1817,6 +1876,11 @@ def record_elsewhere(
     if by_app:
         if source != MCP_SOURCE:
             raise InvalidSource(source)
+        # A second person's app cannot relay: the answer stored is the owner's (agents
+        # design, slice 2). Out of reach, as a question that is not there.
+        wide = caller_reach.widened(recorded_by)
+        if wide is not None and wide.reads_person():
+            raise store.NotFound()
     elif source not in relay_sources():
         raise InvalidSource(source)
     require_stored_source(source)
@@ -1843,6 +1907,15 @@ def record_elsewhere(
         # session, so a waiter listening for its own session never heard it --
         # found by the first outside agent (homelab-ij8.106).
         asking_session = row[_SESSION_IDX]
+        # Whose answer this is: the person the question is addressed to, else the page's owner (what
+        # was said elsewhere was said by them; `answered_by` and the receipt follow it).
+        said_by = row[_ADDRESSED_TO_IDX] or agents.page_owners(conn, row[-1])[0]
+        # A signed-in app is the owner's (only the owner signs in): it cannot pass on what
+        # someone else said, so a question for another person is out of its reach.
+        if by_app and not addressed_ok_id(
+            conn, settings.owner_id(), row[_ADDRESSED_TO_IDX], row[-1]
+        ):
+            raise store.NotFound()
 
         if _set_aside_fields(row)["set_aside"]:
             raise store.NotFound()
@@ -1884,7 +1957,7 @@ def record_elsewhere(
                     letter,
                     note,
                     answered_at,
-                    settings.owner_id(),
+                    said_by,
                     source,
                     recorded_by,
                     said_at,
@@ -1933,7 +2006,7 @@ def record_elsewhere(
                                 "body": partner.answered_body(
                                     letter=letter,
                                     note=note,
-                                    answered_by=settings.owner_id(),
+                                    answered_by=said_by,
                                     answered_at=answered_at,
                                     answer_source=source,
                                     recorded_by=recorded_by,
@@ -1984,6 +2057,7 @@ def answer(
     source: str = "page",
     recorded_by: str | None = None,
     in_transaction: Callable[[Connection], None] | None = None,
+    person=None,
 ) -> DecisionRow:
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
@@ -2017,6 +2091,9 @@ def answer(
     and the outbound `answered` included. `in_transaction`, when given, is
     called with the connection inside the answer's own transaction, so the
     caller's own records commit or roll back with it.
+
+    `person` (a `people.Person`, the gallery's) must be allowed to answer this decision
+    (`may_answer`): anyone else gets `store.NotFound`, as for a decision that is not there.
     """
     # His tap, or an inbound answer a plug-in vouches for ('slack', or a source a
     # plug-in registered); never one of the four an agent may relay.
@@ -2064,6 +2141,10 @@ def answer(
         # SET ASIDE (open, its page archived or binned): he cannot answer it, from the
         # page or from Slack. Indistinguishable from "no such decision", as closed is.
         if _set_aside_fields(row)["set_aside"]:
+            raise store.NotFound()
+        if person is not None and not addressed_ok(
+            conn, person, row[_ADDRESSED_TO_IDX], row[-1]
+        ):
             raise store.NotFound()
 
         letters = {option["letter"] for option in options}
@@ -2342,6 +2423,10 @@ def _close_row(
     ).fetchone()
     if closed is None:
         return None
+    if row[_KIND_IDX] == "form":
+        from ream import formanswer  # late: formanswer reads decisions
+
+        formanswer.mark_seen(conn, row[0], now)
     emission = None
     if row[_KIND_IDX] == "question" and closed[0] is None:
         # Closed with no answer: withdrawn, or replaced by the question that
@@ -2400,7 +2485,8 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),
             ).fetchone()
-    return _row_to_decision(row)
+    with db.connect() as conn:
+        return _with_held(conn, [_row_to_decision(row)])[0]
 
 
 def acknowledge(
@@ -2435,32 +2521,42 @@ def acknowledge(
     """
     if conn is not None:
         return _acknowledge(conn, agent, decision_id, session=session)
-    with db.connect() as own:
+    with db.connect() as own, own.transaction():
         return _acknowledge(own, agent, decision_id, session=session)
 
 
 def _acknowledge(
     conn, agent: str, decision_id: str, *, session: str | None = None
 ) -> DecisionRow:
+    # The row is locked BEFORE the stamp is taken: a submit that commits in between
+    # would clear `acknowledged_at` and stamp a later `answered_at`, and an ack stamped
+    # earlier than that answer must not read as having seen it.
     row = conn.execute(
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        f" where decision.id = %s and {_ASKER} = %s",
+        f" where decision.id = %s and {_ASKER} = %s" + conn.for_update(" of decision"),
         (decision_id, agent),
     ).fetchone()
     if row is None:
         raise store.NotFound()
+    stamp = datetime.now(UTC)
     first = (
         row[12] is None  # acknowledged_at
         and conn.execute(
-            # Conditional, so two simultaneous acks write one seen row.
+            # Conditional, so two simultaneous acks write one seen row; an answer
+            # newer than the stamp was not shown to this ack, so it is not acknowledged.
             "update decision set acknowledged_at = %s, acknowledged_by = %s"
-            " where id = %s and acknowledged_at is null",
-            (datetime.now(UTC), agent, decision_id),
+            " where id = %s and acknowledged_at is null"
+            " and (answered_at is null or answered_at <= %s)",
+            (stamp, agent, decision_id, stamp),
         ).rowcount
         > 0
     )
     if first:
+        from ream import formanswer  # late: formanswer reads decisions
+
+        if row[_KIND_IDX] == "form":
+            formanswer.mark_seen(conn, decision_id, stamp)
         # Seen is a receipt: one journal row, only when this call is what set it.
         # `receipt_set` never wakes a waiter (events.list_for_agent).
         receipts.insert(conn, decision_id, "seen", agent=agent, session=session)
@@ -2568,9 +2664,10 @@ def uncollected(
 
     with db.connect() as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
+        decided = _with_held(conn, [_row_to_decision(row) for row in rows])
 
     out = []
-    for row in rows:
+    for row, dec in zip(rows, decided, strict=True):
         answered_at, last_read_at = row[8], row[-1]
         owning_agent, artifact_title = row[-3], row[-2]
         # "Since the answer" is the comparison, not "recently": a seat read an
@@ -2580,7 +2677,7 @@ def uncollected(
         listening = last_read_at is not None and last_read_at > answered_at
         out.append(
             UncollectedRow(
-                decision=_row_to_decision(row),
+                decision=dec,
                 state="stuck" if listening else "no_reader",
                 last_read_at=last_read_at.isoformat() if last_read_at else None,
                 agent=owning_agent,
@@ -2616,6 +2713,7 @@ def across_seats(
     limit: int = 200,
     after: str | None = None,
     include_set_aside: bool = False,
+    person: str | None = None,
 ) -> list[CrossSeatRow]:
     """Every question on every page, oldest first -- by default only the ones
     still waiting on Jeremy.
@@ -2674,6 +2772,11 @@ def across_seats(
         # him: it is off every list of what is, exactly as the reconciler wants it.
         sql += _NOT_SET_ASIDE
     params: list[object] = []
+    if person is not None:
+        # Only what this person may answer (people design, slice 3). Unset: every row, as the
+        # agent feeds read it; they never pass a person.
+        sql += " and " + addressed_sql("decision.addressed_to")
+        params.append(person)
     if after is not None:
         sql += _AFTER.format(op=">")
         params.append(after)
@@ -2910,17 +3013,25 @@ def outcomes_for_decisions(
     return out
 
 
-def open_counts(db: Database) -> tuple[int, int, int]:
+def open_counts(db: Database, person: str | None = None) -> tuple[int, int, int]:
     """(open reviews, open questions that are not held, every open row), counted without reading
     any question text: the same rows `across_seats` returns by default, and the
     same held rule, so a count and a list cannot disagree. Set-aside questions (their
-    page archived or binned) are not open here."""
+    page archived or binned) are not open here. `person` (an id) counts only what that
+    person may answer, as `across_seats(person=)` lists."""
+    where, params = "", ()
+    if person is not None:
+        where, params = (
+            " and " + addressed_sql("d.addressed_to", agent_col="a.agent"),
+            (person,),
+        )
     with db.connect() as conn:
         found = conn.execute(
-            "select d.id, d.kind, d.depends_on from decision d"
+            "select d.id, d.kind, d.depends_on from decision d"  # noqa: S608 -- fixed text
             " join artifact a on a.id = d.artifact_id"
             " where d.closed_at is null and d.answer is null and d.kind <> 'form'"
-            " and a.archived_at is null and a.deleted_at is null"
+            " and a.archived_at is null and a.deleted_at is null" + where,
+            params,
         ).fetchall()
         reviews = sum(1 for r in found if r[1] == "review")
         waiting = [

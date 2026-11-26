@@ -296,6 +296,32 @@ def cmd_revoke_scope(args: argparse.Namespace) -> None:
     print(f"{args.agent} does not hold {args.scope}")
 
 
+def cmd_set_agent_person(args: argparse.Namespace) -> None:
+    from ream import agents
+
+    _check_agent(args.agent)
+    db = _open_db()
+    agent = _current(db, args.agent)
+    try:
+        changed = agents.set_person(db, agent, args.person, "admin")
+    except agents.Refused as exc:
+        raise SystemExit(f"refused: {exc}") from None
+    print(
+        f"{agent} belongs to {args.person}"
+        + ("" if changed else " (already; nothing changed)")
+    )
+
+
+def cmd_clear_agent_person(args: argparse.Namespace) -> None:
+    from ream import agents
+
+    _check_agent(args.agent)
+    db = _open_db()
+    agent = _current(db, args.agent)
+    was = agents.clear_person(db, agent)
+    print(f"{agent} is shared" + ("" if was else " (it already was; nothing changed)"))
+
+
 def cmd_list_scopes(_args: argparse.Namespace) -> None:
     rows = grants.list_all(_open_db())
     if not rows:
@@ -479,6 +505,23 @@ def build_parser() -> argparse.ArgumentParser:
     list_scopes = sub.add_parser("list-scopes")
     list_scopes.set_defaults(func=cmd_list_scopes)
 
+    set_agent_person = sub.add_parser(
+        "set-agent-person",
+        help="mark a key's agent as one person's machine: it then reads what that person"
+        " reads (never writes more than its own pages)",
+    )
+    set_agent_person.add_argument("agent")
+    set_agent_person.add_argument(
+        "person", help="a person id (the owner's, or another's)"
+    )
+    set_agent_person.set_defaults(func=cmd_set_agent_person)
+
+    clear_agent_person = sub.add_parser(
+        "clear-agent-person", help="make a personal key's agent shared again"
+    )
+    clear_agent_person.add_argument("agent")
+    clear_agent_person.set_defaults(func=cmd_clear_agent_person)
+
     rename_agent = sub.add_parser(
         "rename-agent",
         help="rename an agent, or merge it into an existing one (needs DATABASE_URL)",
@@ -519,7 +562,8 @@ def build_parser() -> argparse.ArgumentParser:
         "column the owner's own acts were stored under (comment author and resolver, "
         "decision answerer, event actor, picture stager, folder owner) in one "
         "transaction and record the new id. Then set REAM_OWNER_ID to it on the "
-        "service. Refused if the id is an agent's name. An answer's stored JSON record "
+        "service. Refused if the id is an agent's name, or one a person or an app agent "
+        "already holds. An answer's stored JSON record "
         "and the partner outbox keep the id they were written with.",
     )
     change_owner.add_argument("new", help="the new owner id")

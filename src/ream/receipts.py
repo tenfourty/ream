@@ -56,6 +56,11 @@ class NotAnswered(Exception):
     """`done` on a decision he has not answered yet (409)."""
 
 
+class AnswerTooNew(NotAnswered):
+    """`seen` on an answer stamped later than this acknowledgement (clock skew between
+    servers): it was not shown to the caller, so it is not seen (409)."""
+
+
 def normalise_state(state: str) -> str:
     state = _ALIASES.get(state, state)
     if state not in STATES:
@@ -228,8 +233,11 @@ def insert(
     now = datetime.now(UTC)
     conn.execute(
         "insert into receipt (id, subject_kind, subject_id, state, note, link, agent,"
-        " session, comment_id, created_at, expires_at)"
-        " values (%s, 'decision', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " session, comment_id, created_at, expires_at, person)"
+        " values (%s, 'decision', %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+        # The person whose answer this is about (people design, slice 3): the decision's
+        # `answered_by` now. Never sent to an agent.
+        " (select answered_by from decision where id = %s))",
         (
             ids.new_id(),
             decision_id,
@@ -241,6 +249,7 @@ def insert(
             comment_id,
             now,
             now + span if span is not None else None,
+            decision_id,
         ),
     )
 
@@ -299,6 +308,11 @@ def declare(
 
     if state == "seen":
         row = decisions._acknowledge(conn, agent, decision_id, session=session)
+        if row.receipt is None:
+            # `_acknowledge` stamped nothing: the answer is dated after its stamp.
+            raise AnswerTooNew(
+                "the answer is newer than this acknowledgement; read it, then say seen again"
+            )
         return row.receipt
 
     for field, body in (("note", note), ("link", link or "")):

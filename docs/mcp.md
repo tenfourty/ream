@@ -26,7 +26,7 @@ speaks MCP rather than the agent API. The design is
   needed, never printed or logged); optional `REAM_OIDC_SCOPES` (default `openid profile email
   groups`, must include `openid`), `REAM_OIDC_OWNER_CLAIM` (default `preferred_username`) and
   `REAM_OIDC_OWNER_VALUE` (default the owner id; with `email`, `email_verified` must be true) say who the one reader is, and
-  `REAM_OIDC_OWNER_SUBJECT` pins the provider `sub` (unset: the first owner sign-in pins issuer+sub and a different sub is refused later), and `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
+  `REAM_OIDC_OWNER_SUBJECT` pins the provider `sub` (unset: the first owner sign-in pins issuer+sub and a different sub is refused later; set with the issuer, it also fills or rewrites person #1's issuer and `sub` at every start, logs a WARNING naming no value when that changed a different stored pair, and refuses to start, `IdentityHeld`, if another person holds that pair), and `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
   issuer or an unreadable or empty secret file refuses to start, naming the setting. The sign-in
   pages are built: `/oauth/authorize` (consent, three boxes), `/oauth/token` (authorization_code
   and refresh_token, strict rotation) and `/oauth/revoke` (RFC 7009). An app is idle-lapsed after
@@ -45,7 +45,9 @@ speaks MCP rather than the agent API. The design is
   prompts. Text other agents wrote is returned fenced and labelled as content, never
   instructions; Ream's own values (ids, times, fixed words, a page's `url` and `page_url` while
   each is exactly the address Ream makes for its id, its `comments` setting, a comment anchor's
-  `kind`) come back bare. Anything not classified as Ream's own is fenced
+  `kind`) come back bare; so does a form field named after one of Ream's keys (`person`, `by`,
+  `agent`, `author`, `answered_by`, `source`, ...) when its value matches that key's format
+  (a name or id, say), and it is fenced otherwise. Anything not classified as Ream's own is fenced
   (`src/ream/mcp_tools.py`, its docstring).
 
 ## Tools
@@ -67,8 +69,20 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |
-| `whats_new` | `since`, `limit` | `events` since the key last looked, `since`, `cursor`, `more` | `GET /events` |
+| `whats_new` | `since`, `limit` | `events` since the key last looked (the watching kinds too, below), `since`, `cursor`, `more` | `GET /events?include=watched` |
+| `watch_page` | `page_id` | `id`, `watching`, `created` (false for a repeat); 409 past 200 pages | `PUT /pages/{id}/watch` |
+| `unwatch_page` | `page_id` | `id`, `watching`, `removed` | `DELETE /pages/{id}/watch` |
+| `watches` | `limit` | `watches` (`id`, `title` fenced, `agent`, `version`, `updated_at`, `watching_since`, `page_url`), `truncated` | `GET /watches` |
 | `wait_for_answer` | `seconds` (default 45; more than 50 waits 50), `limit` | as `whats_new`, with `timed_out` and `waited` (whole seconds) | `GET /events?wait=...&exclude_self=true` |
+
+**Following pages** (agents design, slice 3). `watch_page` and `unwatch_page` change only the caller's own list, so they ask for `ream:read`
+and carry `readOnlyHint` false (both idempotent); `watches` is a plain read. A page follows what the caller can read at that
+moment (a key: its own and pages open to agents; an app: what its person reads); one it cannot read answers `no such page`, as a
+missing one does. Its new versions (`watched_page_changed`, `ref_id` the version number, at most one a page every 10 minutes) and
+other people's comments (`watched_comment_added`) arrive in `whats_new`, labelled by the kind and fenced as any event's summary is. A watching event's `agent` is the
+watcher, so it also carries `page_agent`, the agent that owns the page: its title, a change's summary and a mark's quote are
+fenced under that agent, another agent's comment under that comment's author, and only the owner's own plain words (`note`) go back bare;
+`wait_for_answer` includes them, fenced the same way, when something else wakes it, but they never end its wait.
 
 `whats_new` keeps its cursor on the server, one row per key (`mcp_events_seen`), because a chat
 does not remember one. A key that has never looked starts from now, and has looked from its
@@ -126,8 +140,8 @@ not the window.
 
 `screenshot_page` takes a picture of a page the caller can read, on demand and kept nowhere,
 through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): a key reads its own
-pages and other agents' pages that are open to agents, a connected app every page that is not
-deleted, closed ones included; a page the caller cannot read is `no such page`, word for word as
+pages and other agents' pages that are open to agents, the owner's connected app every page that is not
+deleted, closed ones included, another person's app its own agents' pages and the pages open to agents; a page the caller cannot read is `no such page`, word for word as
 an unknown id; a screenshot is never counted as a page view; a refused argument, a missing browser or
 a page or picture too large is the route's refusal as a tool error, word for word; a busy
 browser or a shot of yours already running (the limit is on the caller, not the page) is a tool
@@ -151,7 +165,7 @@ error `<argument>: <reason>`; a route's refusal is the tool error word for word 
 its structured detail as JSON: a secret's field and line, never what matched). Changing a page
 another agent owns answers exactly as a missing one, `no such page`. `publish_page`,
 `update_page`, `organise_page`, `organise_folder`, `delete_page` and `transfer_page` need `ream:write`, as do `comment`, `ask` and
-`close_question`; `record_answer` needs `ream:relay` (a key holds all three). **What `ask` means for a connected app:** it may ask on any page the person can read (archived pages too, which set the question aside as for any agent; never the bin), not only its own. The question is stored with `asked_by` set to the app's agent; the card on the page says "Asked by Jeremy, via claude.ai" and the page's agent is not shown as the asker. The answer goes to the app (its `whats_new`), not to the page's agent, which is told only that a question was put on its page (a `question_asked` event, nudged as a comment is). Only the app can withdraw it (`close_question`). A key still asks on its own pages only, and a page that is not its own answers exactly like one that does not exist. **What relay means for a connected app:** it may pass on what the person said in its chat to any open question put to them, on any page it can read, not only its own. It is stored as a relay with source `mcp`, recorded by the app's agent, never as the person's own tap: it closes the question and tells the asking agent as any relay does, and the gallery shows "Jeremy said (b) in claude.ai", recorded by "Jeremy, via claude.ai", with the words. `words` is required. A key cannot claim `mcp`; an app cannot claim any other source. A review's first verdict still counts, and an app's relay never replaces an answer the person tapped on the page: on a plain question it is refused (409, they can answer again on the page); on a form it skips the fields they tapped and fills the rest. A question on a page outside the app's reach answers exactly like one that does not exist. Hints:
+`close_question`; `record_answer` needs `ream:relay` (a key holds all three). **What `ask` means for a connected app:** the owner's app may ask on any page the owner can read (archived pages too, which set the question aside as for any agent; never the bin), not only its own; another person's app asks on its own pages only, for now. The question is stored with `asked_by` set to the app's agent; the card on the page says "Asked by Jeremy, via claude.ai" and the page's agent is not shown as the asker. The answer goes to the app (its `whats_new`), not to the page's agent, which is told only that a question was put on its page (a `question_asked` event, nudged as a comment is). Only the app can withdraw it (`close_question`). A key still asks on its own pages only, and a page that is not its own answers exactly like one that does not exist. **What relay means for a connected app:** the owner's app may pass on what the person said in its chat to any open question put to them, on any page it can read, not only its own. It is stored as a relay with source `mcp`, recorded by the app's agent, never as the person's own tap: it closes the question and tells the asking agent as any relay does, and the gallery shows "Jeremy said (b) in claude.ai", recorded by "Jeremy, via claude.ai", with the words. `words` is required. A key cannot claim `mcp`; an app cannot claim any other source. A review's first verdict still counts, and an app's relay never replaces an answer the person tapped on the page: on a plain question it is refused (409, they can answer again on the page); on a form it skips the fields they tapped and fills the rest. A question on a page outside the app's reach answers exactly like one that does not exist. Another person's app cannot relay yet: every question answers as one that does not exist, because what it stored would be the owner's answer. Hints:
 `readOnlyHint` false; `destructiveHint` true only on `delete_page` and `transfer_page`; `idempotentHint` true on
 `delete_page`, `close_question` and `transfer_page`.
 
@@ -177,7 +191,7 @@ without that, `mcp/<YYYY-MM-DD>` (UTC).
 | `comment` | `action` `comment` (default): `page_id`, `body`, `quote`, `anchor`, `thread_root`, `kind`, `images` (up to four `image_id`s from `upload_image`), `session`; `upload_image`: `page_id`, `data` (one PNG, JPEG or WebP, base64, strict; at most 5 MB once decoded, so about 7 million characters of base64; a longer string is refused before it is decoded); `resolve`/`reopen`: `comment_id` | `comment`, fenced as the `comments` tool's; `upload_image`: `image_id`, `content_type`, `width`, `height`, `byte_size` (all Ream's own, bare) | `POST /pages/{id}/comments`, `POST /pages/{id}/comment-images`, `/comments/{id}/resolve`, `/reopen` |
 | `ask` | `page_id`, `question` (written to stand alone: the person may see only the question, in the inbox or a notification), `options` (`[{letter, label, preview?}]`; `preview` is plain text shown beside the option, never rendered, at most 1,000 bytes and 15 lines, fenced in every answer like the label; only the gallery shows it: a person answering in Slack sees the labels alone), `recommended`, `context`, `topic`, `depends_on`, `replaces`, `urgency`, `blocked_on`, `needed_by`, `audience`, `session` | the question | `POST /pages/{id}/decisions` |
 | `close_question` | `decision_id` | the closed question | `POST /decisions/{id}/close` |
-| `record_answer` | `decision_id`, `words` (required, not blank; stored as the note), `source` (a key: required, one of its relay sources, `mcp` refused; a connected app: leave it out, it is recorded as `mcp`), `letter`, `said_at`, `round`, `fields` (a form) | the question with its relayed answer | `POST /decisions/{id}/record` (a key); an app has no route |
+| `record_answer` | `decision_id`, `words` (required, not blank; stored as the note), `source` (a key: required, one of its relay sources, `mcp` refused; a connected app: leave it out, it is recorded as `mcp`), `letter`, `said_at`, `round`, `fields` (a form) | the question with its relayed answer (a form carries `answers`, one entry for each person who answered it, as `GET /decisions` does) | `POST /decisions/{id}/record` (a key); an app has no route |
 
 Pictures on a comment go in two steps, as on the route: `comment` with `action` `upload_image` stages
 one picture for the calling key (a page it may read, as for commenting; any other page is `no such

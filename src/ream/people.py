@@ -5,18 +5,20 @@ the one that says a route is the owner's alone. Today there is one person, the o
 `REAM_OWNER_ID`), so `current` answers the owner from settings whatever the request says: no
 identity header, cookie or address is read, and the values are exactly what
 `settings.owner_id()` gave before. Per-person sign-in (people design, slice 4) changes only the
-body of `current`; the handlers that take it do not change again.
+body of `current` (with `REAM_GALLERY_SIGN_IN` on it answers the person the gate found); the
+handlers that take it do not change again.
 
 `OPEN_SIGN_IN` stays False until step 4 of the design: nothing here lets a second person in.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request
 
-from ream import settings
+from ream import keys, settings
 
 # Precedent: `clientlevel.COMMENTS_REQUIRED`. Whether anyone but the owner may sign in.
 OPEN_SIGN_IN = False
@@ -31,6 +33,18 @@ class Person:
     is_owner: bool
 
 
+def _person(row) -> Person:
+    """A `person` row (id, name) as the request's person."""
+    s = settings.current()
+    if row[0] == s.owner_id:
+        return Person(id=row[0], name=s.owner_name, is_owner=True)
+    return Person(id=row[0], name=row[1] or row[0], is_owner=False)
+
+
+# The public name: `signin.session_person` makes a Person from the rows it joins.
+person_from_row = _person
+
+
 def owner_person() -> Person:
     """Person #1, from settings, read at call time."""
     s = settings.current()
@@ -38,9 +52,17 @@ def owner_person() -> Person:
 
 
 def current(request: Request) -> Person:
-    """The person this gallery request is for. A FastAPI dependency; `request` is taken so the
-    signature is the one slice 4 needs, and is not read yet."""
-    return owner_person()
+    """The person this gallery request is for. A FastAPI dependency. With gallery sign-in off
+    (`REAM_GALLERY_SIGN_IN` unset) the owner, whatever the request says; on, the person the gate
+    (`signin.install_gate`) found from the session cookie and put on `request.state`, and a 401
+    if the gate somehow did not run. Nothing else of the request is read: no identity header,
+    address or parameter."""
+    if not settings.current().gallery_signs_in():
+        return owner_person()
+    person = getattr(request.state, "ream_person", None)
+    if not isinstance(person, Person):
+        raise HTTPException(401, "sign in required")
+    return person
 
 
 CURRENT = Depends(current)
@@ -56,3 +78,142 @@ def require_owner(person: Person = CURRENT) -> Person:
 
 # Module-level, so a handler's default is a name, not a call (ruff B008).
 REQUIRE_OWNER = Depends(require_owner)
+
+
+# --- Who a login is (decision D: slice 4) -------------------------------------------------
+
+_ID_ROOM = 60  # the id pattern allows 63 characters; a `-99` suffix needs three
+
+
+class NameTaken(Exception):
+    """No readable id is free for this login, or the pair is held by someone else."""
+
+
+def _usable(raw: str) -> str:
+    """`raw` as lower-case ASCII letters and digits with single hyphens, cut to leave room for a
+    suffix; empty when it holds no ASCII letter or digit."""
+    return re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:_ID_ROOM].strip("-")
+
+
+def normalise_id(raw: str) -> str:
+    """`raw` as an id the OWNER_ID pattern accepts: lower case, every run of other characters
+    one hyphen, hyphens trimmed, cut to leave room for a suffix. Empty gives `person`."""
+    return _usable(raw) or "person"
+
+
+def _held_names(conn, name: str) -> bool:
+    """Whether `name` is held in the one name space people and agents share: a person's id, an
+    agent's key, a page's publisher, a person-and-app agent, or an old agent name a rename left
+    behind (as an old name, and as the name an old one became)."""
+    for sql in (
+        "select 1 from person where id = %s",
+        "select 1 from agent_key where agent = %s",
+        "select 1 from artifact where agent = %s",
+        "select 1 from mcp_agent where agent = %s",
+        "select 1 from agent_alias where old = %s",
+        "select 1 from agent_alias where new = %s",
+    ):
+        if conn.execute(sql + " limit 1", (name,)).fetchone() is not None:
+            return True
+    return False
+
+
+def _free_id(conn, base: str) -> str:
+    if not _held_names(conn, base):
+        return base
+    for n in range(2, 100):
+        if not _held_names(conn, f"{base}-{n}"):
+            return f"{base}-{n}"
+    raise NameTaken(f"no free id is left for {base!r}")
+
+
+def _readable_base(
+    preferred: str | None, email: str | None, email_verified: bool
+) -> str:
+    """The id a new login asks for: its `preferred_username` if that holds an ASCII letter or
+    digit, else the local part of a verified email likewise, else `person`."""
+    if preferred:
+        base = _usable(preferred)
+        if base:
+            return base
+    if email and email_verified and "@" in email:
+        base = _usable(email.split("@", 1)[0])
+        if base:
+            return base
+    return "person"
+
+
+def find_or_make(
+    db,
+    issuer: str,
+    subject: str,
+    *,
+    preferred: str | None,
+    email: str | None,
+    email_verified: bool,
+    name: str | None,
+) -> Person:
+    """The person for (issuer, subject), made if there is none. Matched on the pair alone, never
+    on an email. A new person's id is the login's `preferred_username`, else the local part of a
+    verified email, normalised, with `-2` to `-99` when the name is held; once given it is never
+    changed, and person rows are never deleted, so it is never reused. The email is kept only when
+    verified. Runs under the name lock, so no agent takes the id meanwhile."""
+    if not issuer or not subject:
+        raise NameTaken("a login without an issuer and a subject names no one")
+    with db.connect() as conn, conn.transaction():
+        conn.advisory_lock(keys.NAME_LOCK_KEY)
+        row = conn.execute(
+            "select id, name from person where issuer = %s and subject = %s",
+            (issuer, subject),
+        ).fetchone()
+        kept_email = email if email_verified and email else None
+        if row is not None:
+            if row[0] == settings.current().owner_id:
+                raise NameTaken(
+                    "the owner's sign-in identity is decided by the owner login"
+                )
+            conn.execute(
+                "update person set email = coalesce(%s, email), name = coalesce(%s, name)"
+                " where id = %s",
+                (kept_email, name or None, row[0]),
+            )
+            return _person(
+                conn.execute(
+                    "select id, name from person where id = %s", (row[0],)
+                ).fetchone()
+            )
+        new_id = _free_id(conn, _readable_base(preferred, email, email_verified))
+        conn.execute(
+            "insert into person (id, issuer, subject, email, name) values (%s, %s, %s, %s, %s)",
+            (new_id, issuer, subject, kept_email, name or None),
+        )
+        return _person((new_id, name or None))
+
+
+def fill_owner_identity(
+    conn, issuer: str, subject: str, *, refresh: bool = False
+) -> bool:
+    """Give person #1 the (issuer, subject) of the owner's login when the row has none. Returns
+    whether it did. A row that has a pair is left alone, unless `refresh`: then the row takes
+    the login's pair whatever it held (the caller has just proved the login is the owner's). A
+    pair another person holds raises `NameTaken` (the unique key would refuse it anyway)."""
+    owner_id = settings.current().owner_id
+    holder = conn.execute(
+        "select id from person where issuer = %s and subject = %s", (issuer, subject)
+    ).fetchone()
+    if holder is not None:
+        if holder[0] != owner_id:
+            raise NameTaken("another person holds the owner's sign-in identity")
+        return False
+    if refresh:
+        done = conn.execute(
+            "update person set issuer = %s, subject = %s where id = %s",
+            (issuer, subject, owner_id),
+        )
+        return done.rowcount == 1
+    done = conn.execute(
+        "update person set issuer = %s, subject = %s"
+        " where id = %s and issuer is null and subject is null",
+        (issuer, subject, owner_id),
+    )
+    return done.rowcount == 1

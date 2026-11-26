@@ -1390,3 +1390,168 @@ create table if not exists person (
     disabled_at  timestamptz,
     unique (issuer, subject)
 );
+
+-- PER-PERSON STATE (24 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 2). What a
+-- person has read, prefers and pinned is theirs: `page_read` is keyed (person, artifact_id) and
+-- `human_pref` (person, key); `page_pin` holds pins, filled once from `artifact.pinned_at`
+-- (kept, no longer read or written); `frame_pass.person` is who the pass was minted for. Rows that
+-- exist take the owner id `service_meta` records, and a database that holds rows and records none
+-- is refused. SQLite does the same as its schema step 37 (its rebuilt tables list `person` first,
+-- here it was added last: the copier matches columns by name). Each block runs once: the test for
+-- "already done" is the column or the table, so a start never refills a pin the owner removed.
+create table if not exists page_pin (
+    person      text        not null,
+    artifact_id text        not null references artifact(id) on delete cascade,
+    pinned_at   timestamptz not null,
+    primary key (person, artifact_id)
+);
+do $$
+declare
+    fresh boolean;
+begin
+    -- one transaction moves `page_read` and fills `page_pin`, so the first is the test for both
+    fresh := not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'page_read'
+          and column_name = 'person'
+    );
+    if fresh then
+        alter table page_read add column person text;
+        if exists (select 1 from page_read) then
+            update page_read set person = (select value from service_meta where key = 'owner_id');
+            if exists (select 1 from page_read where person is null) then
+                raise exception 'people slice 2: page_read has rows but service_meta records no owner id';
+            end if;
+        end if;
+        alter table page_read alter column person set not null;
+        alter table page_read drop constraint page_read_pkey;
+        alter table page_read add primary key (person, artifact_id);
+    end if;
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'human_pref'
+          and column_name = 'person'
+    ) then
+        alter table human_pref add column person text;
+        if exists (select 1 from human_pref) then
+            update human_pref set person = (select value from service_meta where key = 'owner_id');
+            if exists (select 1 from human_pref where person is null) then
+                raise exception 'people slice 2: human_pref has rows but service_meta records no owner id';
+            end if;
+        end if;
+        alter table human_pref alter column person set not null;
+        alter table human_pref drop constraint human_pref_pkey;
+        alter table human_pref add primary key (person, key);
+    end if;
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'frame_pass'
+          and column_name = 'person'
+    ) then
+        alter table frame_pass add column person text;
+        update frame_pass set person = (select value from service_meta where key = 'owner_id');
+    end if;
+    if fresh then
+        if exists (select 1 from artifact where pinned_at is not null) then
+            if not exists (select 1 from service_meta where key = 'owner_id') then
+                raise exception 'people slice 2: pinned pages exist but service_meta records no owner id';
+            end if;
+            insert into page_pin (person, artifact_id, pinned_at)
+                select (select value from service_meta where key = 'owner_id'), id, pinned_at
+                from artifact where pinned_at is not null;
+        end if;
+    end if;
+end $$;
+
+-- PER-PERSON ANSWERS AND RECEIPTS (24 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 3).
+-- `decision.addressed_to` is the one person a question is for (null: the page's owners, today the
+-- owner). `form_answer` holds each person's own record of a form, keyed (decision_id, person); the
+-- decision's own `answer_record` stays what the agent reads and is kept in step. `receipt.person` is
+-- the person whose answer the receipt is about (the decision's `answered_by` when it was written).
+-- Rows that exist take the owner id `service_meta` records, and a database that holds such rows and
+-- records none is refused. SQLite does the same as its schema step 38. The backfill runs once: its
+-- test is the `receipt.person` column, so a start never refills a record that was changed since.
+alter table decision add column if not exists addressed_to text;
+create table if not exists form_answer (
+    decision_id   text        not null references decision(id) on delete cascade,
+    person        text        not null,
+    answer_record jsonb       not null,
+    answered_at   timestamptz not null,
+    primary key (decision_id, person)
+);
+-- 25 Nov 2026 (people slice 3b): when the agent acknowledged this person's answer; null until it did.
+-- An older image ignores the column.
+alter table form_answer add column if not exists seen_at timestamptz;
+do $$
+begin
+    if not exists (
+        select 1 from information_schema.columns
+        where table_schema = current_schema() and table_name = 'receipt'
+          and column_name = 'person'
+    ) then
+        alter table receipt add column person text;
+        if (exists (select 1 from receipt)
+            or exists (select 1 from decision where answer_record is not null))
+           and not exists (select 1 from service_meta where key = 'owner_id') then
+            raise exception 'people slice 3: receipts or form answers exist but service_meta records no owner id';
+        end if;
+        update receipt set person = (select value from service_meta where key = 'owner_id');
+        insert into form_answer (decision_id, person, answer_record, answered_at)
+            select id, (select value from service_meta where key = 'owner_id'), answer_record,
+                   coalesce(answered_at, created_at)
+            from decision where answer_record is not null;
+    end if;
+end $$;
+
+-- GALLERY SIGN-IN (26 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 4). Nothing reads
+-- these until `REAM_GALLERY_SIGN_IN` is on. `person_signin` is one sign-in in flight (secrets stored as
+-- hashes or single-use values, each claimed once); `person_session` is a signed-in browser, keyed by
+-- the hash of its cookie's token. No foreign key to `person`: it follows `page_read.person`, so
+-- `change-owner` can rewrite `person.id` (and `person_session.person` with it). SQLite: step 40.
+create table if not exists person_signin (
+    id             text        primary key,
+    state_sha256   text        unique,
+    browser_sha256 text        not null,
+    oidc_nonce     text        not null,
+    oidc_verifier  text        not null,
+    next_path      text        not null default '/',
+    created_at     timestamptz not null default now(),
+    expires_at     timestamptz not null
+);
+create table if not exists person_session (
+    token_sha256 text        primary key,
+    person       text        not null,
+    created_at   timestamptz not null default now(),
+    expires_at   timestamptz not null,
+    last_seen_at timestamptz
+);
+create index if not exists person_session_person on person_session (person);
+
+-- WATCHING (26 Nov 2026; docs/agent/specs/2026-11-26-agents-and-watching-design.md, slice 3). A row says
+-- this agent follows this page: `watches.fan_out` writes it a `watched_page_changed` or
+-- `watched_comment_added` event, in the transaction of the change, while it can still read the page.
+-- `changed_notified_at` is the coalescing window (one change event per watcher and page every 10 minutes).
+-- No foreign key to an agent (an agent is a name), so `rename-agent` merges rows. Deleting the page
+-- cascades its watches away. An older image ignores the table, so watches go silent. SQLite: step 41.
+create table if not exists page_watch (
+    agent               text        not null,
+    artifact_id         text        not null references artifact(id) on delete cascade,
+    created_at          timestamptz not null default now(),
+    session             text,
+    changed_notified_at timestamptz,
+    primary key (agent, artifact_id)
+);
+create index if not exists page_watch_artifact on page_watch (artifact_id);
+
+-- Personal machines (agents design, slice 4, 26 Nov 2026): a key agent that belongs to one person.
+-- No foreign key to `person` (as `page_read.person`), so `change-owner` can rewrite it; no foreign
+-- key to an agent (an agent is a name). Set and cleared only by `artifacts-admin` and the owner's
+-- Machines page, never by any /api/v1 or MCP route. An older image ignores the table, so a personal
+-- key narrows back to a key's reach. SQLite: step 42.
+create table if not exists agent_person (
+    agent   text        primary key,
+    person  text        not null,
+    set_at  timestamptz not null default now(),
+    set_by  text
+);
+create index if not exists agent_person_person on agent_person (person);

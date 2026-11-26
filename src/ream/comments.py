@@ -44,6 +44,7 @@ from ream import (
     settings,
     store,
     text,
+    watches,
 )
 from ream.anchors import (
     SECTION_MAX,
@@ -233,32 +234,44 @@ def office_of(label: str | None) -> str:
 
 
 # THE ONE RULE FOR "A REPLY HE HAS NOT SEEN", as a SQL condition on a comment
-# aliased `c`: a live agent comment under a thread in which he wrote an earlier
-# message (or under the note he left on a decision, which is his by being
-# there), made after he last opened the page. The wall's unread mark and his
+# aliased `c`: a live agent comment under a thread in which the READER wrote an earlier
+# message (or under the note someone left on a decision, which is theirs by being
+# there), made after they last opened the page. The wall's unread mark and the
 # inbox both read it, so they can never disagree about what is new.
-# `c.artifact_id` is the page; `page_read.read_at` is when he last opened it.
+# `c.artifact_id` is the page; `read_at` is the SQL of when the reader last
+# opened it: the caller joins `page_read` for the request's person (people
+# design, slice 2: a read mark is one person's) and names its `read_at` column,
+# which is NULL when they never have. `me.person` is that same person (slice 3: a
+# thread is one person's, so a reply under Ann's comment is not Jeremy's to
+# see); the caller joins `(select cast(%s as text) as person) me` beside it.
 # Plain SQL on both drivers: `created_at` compares as the one stored format.
 _HIS_THREAD = (
     "(exists (select 1 from comment h"
     "  where h.artifact_id = c.artifact_id"
     "    and coalesce(h.thread_root, h.id) = c.thread_root"
-    "    and h.author_kind = 'human' and h.withdrawn_at is null"
+    "    and h.author_kind = 'human' and h.author = me.person"
+    "    and h.withdrawn_at is null"
     "    and h.deleted_at is null"
     "    and h.created_at < c.created_at)"
     "  or c.anchor->>'kind' = 'decision')"
 )
-UNSEEN_REPLY = (
-    "c.author_kind = 'agent'"  # noqa: S608
-    " and c.kind = 'comment' and (c.thread_root is not null"
-    "      or c.anchor->>'kind' = 'decision')"
-    " and c.withdrawn_at is null and c.deleted_at is null and not c.held"
-    " and (select root.withdrawn_at from comment root"
-    "       where root.id = coalesce(c.thread_root, c.id)) is null"
-    " and not exists (select 1 from page_read r"
-    "       where r.artifact_id = c.artifact_id and r.read_at >= c.created_at)"
-    f" and {_HIS_THREAD}"
-)
+# The join that names `me`: one `%s`, the person.
+ME_JOIN = " cross join (select cast(%s as text) as person) me"
+
+
+def unseen_reply(read_at: str) -> str:
+    """The condition, with `read_at` (an SQL expression, e.g. `pr.read_at`) as when the
+    reader last opened the page."""
+    return (
+        "c.author_kind = 'agent'"  # noqa: S608
+        " and c.kind = 'comment' and (c.thread_root is not null"
+        "      or c.anchor->>'kind' = 'decision')"
+        " and c.withdrawn_at is null and c.deleted_at is null and not c.held"
+        " and (select root.withdrawn_at from comment root"
+        "       where root.id = coalesce(c.thread_root, c.id)) is null"
+        f" and ({read_at} is null or {read_at} < c.created_at)"
+        f" and {_HIS_THREAD}"
+    )
 
 
 def is_foreign(
@@ -914,6 +927,7 @@ def add(
             # seat woken by its own reply is a watcher crying wolf.
             owner_emission = None
             replier_emissions: list[events.Emission] = []
+            watcher_emissions: list[events.Emission] = []
             if not held and (
                 author_kind == "human"
                 or is_foreign(author, session, owning_agent, page_session)
@@ -976,6 +990,31 @@ def add(
                             ),
                         )
                     )
+            # The agents that WATCH the page hear of anyone else's comment under their own
+            # kind (watches.py), except those who already get this one as `comment_added`.
+            if not held:
+                already = tuple(
+                    [owning_agent]
+                    + [e.event.agent for e in replier_emissions]
+                    + ([owner_emission.event.agent] if owner_emission else [])
+                )
+                watcher_emissions = watches.fan_out(
+                    conn,
+                    owned,
+                    "watched_comment_added",
+                    actor=author,
+                    summary=said,
+                    ref_id=comment_id,
+                    skip=already,
+                    # The owner's own plain words ride in `note`, which the MCP fence returns
+                    # bare; the summary (a mark's quote is the page's text) never is.
+                    note=body if author_kind == "human" and not LABEL.get(kind) else "",
+                )
+                if watcher_emissions and callers_txn and after_commit is None:
+                    raise ValueError(
+                        "a comment that raises a watcher event cannot join a"
+                        " caller's transaction: its nudge would precede the commit"
+                    )
         created = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
             (comment_id,),
@@ -985,7 +1024,11 @@ def add(
     # something that never happened. `emit` never raises and never blocks --
     # commenting is what Jeremy came to do, and telling a seat about it is a
     # courtesy on top of a journal that already has the comment durably.
-    for emission in ([owner_emission] if owner_emission else []) + replier_emissions:
+    for emission in (
+        ([owner_emission] if owner_emission else [])
+        + replier_emissions
+        + watcher_emissions
+    ):
         if callers_txn:
             after_commit.append(emission.fire)
         else:
