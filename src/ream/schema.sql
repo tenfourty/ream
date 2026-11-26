@@ -1542,3 +1542,16 @@ create table if not exists page_watch (
     primary key (agent, artifact_id)
 );
 create index if not exists page_watch_artifact on page_watch (artifact_id);
+
+-- Personal machines (agents design, slice 4, 26 Nov 2026): a key agent that belongs to one person.
+-- No foreign key to `person` (as `page_read.person`), so `change-owner` can rewrite it; no foreign
+-- key to an agent (an agent is a name). Set and cleared only by `artifacts-admin` and the owner's
+-- Machines page, never by any /api/v1 or MCP route. An older image ignores the table, so a personal
+-- key narrows back to a key's reach. SQLite: step 42.
+create table if not exists agent_person (
+    agent   text        primary key,
+    person  text        not null,
+    set_at  timestamptz not null default now(),
+    set_by  text
+);
+create index if not exists agent_person_person on agent_person (person);

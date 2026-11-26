@@ -1256,6 +1256,18 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         ),
         "create index page_watch_artifact on page_watch (artifact_id)",
     ),
+    # 26 Nov 2026: personal machines, agents design slice 4 (see schema.sql). An older image
+    # ignores the table, so a personal key narrows back to a key's reach (fails closed).
+    42: (
+        (
+            "create table agent_person ("
+            " agent text primary key,"
+            " person text not null,"
+            " set_at timestamptz not null default (artifacts_now()),"
+            " set_by text)"
+        ),
+        "create index agent_person_person on agent_person (person)",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

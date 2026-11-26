@@ -443,6 +443,11 @@ def _seed(database: Database) -> None:
             ["beta é", "a1", T0, "beta/ü", T1],
         ),
         (
+            "agent_person",
+            "agent, person, set_at, set_by",
+            ["beta é", "ana-é", T0, "owner/ü"],
+        ),
+        (
             "email_share",
             (
                 "id, artifact_id, email, token_sha256, created_at, revoked_at,"

@@ -16,6 +16,7 @@ PAGE = "<!doctype html><html><head><title>t</title></head><body>x</body></html>"
 def _old_shape(db) -> None:
     with db.connect() as conn:
         conn.execute("drop table page_watch")
+        conn.execute("drop table agent_person")
         if db.sqlite:
             conn.execute("pragma user_version = 40")
 

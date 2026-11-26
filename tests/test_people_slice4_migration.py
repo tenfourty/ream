@@ -15,6 +15,7 @@ def _old_shape(db) -> None:
         conn.execute("drop table person_session")
         if db.sqlite:
             conn.execute("drop table page_watch")  # agents slice 3, step 41
+            conn.execute("drop table agent_person")  # agents slice 4, step 42
             conn.execute("pragma user_version = 39")
 
 
