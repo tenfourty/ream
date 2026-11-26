@@ -1052,6 +1052,13 @@ def _postgres_only(request):
 def db(_schema: _Schema, dsn: str, request):
     _schema.empty()  # every table empty, every sequence restarted
     database = Database(dsn)
+    # A started service has recorded its owner (`owner.check`), and the SQL rule for a question
+    # with no `addressed_to` (`agents.owner_sql`) reads that record. A test of a database no
+    # service has started (test_owner.py) clears it first.
+    with database.connect() as conn:
+        conn.execute(
+            "insert into service_meta (key, value) values ('owner_id', 'jeremy')"
+        )
     yield database
     database.close()  # its reused SQLite connections, not left to the collector
     if "fresh_schema" in request.fixturenames:

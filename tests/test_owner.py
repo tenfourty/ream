@@ -17,6 +17,7 @@ import pytest
 
 from ream import (
     admin,
+    agents,
     client,
     comments,
     decide,
@@ -25,9 +26,11 @@ from ream import (
     frame_pass,
     holds,
     keys,
+    mcp_apps,
     news,
     onboarding,
     owner,
+    people,
     rename,
     settings,
     store,
@@ -39,6 +42,7 @@ from ream.text import pronoun
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+APP_CLIENT = "https://claude.ai/oauth/claude-ai/client.json"
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +60,13 @@ def _forget_meta_after(request):
                 conn.execute("delete from service_meta")
         finally:
             database.close()
+
+
+def _unrecorded(db):
+    """A database no service has started: the `db` fixture records the suite's owner, as a
+    started service has, and these tests are about the start that records it."""
+    with db.connect() as conn:
+        conn.execute("delete from service_meta where key = 'owner_id'")
 
 
 # --- the settings object -----------------------------------------------------------------
@@ -244,6 +255,7 @@ def test_a_gallery_comment_resolve_and_reopen_use_the_owner_id(db):
 
 
 def test_a_new_database_takes_whatever_it_is_given(db):
+    _unrecorded(db)
     assert owner.stored(db) is None
     assert owner.check(db, "ann") == "ann"
     assert owner.stored(db) == "ann"
@@ -263,6 +275,7 @@ def test_the_same_id_starts_again_and_another_refuses(db):
 def test_the_real_entrypoint_refuses_a_database_written_for_another_owner(
     db, monkeypatch
 ):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     owner.check(db, "someone-else")
     with pytest.raises(SystemExit) as exc:
@@ -272,6 +285,7 @@ def test_the_real_entrypoint_refuses_a_database_written_for_another_owner(
 
 
 def test_the_real_entrypoint_records_the_owner_on_first_start(db, monkeypatch):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     assert owner.stored(db) is None
     app_from_env()
@@ -282,6 +296,7 @@ def test_the_real_entrypoint_records_the_owner_on_first_start(db, monkeypatch):
 def test_the_real_entrypoint_refuses_a_bad_setting_before_touching_the_database(
     db, monkeypatch
 ):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     monkeypatch.setenv("REAM_OWNER_ID", "No Good")
     with pytest.raises(SystemExit) as exc:
@@ -310,6 +325,9 @@ COLUMNS = [
     ("form_answer", "person", ""),
     ("receipt", "person", ""),
     ("person_session", "person", ""),
+    ("mcp_agent", "person", ""),
+    ("mcp_app", "person", ""),
+    ("mcp_signin", "person", ""),
 ]
 
 
@@ -387,6 +405,22 @@ def _populate(db):
             " values ('tok1', 'jeremy', %s)",
             (datetime.now(UTC) + timedelta(hours=12),),
         )
+        # the agents design, slice 1: his app agent, his consent for it, a sign-in in flight
+        conn.execute(
+            "insert into mcp_signin (id, client_id, redirect_uri, code_challenge, resource,"
+            " person, created_at, expires_at) values"
+            " ('s1', %s, 'https://claude.ai/cb', 'c', 'r', 'jeremy', %s, %s)",
+            (APP_CLIENT, datetime.now(UTC), datetime.now(UTC) + timedelta(minutes=10)),
+        )
+    agent = mcp_apps.agent_for(db, "jeremy", APP_CLIENT, "claude.ai").agent
+    mcp_apps.create_app(
+        db,
+        person="jeremy",
+        client_id=APP_CLIENT,
+        agent=agent,
+        permissions=["read"],
+        redirect_uri="https://claude.ai/cb",
+    )
     return page
 
 
@@ -412,6 +446,28 @@ def test_change_owner_moves_every_stored_column_and_records_the_new_id(db):
         owner.check(db, "jeremy")
 
 
+def test_an_owners_app_question_is_still_the_new_owners_to_answer(db):
+    """`mcp_agent.person` decides who answers a question with no `addressed_to`: change-owner
+    moves it with the owner id, or the new owner could no longer answer his own app's question."""
+    owner.check(db, "jeremy")
+    agent = mcp_apps.agent_for(db, "jeremy", APP_CLIENT, "claude.ai").agent
+    page = store.publish(db, agent, "Board", PAGE)
+    asked = decisions.ask(
+        db, agent=agent, artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    assert asked.addressed_to is None
+
+    owner.change_owner(db, "ann", dry_run=False)
+
+    ann = people.Person(id="ann", name="Ann", is_owner=True)
+    with settings.override(owner_id="ann", owner_name="Ann"):
+        done = decisions.answer(db, asked.id, letter="a", by="ann", person=ann)
+        assert done.answered_by == "ann"
+        with db.connect() as conn:
+            assert agents.shown(conn, agent).text() == "Ann, via claude.ai"
+            assert agents.page_owners(conn, agent) == ("ann",)
+
+
 def test_a_dry_run_counts_and_changes_nothing(db):
     _populate(db)
     owner.check(db, "jeremy")
@@ -423,6 +479,7 @@ def test_a_dry_run_counts_and_changes_nothing(db):
 
 
 def test_change_owner_refuses_what_it_should(db):
+    _unrecorded(db)
     with pytest.raises(owner.Refused, match="no owner is recorded"):
         owner.change_owner(db, "ann", dry_run=False)
     owner.check(db, "jeremy")

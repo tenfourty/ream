@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from test_mcp_reach import PAGE, _app, _as, _send, _tool
 
-from ream import decisions, events, gallery, keys, mcp, settings, store
+from ream import agents, decisions, events, gallery, keys, mcp, settings, store
 
 OPTIONS = [{"letter": "a", "label": "Alpha"}, {"letter": "b", "label": "Beta"}]
 
@@ -140,7 +140,9 @@ def test_the_gallery_says_he_said_it_in_the_apps_host(db, asked):
     app = _app(db)
     _tool(_as(db, app), "record_answer", decision_id=asked.id, letter="b", words="yes")
     row = decisions.get_owned(db, "office", asked.id)
-    html = gallery._provenance(row, {app.agent: "claude.ai"})
+    html = gallery._provenance(
+        row, {app.agent: agents.app_shown(app.agent, "jeremy", None, "claude.ai")}
+    )
     assert f"{settings.owner_name()} said (b) in claude.ai" in html
     assert f"{settings.owner_name()}, via claude.ai" in html
     assert "not tapped on this page" in html
@@ -251,7 +253,9 @@ def test_a_form_relayed_with_mcp_never_reads_as_a_tap(db):
         words="ok",
     )
     row = decisions.get_owned(db, "office", did)
-    html = gallery._provenance(row, {app.agent: "claude.ai"})
+    html = gallery._provenance(
+        row, {app.agent: agents.app_shown(app.agent, "jeremy", None, "claude.ai")}
+    )
     assert "in claude.ai" in html and "()" not in html
     assert "not tapped on this page" in html
     lines = "\n".join(

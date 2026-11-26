@@ -4635,7 +4635,7 @@ def _asker_line(
     )
 
 
-def _provenance(row, hosts: dict[str, str] | None = None) -> str:
+def _provenance(row, hosts: dict[str, agents.Shown] | None = None) -> str:
     """Who wrote a relayed answer down, from where, and when he said it.
 
     Empty for a tap: the ordinary case needs no explanation, and a badge on
@@ -4958,7 +4958,7 @@ def _render_decisions(
     routes: dict[str, listening.Route] | None = None,
     app_hosts: dict[str, agents.Shown] | None = None,
     person: str | None = None,
-    page_owners: tuple[str, ...] = (),
+    page_owners: tuple[str, ...] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -4994,6 +4994,8 @@ def _render_decisions(
     the page, rather than needing a terminal. A REVIEW is the exception: its first
     verdict is final, so a settled review shows the verdict and no form.
     """
+    if person is not None and page_owners is None:
+        raise ValueError("page_owners is required when person is given")
     if not rows:
         return "", ""
 

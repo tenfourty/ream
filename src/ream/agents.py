@@ -10,17 +10,16 @@ reads the same rows.
 * `page_owners(conn, agent)`: who owns that agent's pages: its person, or `shared_owner()`.
 * `shown(conn, agent)`: the via line. `Shown.text()` is the only place `", via "` is written
   (`tests/test_via_line.py` refuses any other).
-* `owns_sql(person_expr, agent_col)`: the SQL twin of "is `person_expr` one of the page owners".
+* `owner_sql(agent_col)`: the SQL twin of `page_owners`, read from `mcp_agent` and `service_meta`.
 
 `agent` fields stored or returned anywhere stay the agent's name; `Shown` is for display only.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
-from ream import settings, text
+from ream import owner, settings, text
 
 NAME_LIMIT = 64
 
@@ -45,28 +44,17 @@ def page_owners(conn, agent: str) -> tuple[str, ...]:
     return (shared_owner(),) if person is None else (person,)
 
 
-_OWNER_ID = re.compile(r"[a-z0-9-]+")
-
-
 def owner_sql(agent_col: str) -> str:
-    """SQL for who owns the pages of the agent in `agent_col`: the person of a personal agent,
-    `shared_owner()` for any other (the SQL twin of `page_owners`). The shared owner is written
-    as a quoted literal, not a bound parameter, so the callers' positional parameters stay as they
-    are in the long wall queries; it can only be a stored owner id (lower-case letters, digits,
-    hyphens), which is checked here."""
-    owner = shared_owner()
-    if not _OWNER_ID.fullmatch(owner):
-        raise ValueError("the owner id is not a plain id")
+    """SQL for who owns the pages of the agent in `agent_col`: the person of a personal agent, else
+    the owner the database records (`service_meta`, written by `owner.check`; the SQL twin of
+    `page_owners`, whose shared owner is the same id because `owner.check` refuses a start with
+    another). No owner id is written into the text and no parameter is added, so the callers'
+    positional parameters stay as they are in the long wall queries."""
     return (
-        "coalesce((select m.person from mcp_agent m"  # noqa: S608 -- fixed column, checked owner id
-        f" where m.agent = {agent_col}), '{owner}')"
+        "coalesce((select m.person from mcp_agent m"  # noqa: S608 -- fixed columns and key
+        f" where m.agent = {agent_col}),"
+        f" (select s.value from service_meta s where s.key = '{owner.META_KEY}'))"
     )
-
-
-def owns_sql(person_expr: str, agent_col: str) -> str:
-    """SQL true when `person_expr` owns the pages of the agent in `agent_col`. `person_expr` is a
-    bound `%s` or a column, and appears once."""
-    return f"{person_expr} = {owner_sql(agent_col)}"
 
 
 def person_label(person_id: str, stored_name: str | None) -> str:
@@ -105,7 +93,7 @@ def app_shown(agent: str, person_id: str, stored_name: str | None, host: str) ->
 def owner_app(host: str) -> Shown:
     """The owner's app on `host`, where no agent exists yet (the consent screen the owner reads
     before the app is signed in) or its record is gone."""
-    return app_shown("", shared_owner(), None, host)
+    return app_shown("", settings.owner_id(), None, host)
 
 
 def unknown_app() -> Shown:

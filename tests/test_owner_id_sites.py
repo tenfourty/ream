@@ -38,18 +38,21 @@ KINDS = {REQUEST, PAGE_OWNER, SEED}
 SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("admin.py", "cmd_list_apps"): (SEED, 1),
     ("agents.py", "shared_owner"): (
-        SEED,
+        PAGE_OWNER,
         1,
     ),  # who owns a shared agent's pages (step 4 changes it)
+    # The owner's app before any agent exists (the consent screen): the owner, until slice 2 gives
+    # an app its own person.
+    ("agents.py", "owner_app"): (SEED, 1),
     ("agents.py", "person_label"): (SEED, 1),  # the owner's shown name is `owner_name`
     ("comments.py", "reopen"): (REQUEST, 1),
     # Both answering predicates now ask `agents.page_owners`/`owner_sql` (no owner-id read of their own).
     # record_elsewhere: the `said_by` default moved to page_owners; what stays is the signed-in
-    # app's person, the owner until slice 2 gives an app its own person.
-    ("decisions.py", "record_elsewhere"): (PAGE_OWNER, 1),
+    # app's person (the request's, as an app is the owner's until slice 2 gives it its own).
+    ("decisions.py", "record_elsewhere"): (REQUEST, 1),
     ("formanswer.py", "submit"): (REQUEST, 1),
     # relay: the default relayer moved to page_owners; the app check stays (as record_elsewhere).
-    ("formanswer.py", "relay"): (PAGE_OWNER, 1),
+    ("formanswer.py", "relay"): (REQUEST, 1),
     ("formrecord.py", "source_of"): (SEED, 1),
     ("mcp.py", "comment_image_label"): (PAGE_OWNER, 1),
     ("mcp_tools.py", "_comment_writer"): (PAGE_OWNER, 1),

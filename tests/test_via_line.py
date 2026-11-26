@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ream import agents, gallery, keys, mcp_apps, settings
+from ream import agents, gallery, keys, mcp_apps, mcp_clients, oauth, settings
 
 CLIENT = "https://claude.ai/oauth/claude-ai/client.json"
 SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "ream"
@@ -107,6 +107,24 @@ def test_the_owners_served_text_is_byte_identical_golden(db):
         "Your answer goes back to it.</p>"
     )
     assert gallery._asker_line(SimpleNamespace(asked_by=None), hosts, "jeremy") == ""
+
+
+def test_the_consent_page_says_the_owners_line_byte_for_byte_golden():
+    app = mcp_clients.Client(
+        id=CLIENT,
+        kind="cimd",
+        host="claude.ai",
+        name="Claude",
+        redirect_uris=("https://claude.ai/api/mcp/auth_callback",),
+    )
+    page = oauth._consent_page(app, "n", "https://claude.ai/api/mcp/auth_callback", [])
+    assert (
+        page.body.decode().count(
+            '<p><label><input type="checkbox" name="perm" value="write">'
+            " Publish, comment and ask, signed \u201cJeremy, via claude.ai\u201d</label></p>"
+        )
+        == 1
+    )
 
 
 def test_the_connected_apps_list_shows_the_owners_line(db):

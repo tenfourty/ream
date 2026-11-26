@@ -159,3 +159,23 @@ def test_the_form_bar_is_drawn_only_for_the_person_who_may_answer(db, ann_agent)
     shared = store.publish(db, "ops", "Board", FORM)
     assert forms_ui.payload(db, shared.id, "jeremy")["forms"]
     assert not forms_ui.payload(db, shared.id, "ann")["forms"]
+
+
+def test_the_python_rule_and_the_sql_rule_name_the_same_owners(db, ann_agent):
+    for agent in ("ops", ann_agent):
+        page = store.publish(db, agent, "Q", "<p>x</p>")
+        with db.connect() as conn:
+            in_sql = conn.execute(
+                f"select {agents.owner_sql('artifact.agent')} from artifact where id = %s",  # noqa: S608 -- fixed text
+                (page.id,),
+            ).fetchone()[0]
+            assert (in_sql,) == agents.page_owners(conn, agent)
+    with db.connect() as conn:
+        assert agents.page_owners(conn, ann_agent) == ("ann",)
+        assert agents.page_owners(conn, "ops") == ("jeremy",)
+
+
+def test_the_sql_rule_writes_no_owner_id_into_its_text():
+    text = agents.owner_sql("artifact.agent")
+    assert settings.owner_id() not in text
+    assert "service_meta" in text and "'owner_id'" in text

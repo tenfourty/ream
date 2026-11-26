@@ -627,6 +627,8 @@ def _seed(database: Database) -> None:
         ),
     ]
     with database.connect() as conn, conn.transaction():
+        # the `db` fixture records the owner; the seed writes its own row for it below
+        conn.execute("delete from service_meta where key = 'owner_id'")
         for table, cols, values in rows:
             marks = ", ".join(["%s"] * len(values))
             conn.execute(f"insert into {table} ({cols}) values ({marks})", values)  # noqa: S608

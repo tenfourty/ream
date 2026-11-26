@@ -57,6 +57,13 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("receipt.person", ""),
     # Gallery sign-in (slice 4): the sessions of the people signed in.
     ("person_session.person", ""),
+    # The person each app agent belongs to (agents design, slice 1): `agents.page_owners` reads
+    # `mcp_agent.person` to decide who answers a question with no `addressed_to`. The agent's name
+    # (`<person>--<host>`) is a stored name and stays. The consents and the sign-ins in flight
+    # name the same person.
+    ("mcp_agent.person", ""),
+    ("mcp_app.person", ""),
+    ("mcp_signin.person", ""),
 )
 
 log = logging.getLogger("ream.owner")
