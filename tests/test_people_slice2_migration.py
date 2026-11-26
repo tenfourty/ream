@@ -32,6 +32,7 @@ def _old_shape(db) -> None:
         )
         if db.sqlite:
             # slice 3's and slice 4's objects are newer than the shape this test rebuilds
+            conn.execute("drop table page_watch")  # agents slice 3, step 41
             conn.execute("drop table person_session")
             conn.execute("drop table person_signin")
             conn.execute("drop table form_answer")
