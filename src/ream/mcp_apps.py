@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 from ream import db as dbmod
-from ream import reach, settings
+from ream import people, reach, settings
 from ream.db import Database
 from ream.keys import (
     AGENT_NAME,
@@ -339,9 +339,11 @@ def listed(db: Database, person: str) -> list[Listed]:
 
 
 def reach_of(db: Database, app: App) -> reach.Reach:
-    """What `app` may reach: every page the owner can read (closed to agents included,
-    never the trash); changes to the pages of any of `app.person`'s app agents; relaying
-    only with `relay`; and the permissions the person granted (`read` is `ream:read`)."""
+    """What `app` may reach: for the owner's app every page the owner can read (closed to
+    agents included, never the trash); for any other person's, what `access.person_reads`
+    says (their personal agents' pages and pages open to agents). Changes to the pages of any
+    of `app.person`'s app agents either way; relaying only with `relay`; and the permissions
+    the person granted (`read` is `ream:read`)."""
     with db.connect() as conn:
         rows = conn.execute(
             "select agent from mcp_agent where person = %s order by agent",
@@ -350,7 +352,12 @@ def reach_of(db: Database, app: App) -> reach.Reach:
     writers = tuple(dict.fromkeys([app.agent, *(row[0] for row in rows)]))
     return reach.Reach(
         agent=app.agent,
-        readable=reach.READS_AS_OWNER,
+        readable=(
+            reach.READS_AS_OWNER
+            if app.person == people.owner_person().id
+            else reach.READS_AS_PERSON
+        ),
+        person=app.person,
         writable_agents=writers,
         can_relay="relay" in app.permissions,
         permissions=frozenset(f"ream:{p}" for p in app.permissions),

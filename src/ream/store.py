@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ream import (
+    access,
     events,
     folders,
     forms,
@@ -772,12 +773,24 @@ def _owned(
     can read, closed to agents included, never the trash, and changes the pages of any
     of the person's app agents. `widen=False` keeps a check to `agent`'s own pages
     whoever calls (asking on a page, until a question can have its own asker, 11.4).
+    Another person's app (`reads_person`) reads what `access.person_reads` says: that
+    person's personal agents' pages and pages open to agents, and changes only those agents'.
     A key's reach widens nothing: the queries below it are today's."""
     wide = caller_reach.widened(agent) if widen else None
     if wide is not None and as_reader and wide.reads_all():
         return conn.execute(
             _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null",
             (folders.his(), artifact_id),
+        ).fetchone()
+    if wide is not None and as_reader and wide.reads_person():
+        # Another person's app: its person's personal agents' pages and pages open to agents
+        # (`access.person_reads`, the same clause), never the trash; a page it may not read is
+        # the same empty answer as one that is not there.
+        clause, extra = access.reads_sql(wide.person)
+        return conn.execute(
+            _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null"
+            f" and {clause}",
+            (folders.his(), artifact_id, *extra),
         ).fetchone()
     if wide is not None and not as_reader and wide.writes_others():
         writers = wide.writes()
@@ -2040,6 +2053,11 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
     their colleagues' open work, 5a). Whether he has read a page is reported
     only on the caller's own rows."""
     wide = caller_reach.widened(agent)
+    # An app of another person reads what `access.person_reads` says; the owner's app reads
+    # all; a key neither. `or %s` is the old fixed shape for the first two of those.
+    person_sql, person_params = "%s", (wide is not None and wide.reads_all(),)
+    if wide is not None and wide.reads_person():
+        person_sql, person_params = access.reads_sql(wide.person)
     with db.connect() as conn:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"  # noqa: S608 -- _PIN is a fixed clause
@@ -2057,15 +2075,10 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " and page_read.person = %s"
             " left join folder on folder.id = artifact.folder_id"
             " where artifact.deleted_at is null"
-            " and (artifact.agent = %s or artifact.agents_can_read or %s)"
+            f" and (artifact.agent = %s or artifact.agents_can_read or {person_sql})"
             " order by artifact.updated_at desc",
             # A signed-in app reads every page the owner can read (MCP design 11.2).
-            (
-                folders.his(),
-                folders.his(),
-                agent,
-                wide is not None and wide.reads_all(),
-            ),
+            (folders.his(), folders.his(), agent, *person_params),
         ).fetchall()
     now = datetime.now(UTC)
     return [
@@ -2357,7 +2370,9 @@ def _scoped(
     # A signed-in MCP app (`reach.widened`, MCP design 11.2) organises the pages of any of
     # the person's app agents, as `_owned` lets it change them. `widen=False` keeps a
     # check to `agent`'s own pages whoever calls (destroy, give away, who may read:
-    # "never" for an app). A key's reach widens nothing.
+    # "never" for an app). A key's reach widens nothing. For another person's app `writes()` is
+    # that person's own agents (`mcp_apps.reach_of`), so this clause needs no person branch:
+    # `_scoped` only ever changes pages, never reads one.
     wide = caller_reach.widened(agent) if widen and agent is not None else None
     if agent is None:
         clause, params = "where id = %s", (artifact_id,)

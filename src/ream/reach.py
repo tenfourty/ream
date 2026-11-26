@@ -7,6 +7,11 @@ whether the agent it was given is acting with a wider reach than a key's. Nothin
 it, so `/api/v1` and every key behave exactly as before: a key's reach widens nothing.
 `_scoped` (rename, pin, archive, delete, restore) widens the same way; purge (`destroy`),
 transfer and who-can-read never do (`widen=False`).
+
+An app reads as its person (agents design, slice 2): the owner's app as the owner
+(`READS_AS_OWNER`), any other person's through `access.person_reads` (`READS_AS_PERSON`: the
+pages of that person's personal agents and the pages open to agents). What an app may
+CHANGE is `writes()` in both cases: the agents that person owns, never anyone else's.
 """
 
 from __future__ import annotations
@@ -26,6 +31,8 @@ PERMISSIONS = (READ, WRITE, RELAY)
 # never the trash.
 READS_AS_AGENT = "agent"
 READS_AS_OWNER = "owner"
+# A signed-in app of a person who is not the owner: what `access.person_reads` says.
+READS_AS_PERSON = "person"
 
 
 @dataclass(frozen=True)
@@ -36,12 +43,17 @@ class Reach:
     writable_agents: tuple[str, ...] = ()
     can_relay: bool = True
     permissions: frozenset[str] = frozenset(PERMISSIONS)
+    # Whose app this is (None for a key).
+    person: str | None = None
 
     def writes(self) -> tuple[str, ...]:
         return self.writable_agents or (self.agent,)
 
     def reads_all(self) -> bool:
         return self.readable == READS_AS_OWNER
+
+    def reads_person(self) -> bool:
+        return self.readable == READS_AS_PERSON and self.person is not None
 
     def writes_others(self) -> bool:
         return self.writes() != (self.agent,)
@@ -72,4 +84,6 @@ def widened(agent: str | None) -> Reach | None:
     found = _current.get()
     if found is None or agent is None or found.agent != agent:
         return None
-    return found if found.reads_all() or found.writes_others() else None
+    if found.reads_all() or found.reads_person() or found.writes_others():
+        return found
+    return None
