@@ -11,7 +11,7 @@
   absolute cap 90 days from consent. One live app per person and app.
 
 Wherever an agent is shown, a person-and-app agent reads "<owner name>, via <host>"
-(`display_name`); every other agent is shown by its name.
+(`agents.shown`); every other agent is shown by its name.
 """
 
 from __future__ import annotations
@@ -186,21 +186,6 @@ def mcp_agent(db: Database, agent: str) -> McpAgent | None:
             (agent,),
         ).fetchone()
     return None if row is None else _agent_row(row)
-
-
-# --- How an agent is shown ------------------------------------------------------------------
-
-
-def via(host: str) -> str:
-    """How a person-and-app agent on `host` is shown: `Jeremy, via claude.ai`."""
-    return f"{settings.owner_name()}, via {host}"
-
-
-def display_name(db: Database, agent: str) -> str:
-    """How `agent` is shown wherever the gallery or the API shows an agent: a
-    person-and-app agent as "<owner name>, via <host>", any other by its name."""
-    found = mcp_agent(db, agent)
-    return agent if found is None else via(found.host)
 
 
 # --- Apps (consents) ------------------------------------------------------------------------

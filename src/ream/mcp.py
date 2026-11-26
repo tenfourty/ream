@@ -39,6 +39,7 @@ from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
+    agents,
     api,
     hosts,
     keys,
@@ -509,7 +510,8 @@ def _whoami(call: Call, _arguments: dict[str, Any]) -> ToolOutput:
     me = api.me_view(call.db, call.request, call.agent, call.session)
     me["permissions"] = sorted(call.permissions, key=PERMISSIONS.index)
     if call.app is not None:  # a signed-in app: who it is shown as, and its reach
-        me["shown_as"] = mcp_apps.display_name(call.db, call.agent)
+        with call.db.connect() as conn:
+            me["shown_as"] = agents.shown(conn, call.agent).text()
         me["reach"] = {
             "reads": "every page the owner can read, closed to agents included",
             "changes_pages_of": list(call.reach.writes()),

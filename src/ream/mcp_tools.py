@@ -51,6 +51,7 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ValidationError
 
 from ream import (
+    agents,
     api,
     comments,
     decisions,
@@ -1766,7 +1767,8 @@ def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput | dict:
     call.after.extend(later)
     shown = jsonable_encoder(out)
     if call.app is not None:  # "Jeremy, via claude.ai" (11.1); stored as the agent
-        shown["author_name"] = mcp_apps.display_name(call.db, call.agent)
+        with call.db.connect() as conn:
+            shown["author_name"] = agents.shown(conn, call.agent).text()
     return ToolOutput({"comment": shown}, written_by=page.agent)
 
 
