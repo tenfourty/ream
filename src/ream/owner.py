@@ -64,6 +64,9 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("mcp_agent.person", ""),
     ("mcp_app.person", ""),
     ("mcp_signin.person", ""),
+    # The person a key's agent belongs to (agents design, slice 4): a personal key reads what its
+    # person reads, so `change-owner` moves it with the owner id.
+    ("agent_person.person", ""),
 )
 
 log = logging.getLogger("ream.owner")
@@ -92,11 +95,14 @@ class Refused(Exception):
 
 # Where an id already in use would collide with the rows `change_owner` moves onto it:
 # `person.id` is the primary key, and `mcp_agent` and `mcp_app` are unique per (person, client).
+# `agent_person` has no unique key on `person`, but a new owner id a person's machine already carries
+# would silently join that person's keys to the owner's.
 # (`mcp_signin.person` has no unique key, so a clash there breaks nothing.)
 _HELD_BY: tuple[tuple[str, str], ...] = (
     ("person", "id"),
     ("mcp_agent", "person"),
     ("mcp_app", "person"),
+    ("agent_person", "person"),
 )
 
 

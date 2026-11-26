@@ -77,6 +77,14 @@ def acting(reach: Reach) -> Iterator[Reach]:
         _current.reset(token)
 
 
+def bind(wider: Reach) -> None:
+    """Act with `wider` for the rest of this request: a personal key's reach, set by the
+    `/api/v1` auth dependency (agents design, slice 4). There is nothing to reset: every request
+    runs in its own task, whose context ends with it (an `acting` block is for a message that
+    shares a task with others)."""
+    _current.set(wider)
+
+
 def widened(agent: str | None) -> Reach | None:
     """The reach `agent` acts with right now, when it is wider than a key's; None
     otherwise, and always for a call made for any other agent (a nudge, a housekeeping

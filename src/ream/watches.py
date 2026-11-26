@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from ream import access, events, store
+from ream import access, agents, events, store
 from ream.db import Database
 
 # At most this many watches per agent (a PUT past it is a 409; a repeat PUT is not past it).
@@ -40,14 +40,13 @@ class TooMany(Exception):
 
 
 def _reads(conn, agent: str, table: str = "artifact") -> tuple[str, tuple]:
-    """The clause for "`agent` can read this page" with its parameters. An app agent (a row in
-    `mcp_agent`) reads what its person reads; any other agent is a key: its own pages and pages
-    open to agents."""
-    row = conn.execute(
-        "select person from mcp_agent where agent = %s", (agent,)
-    ).fetchone()
-    if row is not None:
-        return access.reads_sql(row[0], table)
+    """The clause for "`agent` can read this page" with its parameters. A personal agent (an app
+    agent, or a key with an `agent_person` row: `agents.person_of`) reads what its person reads, the
+    same clause `store._owned` uses for it; a shared key reads its own pages and pages open to
+    agents."""
+    person = agents.person_of(conn, agent)
+    if person is not None:
+        return access.reads_sql(person, table)
     return f"({table}.agent = %s or {table}.agents_can_read)", (agent,)
 
 

@@ -489,6 +489,11 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
 # --- whoami ---------------------------------------------------------------------------
 
 
+def _key_reach(db: Database, agent: str) -> reach.Reach:
+    with db.connect() as conn:
+        return agents.key_reach(conn, agent)
+
+
 @tool(
     "whoami",
     title="Who am I",
@@ -1272,7 +1277,8 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
                 version=version,
                 # A key holds every permission, within its own reach (section 11.3).
                 permissions=frozenset(PERMISSIONS),
-                reach=reach.of_key(who.agent),
+                # A personal key reads wider, never writes wider (agents design, slice 4).
+                reach=await run_in_threadpool(_key_reach, db, who.agent),
             )
         # Anything else a tool raises is a bug: FastAPI's 500, logged as any route's.
         status, body = await run_in_threadpool(_dispatch, call, message)

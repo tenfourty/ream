@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
+    agents,
     anchors,
     clientlevel,
     comments,
@@ -721,7 +722,7 @@ def me_view(
     """What `GET /me` answers for a request `authenticate` has passed (the MCP `whoami`
     tool answers the same)."""
     key = getattr(request.state, "agent_key", None)
-    return {
+    out = {
         "agent": agent,
         "key_id": getattr(request.state, "agent_key_id", None),
         # Whether this key replaces itself, and from when (homelab-ij8.34).
@@ -740,6 +741,19 @@ def me_view(
         # answer, one layer further in than the one it was built for.
         "session": seat_session,
     }
+    # A machine the owner marked personal says whose it is, read-only (agents design, slice 4).
+    # Absent for every shared key, so a shared key's answer is byte-identical to before.
+    with db.connect() as conn:
+        mine = agents.person_of(conn, agent)
+        if mine is not None and key is not None:
+            out["belongs_to"] = mine
+            out["shown_as"] = agents.shown(conn, agent).text()
+    return out
+
+
+def _key_reach(db: Database, agent: str) -> reach.Reach:
+    with db.connect() as conn:
+        return agents.key_reach(conn, agent)
 
 
 def open_questions(
@@ -2146,8 +2160,15 @@ def agent_router(
     # a caller's budget. homelab-ij8.100; the reasoning is in `ratelimit`.
     limiter = limiter or ratelimit.FailedAuthLimiter()
 
-    def caller(request: Request) -> str:
-        return authenticate(db, limiter, request).agent
+    async def caller(request: Request) -> str:
+        # Async so that the reach set here is the one the (threadpool) route inherits: a
+        # context variable set in a sync dependency is lost with its worker's copy. A
+        # personal key reads as its person but still writes only its own pages (decision D).
+        key = await run_in_threadpool(authenticate, db, limiter, request)
+        wider = await run_in_threadpool(_key_reach, db, key.agent)
+        if wider.reads_person():  # a shared key sets nothing: its reach widens nothing
+            reach.bind(wider)
+        return key.agent
 
     SESSION_MAX = _SESSION_MAX
     session = declared_session

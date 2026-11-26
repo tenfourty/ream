@@ -2,7 +2,8 @@
 docs/agent/specs/2026-11-26-agents-and-watching-design.md).
 
 An agent is personal (it acts for one person) or shared (it is the deployment's). Today only an
-app agent (`mcp_agent`) is personal; a key agent is shared (slice 4 adds `agent_person` for keys).
+app agent (`mcp_agent`) is personal, and so is a key agent the owner marked with an `agent_person`
+row (slice 4); every other key agent is shared.
 Nothing is copied: the answers are derived from `mcp_agent`, so an older image after a rollback
 reads the same rows.
 
@@ -18,8 +19,9 @@ reads the same rows.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from ream import owner, settings, text
+from ream import owner, reach, settings, text
 
 NAME_LIMIT = 64
 
@@ -31,11 +33,75 @@ def shared_owner() -> str:
 
 
 def person_of(conn, agent: str) -> str | None:
-    """The person `agent` belongs to, or None for a shared agent."""
+    """The person `agent` belongs to, or None for a shared agent: an app agent's person
+    (`mcp_agent`), else the person a key agent was marked for (`agent_person`)."""
     row = conn.execute(
         "select person from mcp_agent where agent = %s", (agent,)
     ).fetchone()
+    if row is None:
+        row = conn.execute(
+            "select person from agent_person where agent = %s", (agent,)
+        ).fetchone()
     return None if row is None else row[0]
+
+
+class Refused(Exception):
+    """A change of an agent's person the service will not make, with a reason fit to print."""
+
+
+def set_person(db, agent: str, person: str, by: str) -> bool:
+    """Mark the KEY agent `agent` as `person`'s machine (agents design, slice 4). Returns True when
+    this changed anything. Only `artifacts-admin` and the owner's Machines page call it: no
+    /api/v1 or MCP route does (`tests/test_personal_key.py` walks the routes). Raises `Refused`
+    for an agent no key holds, an app agent (its person is the one that signed in), or a person
+    who does not exist."""
+    now = datetime.now(UTC)
+    with db.connect() as conn, conn.transaction():
+        if conn.execute(
+            "select 1 from mcp_agent where agent = %s", (agent,)
+        ).fetchone():
+            raise Refused(f"{agent} is an app agent: it already belongs to its person")
+        if not conn.execute(
+            "select 1 from agent_key where agent = %s limit 1", (agent,)
+        ).fetchone():
+            raise Refused(f"no agent named {agent} holds a key")
+        if not conn.execute("select 1 from person where id = %s", (person,)).fetchone():
+            raise Refused(f"no person with id {person!r}")
+        before = conn.execute(
+            "select person from agent_person where agent = %s", (agent,)
+        ).fetchone()
+        if before is not None and before[0] == person:
+            return False
+        conn.execute(
+            "insert into agent_person (agent, person, set_at, set_by) values (%s, %s, %s, %s)"
+            " on conflict (agent) do update set person = excluded.person,"
+            " set_at = excluded.set_at, set_by = excluded.set_by",
+            (agent, person, now, by),
+        )
+    return True
+
+
+def clear_person(db, agent: str) -> bool:
+    """Make `agent` shared again (it reads as a key at once). True when it was personal."""
+    with db.connect() as conn, conn.transaction():
+        return (
+            conn.execute("delete from agent_person where agent = %s", (agent,)).rowcount
+            > 0
+        )
+
+
+def key_reach(conn, agent: str) -> reach.Reach:
+    """The reach of a KEY acting as `agent`: exactly `reach.of_key` for a shared key. A personal
+    key (an `agent_person` row) READS as its person does (`access.reads_sql`: its person's
+    personal agents' pages, its own and pages open to agents; the owner's key reads what the
+    owner reads) but CHANGES only its own pages (decision D: `writable_agents` stays empty, and
+    nothing that asks or relays takes `reads_person()` for a key)."""
+    row = conn.execute(
+        "select person from agent_person where agent = %s", (agent,)
+    ).fetchone()
+    if row is None:
+        return reach.of_key(agent)
+    return reach.Reach(agent=agent, readable=reach.READS_AS_PERSON, person=row[0])
 
 
 def page_owners(conn, agent: str) -> tuple[str, ...]:
@@ -53,6 +119,7 @@ def owner_sql(agent_col: str) -> str:
     return (
         "coalesce((select m.person from mcp_agent m"  # noqa: S608 -- fixed columns and key
         f" where m.agent = {agent_col}),"
+        f" (select k.person from agent_person k where k.agent = {agent_col}),"
         f" (select s.value from service_meta s where s.key = '{owner.META_KEY}'))"
     )
 

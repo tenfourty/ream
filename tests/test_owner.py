@@ -498,12 +498,23 @@ def _hold_new_id(db, how: str) -> None:
     if how == "person":
         with db.connect() as conn:
             conn.execute("insert into person (id) values (%s)", ("ann",))
+    elif how == "agent_person":
+        with db.connect() as conn:
+            conn.execute(
+                "insert into agent_person (agent, person) values (%s, %s)",
+                ("laptop", "ann"),
+            )
     else:
         mcp_apps.agent_for(db, "ann", APP_CLIENT, "claude.ai")
 
 
 @pytest.mark.parametrize(
-    ("how", "table"), [("person", "person"), ("mcp_agent", "mcp_agent")]
+    ("how", "table"),
+    [
+        ("person", "person"),
+        ("mcp_agent", "mcp_agent"),
+        ("agent_person", "agent_person"),
+    ],
 )
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_change_owner_refuses_an_id_a_person_or_app_agent_already_holds(
@@ -694,3 +705,23 @@ def test_cli_help_is_unchanged(monkeypatch, name):
     parser = (client if name == "artifacts-publish" else decide).build_parser()
     text = _help(parser)
     assert hashlib.sha256(text.encode()).hexdigest() == HELP_DIGEST[name]
+
+
+def test_change_owner_moves_a_personal_keys_person_with_the_owner_id(db):
+    """A key the owner marked as his own machine (agents design, slice 4) follows the owner id;
+    another person's stays."""
+    owner.check(db, "jeremy")
+    with db.connect() as conn:
+        conn.execute("insert into person (id) values ('zed')")
+    keys.mint(db, "laptop")
+    keys.mint(db, "zeds-box")
+    agents.set_person(db, "laptop", "jeremy", "admin")
+    agents.set_person(db, "zeds-box", "zed", "admin")
+
+    counts = owner.change_owner(db, "ann", dry_run=True)
+    assert counts["agent_person.person"] == 1
+
+    owner.change_owner(db, "ann", dry_run=False)
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") == "ann"
+        assert agents.person_of(conn, "zeds-box") == "zed"
