@@ -15,8 +15,12 @@ unset CDPATH
 # CLEAN IS READ FROM ggshield's REPORT, NOT ITS EXIT STATUS. The verdict is
 # ggshield-judge.py's (beside this file, run with `python3 -I`; its header has
 # the whole rule): exit 0, a JSON report that parses, no errors entry in it,
-# the scanned commit listed in it exactly once, and no error line in ggshield's
-# other output. Anything short of that refuses. The judge answers with an exit
+# the scanned commit listed in it exactly once, one file result for each document
+# ggshield sends for it (the judge predicts those by running git itself, in the
+# environment this script gives it: the pinned settings, literal pathspecs, no
+# replace refs, the top of the tree; it reads the --config-path file this script
+# passes, and refuses a scan with none), and no error line in ggshield's other
+# output. Anything short of that refuses. The judge answers with an exit
 # status and one word, and the gate takes only these pairs (the whole of its
 # stdout must be the word): 0 clean allows; 1 finding, 1 finding-incomplete (an
 # incident listed in a scan that did not finish) and 1 finding-unread (ggshield
@@ -1351,9 +1355,45 @@ if [ "$mode" = auto ]; then
     *) mode=dead ;;
   esac
 fi
+# docnames: the paths of the commit under scan that ggshield sends as documents (the header of its first git
+# show call; a rename's old path too), one JSON string per line, for the commit's "entities_with_incidents"
+# as the real ggshield lists them and as the judge checks them.
+docnames() {
+  python3 -I -c '
+import json, os, re, subprocess, sys
+env = dict(os.environ, GIT_CONFIG_SYSTEM="", GIT_CONFIG_GLOBAL=os.environ.get("GG_GIT_CONFIG", ""), LANG="C")
+def git(*a):
+    return subprocess.run(["git", "-c", "core.quotePath=false", "-c", "safe.directory=*", *a], env=env,
+                          stdin=subprocess.DEVNULL, capture_output=True).stdout.decode("utf-8", "replace")
+sha = sys.argv[1]
+info, *lines = re.split("[\n\0]:", git("show", sha, "--raw", "-z"))
+paths = []
+for x in lines:
+    prefix, path, *rest = x.rstrip("\0").split("\0")
+    paths += [path] if not rest else [path, rest[0]]
+patch = git("show", sha, "--raw", "-z", "--patch", "--", *paths) if paths else ""
+toks = patch.split("\0diff ", 1)
+for d in (re.split(r"^diff ", toks[1], flags=re.M) if len(toks) == 2 else []):
+    if "\n@@" in d:
+        sys.stdout.write(json.dumps(re.match(r"--git a/.* b/(.*)\n", d).group(1)) + "\n")
+' "$id"
+}
 scan() { # scan <commit id> <incidents in it>
-  local ents=""
-  [ "$2" = 0 ] || ents='"entities_with_incidents": [{"mode": "NEW", "filename": "stub.txt", "incidents": [{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}], "total_incidents": 1}], '
+  local ents="" f first=1 inc="" n
+  if [ "$1" = "$id" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      inc='[]' n=0
+      if [ "$2" != 0 ] && [ "$first" = 1 ]; then inc='[{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}]' n=1; fi
+      [ "$first" = 1 ] || ents="$ents, "
+      ents="$ents{\"mode\": \"NEW\", \"filename\": $f, \"incidents\": $inc, \"total_incidents\": $n}"
+      first=0
+    done < <(docnames)
+  fi
+  if [ -z "$ents" ] && [ "$2" != 0 ]; then
+    ents='{"mode": "NEW", "filename": "stub.txt", "incidents": [{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}], "total_incidents": 1}'
+  fi
+  [ -z "$ents" ] || ents="\"entities_with_incidents\": [$ents], "
   printf '{"id": "%s", "type": "commit", %s"total_incidents": %s}' "$1" "$ents" "$2"
 }
 report() { # report <scans, comma separated> <total incidents>
@@ -1449,7 +1489,7 @@ EOF
 
   out=$(gate GGSHIELD_STUB_RC=1); rc=$?
   check "rc 1 with a finding in the report BLOCKS the commit" "$rc" 1 "$out" "found a secret"
-  check "…and names the detector and the file" "$rc" 1 "$out" "detector 'Stub Detector', file 'stub.txt'"
+  check "…and names the detector and the file" "$rc" 1 "$out" "detector 'Stub Detector', file 'kept.txt'"
   if grep -q 'st\*\*ub' <<< "$out"; then
     printf '  FAIL  the matched text was printed\n'; fail=1
   else
