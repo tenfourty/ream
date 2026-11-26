@@ -420,6 +420,19 @@ def _seed(database: Database) -> None:
         ),
         ("person", "id, issuer, subject, name", ["jeremy", "https://idp", "s1", "J"]),
         (
+            "person_signin",
+            (
+                "id, state_sha256, browser_sha256, oidc_nonce, oidc_verifier,"
+                " next_path, created_at, expires_at"
+            ),
+            ["si1", "st", "br", "n", "v é", "/a?b=1", T0, T1],
+        ),
+        (
+            "person_session",
+            "token_sha256, person, created_at, expires_at, last_seen_at",
+            ["tok1", "jeremy", T0, T1, T1],
+        ),
+        (
             "page_viewer",
             "artifact_id, kind, viewer, views, last_at, counted_at",
             ["a1", "agent", "beta é", 2, T1, T0],

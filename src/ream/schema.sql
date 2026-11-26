@@ -1502,3 +1502,27 @@ begin
             from decision where answer_record is not null;
     end if;
 end $$;
+
+-- GALLERY SIGN-IN (26 Nov 2026; docs/agent/specs/2026-11-24-people-design.md, slice 4). Nothing reads
+-- these until `REAM_GALLERY_SIGN_IN` is on. `person_signin` is one sign-in in flight (secrets stored as
+-- hashes or single-use values, each claimed once); `person_session` is a signed-in browser, keyed by
+-- the hash of its cookie's token. No foreign key to `person`: it follows `page_read.person`, so
+-- `change-owner` can rewrite `person.id` (and `person_session.person` with it). SQLite: step 40.
+create table if not exists person_signin (
+    id             text        primary key,
+    state_sha256   text        unique,
+    browser_sha256 text        not null,
+    oidc_nonce     text        not null,
+    oidc_verifier  text        not null,
+    next_path      text        not null default '/',
+    created_at     timestamptz not null default now(),
+    expires_at     timestamptz not null
+);
+create table if not exists person_session (
+    token_sha256 text        primary key,
+    person       text        not null,
+    created_at   timestamptz not null default now(),
+    expires_at   timestamptz not null,
+    last_seen_at timestamptz
+);
+create index if not exists person_session_person on person_session (person);

@@ -46,6 +46,7 @@ def is_reserved_agent_name(name: str) -> bool:
 NAME_LOCK_KEY = 0x72656E61_6D650001  # "rename" + 1: the lock a rename always took
 
 APP_AGENT_REASON = "it is a person-and-app agent's (an MCP app's) name"
+PERSON_REASON = "it is a person's id"
 
 
 class NameHeld(Exception):
@@ -53,13 +54,16 @@ class NameHeld(Exception):
 
 
 def refuse_app_agent_name(conn, agent: str) -> None:
-    """Take the name lock and refuse `agent` when a person-and-app agent holds it, so
+    """Take the name lock and refuse `agent` when a person-and-app agent or a person holds it, so
     no key publishes under (and shares the pages of) an MCP app's agent. Call inside
     the transaction that inserts the key, before it takes any row lock."""
     conn.advisory_lock(NAME_LOCK_KEY)
     held = conn.execute("select 1 from mcp_agent where agent = %s", (agent,)).fetchone()
     if held is not None:
         raise NameHeld(f"no key may be made for {agent!r}: {APP_AGENT_REASON}")
+    person = conn.execute("select 1 from person where id = %s", (agent,)).fetchone()
+    if person is not None:
+        raise NameHeld(f"no key may be made for {agent!r}: {PERSON_REASON}")
 
 
 @dataclass(frozen=True)

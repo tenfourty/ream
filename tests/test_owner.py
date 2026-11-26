@@ -11,7 +11,7 @@ import argparse
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -309,6 +309,7 @@ COLUMNS = [
     ("decision", "addressed_to", ""),
     ("form_answer", "person", ""),
     ("receipt", "person", ""),
+    ("person_session", "person", ""),
 ]
 
 
@@ -379,6 +380,12 @@ def _populate(db):
             "insert into receipt (id, subject_kind, subject_id, state, agent, created_at,"
             " person) values ('rc1', 'decision', %s, 'working', 'bosun', %s, 'jeremy')",
             (asked.id, datetime.now(UTC)),
+        )
+        # slice 4: his signed-in browser
+        conn.execute(
+            "insert into person_session (token_sha256, person, expires_at)"
+            " values ('tok1', 'jeremy', %s)",
+            (datetime.now(UTC) + timedelta(hours=12),),
         )
     return page
 

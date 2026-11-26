@@ -16,8 +16,10 @@ owner as person #1 (`seed_person`); its row moves with the id.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
+from ream import settings
 from ream.db import Database, Rollback
 from ream.settings import OWNER_ID
 
@@ -53,7 +55,11 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
     ("decision.addressed_to", ""),
     ("form_answer.person", ""),
     ("receipt.person", ""),
+    # Gallery sign-in (slice 4): the sessions of the people signed in.
+    ("person_session.person", ""),
 )
+
+log = logging.getLogger("ream.owner")
 
 
 class OwnerMismatch(Exception):
@@ -67,6 +73,10 @@ class OwnerMismatch(Exception):
         )
         self.stored = stored
         self.configured = configured
+
+
+class IdentityHeld(Exception):
+    """Another person already holds the sign-in identity the settings give the owner."""
 
 
 class Refused(Exception):
@@ -104,11 +114,39 @@ def check(db: Database, configured: str) -> str:
 
 def seed_person(conn, owner_id: str) -> None:
     """Person #1: the owner's row in `person`, made if it is not there. The issuer and subject
-    come from the pin the owner's first OIDC sign-in wrote (`oidc.PIN_KEY`, "<issuer> <sub>"),
-    when there is one; a row that already exists is left as it is."""
+    come from `REAM_OIDC_ISSUER` + `REAM_OIDC_OWNER_SUBJECT` when both are set (the setting
+    wins over what the row holds; a WARNING, naming no value, says the row was changed), else
+    from the pin the owner's first OIDC sign-in wrote (`oidc.PIN_KEY`, "<issuer> <sub>") into a
+    row that has none. `IdentityHeld` when another person holds the pair the settings name."""
     conn.execute(
         "insert into person (id) values (%s) on conflict (id) do nothing", (owner_id,)
     )
+    cfg = settings.current()
+    if cfg.oidc_issuer and cfg.oidc_owner_subject:
+        issuer, subject = cfg.oidc_issuer, cfg.oidc_owner_subject
+        holder = conn.execute(
+            "select id from person where issuer = %s and subject = %s",
+            (issuer, subject),
+        ).fetchone()
+        if holder is not None and holder[0] != owner_id:
+            raise IdentityHeld(
+                "another person holds the sign-in identity REAM_OIDC_ISSUER and"
+                " REAM_OIDC_OWNER_SUBJECT give the owner: the owner's row cannot take it"
+            )
+        row = conn.execute(
+            "select issuer, subject from person where id = %s", (owner_id,)
+        ).fetchone()
+        if (row[0], row[1]) != (issuer, subject):
+            conn.execute(
+                "update person set issuer = %s, subject = %s where id = %s",
+                (issuer, subject, owner_id),
+            )
+            if row[0] is not None or row[1] is not None:
+                log.warning(
+                    "the owner's stored sign-in identity differed from REAM_OIDC_ISSUER and"
+                    " REAM_OIDC_OWNER_SUBJECT; the settings were used"
+                )
+        return
     pin = conn.execute(
         "select value from service_meta where key = %s", ("oidc_owner_sub",)
     ).fetchone()

@@ -1218,6 +1218,30 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # 25 Nov 2026: when the agent acknowledged each person's answer, people design slice 3b
     # (see schema.sql). An older image ignores the column.
     39: ("alter table form_answer add column seen_at timestamptz",),
+    # 26 Nov 2026: gallery sign-in's two tables, people design slice 4 (see schema.sql).
+    # Nothing reads them until REAM_GALLERY_SIGN_IN is on.
+    40: (
+        (
+            "create table person_signin ("
+            " id text primary key,"
+            " state_sha256 text unique,"
+            " browser_sha256 text not null,"
+            " oidc_nonce text not null,"
+            " oidc_verifier text not null,"
+            " next_path text not null default '/',"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null)"
+        ),
+        (
+            "create table person_session ("
+            " token_sha256 text primary key,"
+            " person text not null,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null,"
+            " last_seen_at timestamptz)"
+        ),
+        "create index person_session_person on person_session (person)",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

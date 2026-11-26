@@ -53,6 +53,8 @@ SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("partner.py", "answered_body"): (PAGE_OWNER, 1),
     ("textvars.py", "variables"): (SEED, 1),
     ("people.py", "owner_person"): (SEED, 1),
+    ("people.py", "_person"): (SEED, 1),
+    ("people.py", "fill_owner_identity"): (SEED, 1),
     ("serve.py", "app_from_env"): (SEED, 1),
 }
 
