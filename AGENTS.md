@@ -288,7 +288,7 @@ The secret scan is the exception to "degrade to a SKIP": it refuses when ggshiel
 cannot scan, and only `GGSHIELD_SKIP=1` lets that through, saying loudly that nothing was scanned; that switch is for a
 person's own machine and is refused where `CI`, `FORGEJO_ACTIONS` or `GITHUB_ACTIONS` is set. A scan passes on its report, not on
 ggshield's exit status alone (`scripts/guards/ggshield-judge.py`, run with `python3 -I`): exit 0, a JSON report that parses and holds
-no errors entry, the scanned commit listed in it once, and no error line in ggshield's other output; anything less refuses. Because
+no errors entry, the scanned commit listed in it once, one file result for each document ggshield sends for it (the judge predicts those with git under the gate's pinned settings, and reads the `--config-path` file), and no error line in ggshield's other output; anything less refuses. Because
 ggshield's pre-commit scan has no JSON report, the gate scans the staged change as one commit made from a copy of the index (no ref
 moved, the index untouched). It
 runs ggshield with `GITGUARDIAN_DONT_LOAD_ENV=1`, `--config-path` on an empty temporary file and `--instance` on the default dashboard, so the
