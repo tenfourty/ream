@@ -90,6 +90,16 @@ class Refused(Exception):
     """A change of owner the service will not do, with a reason fit to print."""
 
 
+# Where an id already in use would collide with the rows `change_owner` moves onto it:
+# `person.id` is the primary key, and `mcp_agent` and `mcp_app` are unique per (person, client).
+# (`mcp_signin.person` has no unique key, so a clash there breaks nothing.)
+_HELD_BY: tuple[tuple[str, str], ...] = (
+    ("person", "id"),
+    ("mcp_agent", "person"),
+    ("mcp_app", "person"),
+)
+
+
 def stored(db: Database) -> str | None:
     """The owner id the database was written for, or None before it was ever recorded."""
     with db.connect() as conn:
@@ -170,7 +180,8 @@ def change_owner(db: Database, new: str, *, dry_run: bool) -> dict[str, int]:
     """Move the database to owner id `new`: rewrite every stored column in one transaction
     and record `new`. Returns the rows changed (or that would change) per `table.column`,
     plus `service_meta`. Raises `Refused` for an invalid id, an id some agent already
-    holds, an unrecorded database, or `new` equal to the stored one."""
+    holds, an id a person or an app agent's person already holds (the move would collide with
+    that row), an unrecorded database, or `new` equal to the stored one."""
     if not OWNER_ID.fullmatch(new):
         raise Refused(f"invalid owner id {new!r}: must match {OWNER_ID.pattern!r}")
     counts: dict[str, int] = {}
@@ -196,6 +207,22 @@ def change_owner(db: Database, new: str, *, dry_run: bool) -> dict[str, int]:
             raise Refused(
                 f"{new!r} is the name of an agent that already has keys or pages;"
                 " an owner id must not be an agent's name"
+            )
+        # The rows moved to `new` must not meet rows already there: `person.id` is the key and
+        # the app tables are unique per (person, client). Said before anything is written.
+        held = [
+            f"{table}.{col}"
+            for table, col in _HELD_BY
+            if conn.execute(
+                f"select 1 from {table} where {col} = %s limit 1",  # noqa: S608 -- fixed identifiers from _HELD_BY
+                (new,),
+            ).fetchone()
+            is not None
+        ]
+        if held:
+            raise Refused(
+                f"{new!r} is already held in {', '.join(held)}; an owner id must not be"
+                " one a person or an app agent already has"
             )
         for column, extra in _COLUMNS:
             table, col = column.split(".")

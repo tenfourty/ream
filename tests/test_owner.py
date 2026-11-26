@@ -493,6 +493,49 @@ def test_change_owner_refuses_what_it_should(db):
     assert owner.stored(db) == "jeremy"
 
 
+def _hold_new_id(db, how: str) -> None:
+    """Make `ann` already held: as a person row, or as the person of an app agent."""
+    if how == "person":
+        with db.connect() as conn:
+            conn.execute("insert into person (id) values (%s)", ("ann",))
+    else:
+        mcp_apps.agent_for(db, "ann", APP_CLIENT, "claude.ai")
+
+
+@pytest.mark.parametrize(
+    ("how", "table"), [("person", "person"), ("mcp_agent", "mcp_agent")]
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_change_owner_refuses_an_id_a_person_or_app_agent_already_holds(
+    db, how, table, dry_run
+):
+    """The move would collide with the row that is there (a key, a unique pair): it is refused
+    up front, in a dry run too, naming the table and writing nothing."""
+    _populate(db)
+    owner.check(db, "jeremy")
+    _hold_new_id(db, how)
+    before = _count(db, "jeremy")
+
+    with pytest.raises(owner.Refused, match=table) as refused:
+        owner.change_owner(db, "ann", dry_run=dry_run)
+
+    assert "ann" in str(refused.value)
+    assert _count(db, "jeremy") == before
+    assert owner.stored(db) == "jeremy"
+
+
+def test_the_cli_shows_a_held_id_as_a_refusal_not_a_traceback(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    owner.check(db, "jeremy")
+    _hold_new_id(db, "person")
+    for argv in (["change-owner", "ann", "--dry-run"], ["change-owner", "ann"]):
+        with pytest.raises(SystemExit) as refused:
+            admin.main(argv)
+        assert str(refused.value).startswith("refused:")
+        assert "person" in str(refused.value)
+    assert owner.stored(db) == "jeremy"
+
+
 def test_an_agent_renamed_to_the_owner_id_is_still_refused_after_the_change(db):
     owner.check(db, "jeremy")
     owner.change_owner(db, "ann", dry_run=False)

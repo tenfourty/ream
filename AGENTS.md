@@ -251,6 +251,8 @@ deployment's own pg_dump backup (this repo has no runbook for that). Otherwise r
 (`store.mark_read`, `store.set_pinned(person=)`, `holds.set_review_mode`, `inbox.gather(person=)`); agent
 routes and MCP read and write the owner's (`folders.his()`), with no key twin for a person's own state.
 `change-owner` moves their `person` columns too. SQLite step 37 and the end of `schema.sql` do the move.
+`change-owner` refuses (`owner.Refused`, printed as `refused: ...`, nothing written, a dry run too) a new id that a `person` row,
+an `mcp_agent.person` or an `mcp_app.person` already holds: the move would collide with that row (`owner._HELD_BY`).
 
 No agent may be named the owner id. Do not write the id as a literal in code: read
 `settings.owner_id()` (SQL takes it as a bound parameter).

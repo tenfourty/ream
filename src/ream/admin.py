@@ -519,7 +519,8 @@ def build_parser() -> argparse.ArgumentParser:
         "column the owner's own acts were stored under (comment author and resolver, "
         "decision answerer, event actor, picture stager, folder owner) in one "
         "transaction and record the new id. Then set REAM_OWNER_ID to it on the "
-        "service. Refused if the id is an agent's name. An answer's stored JSON record "
+        "service. Refused if the id is an agent's name, or one a person or an app agent "
+        "already holds. An answer's stored JSON record "
         "and the partner outbox keep the id they were written with.",
     )
     change_owner.add_argument("new", help="the new owner id")
