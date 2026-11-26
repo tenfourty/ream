@@ -1651,11 +1651,15 @@ def record_relay(
             said_at = datetime.fromisoformat(payload.said_at)
         except ValueError:
             raise HTTPException(422, "said_at must be an ISO 8601 timestamp") from None
+    wide = reach.widened(agent) if by_app else None
     found = (
         decisions.get_any(db, decision_id, within_reach_of=agent)
-        if by_app
+        if by_app and not (wide is not None and wide.reads_person())
         else decisions.get_owned(db, agent, decision_id)
+        if not by_app
+        else None
     )
+    # A second person's app cannot relay yet: what it would store is the owner's answer.
     if by_app and found is None:
         # Outside the app's reach (or no such question): one answer for both.
         raise HTTPException(404, "no such open decision")

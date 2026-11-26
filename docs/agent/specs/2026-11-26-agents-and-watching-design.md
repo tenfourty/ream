@@ -95,7 +95,7 @@ role checks and grants, so making them per-owner now would be thrown away.
 ### Watching
 
 A watch is a row `(agent, artifact_id)`. An agent may watch any page it can read at that moment: a key, its own
-pages and pages open to agents; an app, whatever its person can read (`access.person_reads`). Anything else
+pages and pages open to agents; an app, whatever its person can read (`access.reads_sql`). Anything else
 answers 404, word for word as for a page that does not exist. Watching your own page is accepted and adds
 nothing, because the page's own agent already hears about it. "Private until shared" arrives in step 4 by
 changing only the readability predicate.
@@ -258,8 +258,9 @@ Where it departs from the text above:
 
 ## Slice 2 as built (26 Nov 2026)
 
-`src/ream/access.py` (new): `person_reads(conn, person, page_id)` and `reads_sql(person, table)`, the same
-predicate as a check and as a WHERE clause (the owner reads every live page; anyone else reads the pages of
+`src/ream/access.py` (new): `reads_sql(person, table)`, the one predicate, as a WHERE clause every check and
+listing shares (the design's `person_reads(conn, person, page)` was dropped: nothing in production asked a single page
+apart from `_owned`, which uses the clause; the owner reads every live page; anyone else reads the pages of
 their `mcp_agent` agents and the pages with `agents_can_read`; never the trash). `reach.Reach` gains `person`
 and a third `readable` value, `READS_AS_PERSON`, with `reads_person()`; `widened()` also returns a reach that
 `reads_person()`. `mcp_apps.reach_of` gives the owner's app `READS_AS_OWNER` exactly as before and every other
@@ -273,10 +274,18 @@ Sites classified (every reader of the reach or of readability):
 - `store._scoped`, `store.move_many`: unchanged code; they read `writes()`, which `reach_of` already scopes to the person.
   They never read a page's contents. `widen=False` callers (purge, transfer, who-can-read, ask) still never widen.
 - `reach.widened()`: matches on the agent, so a nudge for another agent inside the app's request sees key reach (tested).
-- Narrower on purpose for another person's app, because the slice names no change there (a deferral, not a leak;
-  the owner's app is unchanged): `decisions.ask` on a page the app reads but does not own (`reads_all()` only),
-  the questions listing in `api.py` (`reads_all()` only), `by_app` relay checks (still the owner's until their
-  own slice). A second person's app can read an open page but cannot yet ask a question on it.
+- Narrower on purpose for another person's app, because the slice names no change there (the owner's app is
+  unchanged): `decisions.ask` on a page the app reads but does not own (`reads_all()` only) and the questions
+  listing in `api.py` (`reads_all()` only). A second person's app can read an open page but cannot yet ask on it.
+- Relaying is REFUSED for a second person's app (review fix): `by_app` checks compare with the owner, so a relay
+  would have stored `answered_by` = the owner. `api.record_relay` answers it as a missing decision (the 404 and
+  tool error a question out of reach gets), and `decisions.record_elsewhere` and `formanswer.relay` raise
+  `NotFound` for it as a second wall. It returns with the slice that gives an app its own person to answer as.
+- `mcp whoami` says what a second person's app reads (its person's agents' pages and pages open to agents); the
+  owner's text is unchanged. `docs/mcp.md` and the `questions` tool text say ask and the questions list are the
+  owner's app's on any page, another person's on its own pages.
+- `people.owner_person()` calls (`access.reads_sql`, `mcp_apps.reach_of`, `people.current`) are now walked by
+  `tests/test_owner_id_sites.py` and classified SEED.
 - Unchanged and key-only: `api.py` decision outcome routes (`agent = %s or agents_can_read`), `comments.add`'s
   replier query, `store.copy` (its own scope), `pageviews.record_agent_read` (takes `writes()`).
 - Callers of `_owned(as_reader=True)` (`get_owned`, `get_body`, `comments`, `image_store`, `api.py:3046`) widen

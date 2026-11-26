@@ -805,8 +805,9 @@ def _comment_image(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     title="Open questions",
     description=(
         "Open questions waiting on the person, in inbox order: the ones you asked (scope "
-        "mine), or every office's (scope all, needs decisions:read-all); a signed-in app "
-        "gets those on every page the person can read. Not for answers: an answered "
+        "mine), or every office's (scope all, needs decisions:read-all); the owner's "
+        "signed-in app gets those on every page the owner can read, another person's "
+        "app those on its own pages. Not for answers: an answered "
         "question leaves this list; its answer is in whats_new."
     ),
     read_only=True,

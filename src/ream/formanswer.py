@@ -34,6 +34,7 @@ from ream import (
     settings,
     store,
 )
+from ream import reach as caller_reach
 from ream.db import jsonb
 
 MAX_HISTORY = 50
@@ -620,7 +621,11 @@ def relay(
         if row is None:
             raise store.NotFound()
         artifact_id, form_name, asking_session, owner, addressed_to = row
-        # A signed-in app is the owner's: a form for another person is out of its reach.
+        # A second person's app cannot relay (what it stores is the owner's answer); a signed-in
+        # app is otherwise the owner's: a form for another person is out of its reach.
+        wide = caller_reach.widened(recorded_by) if by_app else None
+        if wide is not None and wide.reads_person():
+            raise store.NotFound()
         if by_app and not decisions.addressed_ok_id(
             conn, settings.owner_id(), addressed_to, owner
         ):

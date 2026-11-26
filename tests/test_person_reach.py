@@ -202,20 +202,142 @@ def test_a_nudge_for_another_agent_inside_the_apps_request_sees_key_reach(db, wo
         assert store.rename(db, world["ann_open"], "x", agent="office") is False
 
 
-def test_person_reads_is_the_one_predicate(db, world):
+def test_reads_sql_is_the_one_predicate(db, world):
+    def readable(person, page):
+        clause, params = access.reads_sql(person)
+        with db.connect() as conn:
+            return (
+                conn.execute(
+                    "select 1 from artifact where id = %s and deleted_at is null"  # noqa: S608 -- a fixed clause with placeholders
+                    f" and {clause}",
+                    (page, *params),
+                ).fetchone()
+                is not None
+            )
+
+    for page, expect in (
+        ("ann_closed", True),
+        ("ann_open", True),
+        ("office_open", True),
+        ("office_closed", False),
+        ("owner_closed", False),
+    ):
+        assert readable("ann", world[page]) is expect, page
+    assert readable("ann", "no-such-page") is False
+    # The owner reads every live page; a person with no app agent only what is open.
+    assert readable(settings.owner_id(), world["office_closed"]) is True
+    assert readable("bob", world["office_open"]) is True
+    assert readable("bob", world["ann_closed"]) is False
+
+
+# --- review round: whoami, relay, and second-person negatives over MCP ------------------------
+
+OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+
+
+def _same_as_missing(call, name, page_id, **more):
+    """The tool's answer for `page_id` equals its answer for an id that is not there."""
+    got = json.dumps(_tool(call, name, page_id=page_id, **more), sort_keys=True)
+    gone = json.dumps(_tool(call, name, page_id="nopagehere", **more), sort_keys=True)
+    assert json.loads(got)["isError"] is True, got
+    assert got.replace(page_id, "X") == gone.replace("nopagehere", "X")
+
+
+def test_whoami_says_what_each_app_reads(db, world):
+    ann = _tool(_as(db, world["ann"]), "whoami")["structuredContent"]["reach"]
+    assert "closed to agents" not in ann["reads"]
+    assert "open to agents" in ann["reads"] and "ann" in ann["reads"]
+    assert set(ann["changes_pages_of"]) == set(
+        mcp_apps.reach_of(db, world["ann"]).writes()
+    )
+    owner = _tool(_as(db, world["owner_app"]), "whoami")["structuredContent"]["reach"]
+    assert owner["reads"] == "every page the owner can read, closed to agents included"
+
+
+@pytest.mark.parametrize("name", ["comments"])
+def test_comments_on_an_unreadable_page_is_no_such_page(db, world, name):
+    call = _as(db, world["ann"])
+    for page in ("owner_closed", "office_closed"):
+        _same_as_missing(call, name, world[page])
+
+
+def test_read_page_history_and_version_on_an_unreadable_page(db, world):
+    call = _as(db, world["ann"])
+    for page in ("owner_closed", "office_closed"):
+        _same_as_missing(call, "read_page", world[page], history=True)
+        _same_as_missing(call, "read_page", world[page], version=1)
+
+
+def test_screenshot_of_an_unreadable_page_is_no_such_page(db, world):
+    call = _as(db, world["ann"])
+    for page in ("owner_closed", "office_closed"):
+        _same_as_missing(call, "screenshot_page", world[page])
+
+
+def test_comment_image_on_an_unreadable_page_is_no_such_image(db, world):
+    import base64
+
+    from test_comment_images import GOOD_PNG
+
+    owner = _as(db, world["owner_app"])
+    page = world["owner_closed"]
+    up = _tool(
+        owner,
+        "comment",
+        action="upload_image",
+        page_id=page,
+        data=base64.b64encode(GOOD_PNG).decode(),
+    )
+    assert up["isError"] is False, up
+    image_id = up["structuredContent"]["image_id"]
+    made = _tool(owner, "comment", page_id=page, body="look", images=[image_id])
+    assert made["isError"] is False, made
+    comment_id = made["structuredContent"]["comment"]["id"]
+    # The owner's app sees it; the second person's app is told what a missing image is told.
+    assert (
+        _tool(owner, "comment_image", comment_id=comment_id, image_id=image_id)[
+            "isError"
+        ]
+        is False
+    )
+    ann = _as(db, world["ann"])
+    got = _tool(ann, "comment_image", comment_id=comment_id, image_id=image_id)
+    gone = _tool(ann, "comment_image", comment_id="nocommenthere", image_id="x" * 26)
+    assert got["isError"] is True and got == gone
+
+
+def _ask(db, agent, page_id):
+    from ream import decisions
+
+    return decisions.ask(
+        db, agent=agent, artifact_id=page_id, question="which?", options=OPTIONS
+    )
+
+
+def test_a_second_persons_app_cannot_relay_for_the_owner(db, world):
+    ann = _as(db, world["ann"])
+    closed = _ask(db, "office", world["office_closed"])
+    shared = _ask(db, "office", world["office_open"])  # a page it CAN read
+    mine = _ask(db, world["ann2"].agent, world["ann_open"])
+    for row in (closed, shared, mine):
+        out = _tool(ann, "record_answer", decision_id=row.id, letter="a", words="ok")
+        gone = _tool(
+            ann, "record_answer", decision_id="nodecisionhere", letter="a", words="ok"
+        )
+        assert out["isError"] is True and out == gone, out
     with db.connect() as conn:
-        for page, expect in (
-            ("ann_closed", True),
-            ("ann_open", True),
-            ("office_open", True),
-            ("office_closed", False),
-            ("owner_closed", False),
-        ):
-            assert access.person_reads(conn, "ann", world[page]) is expect, page
-        assert access.person_reads(conn, "ann", "no-such-page") is False
-        # The owner reads every live page.
-        owner = settings.owner_id()
-        assert access.person_reads(conn, owner, world["office_closed"]) is True
-        # A person with no app agent reads only what is open to agents.
-        assert access.person_reads(conn, "bob", world["office_open"]) is True
-        assert access.person_reads(conn, "bob", world["ann_closed"]) is False
+        left = conn.execute(
+            "select count(*) from decision where id in (%s, %s, %s)"
+            " and closed_at is not null",
+            (closed.id, shared.id, mine.id),
+        ).fetchone()[0]
+    assert left == 0
+    # The owner's app still relays (unchanged).
+    own = _tool(
+        _as(db, world["owner_app"]),
+        "record_answer",
+        decision_id=shared.id,
+        letter="a",
+        words="he said a",
+    )
+    assert own["isError"] is False, own

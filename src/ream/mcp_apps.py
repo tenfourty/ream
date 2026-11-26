@@ -340,7 +340,7 @@ def listed(db: Database, person: str) -> list[Listed]:
 
 def reach_of(db: Database, app: App) -> reach.Reach:
     """What `app` may reach: for the owner's app every page the owner can read (closed to
-    agents included, never the trash); for any other person's, what `access.person_reads`
+    agents included, never the trash); for any other person's, what `access.reads_sql`
     says (their personal agents' pages and pages open to agents). Changes to the pages of any
     of `app.person`'s app agents either way; relaying only with `relay`; and the permissions
     the person granted (`read` is `ream:read`)."""

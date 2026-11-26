@@ -1,13 +1,13 @@
 """Who may read a page (agents design, slice 2, docs/agent/specs/2026-11-26-agents-and-watching-design.md).
 
-`person_reads` is the one predicate for "this person's signed-in app may read this page": a page
+`reads_sql` is the one predicate for "this person's signed-in app may read this page", as a WHERE
+clause every store check and listing shares, so they cannot drift apart: a page
 of one of the person's personal agents (`mcp_agent.person`), or a page open to agents
 (`artifact.agents_can_read`), never one in the trash. The owner reads every live page, as the
 owner's app always has. A page closed to agents that belongs to another person, or to a shared
 agent, is not readable, and the caller answers it as a page that is not there.
 
-`reads_sql` is the same predicate as a WHERE clause for the store's listings, so a check and a
-listing cannot drift apart. Step 4 (private until shared) changes only these two.
+Step 4 (private until shared) changes only this function.
 """
 
 from __future__ import annotations
@@ -24,14 +24,3 @@ def reads_sql(person: str, table: str = "artifact") -> tuple[str, tuple]:
         f" or {table}.agents_can_read)"
     )
     return clause, (person,)
-
-
-def person_reads(conn, person: str, page_id: str) -> bool:
-    """Whether `person`'s signed-in app may read the live page `page_id`."""
-    clause, params = reads_sql(person)
-    row = conn.execute(
-        "select 1 from artifact where id = %s and deleted_at is null"  # noqa: S608 -- reads_sql is a fixed clause with placeholders
-        f" and {clause}",
-        (page_id, *params),
-    ).fetchone()
-    return row is not None

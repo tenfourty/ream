@@ -512,8 +512,11 @@ def _whoami(call: Call, _arguments: dict[str, Any]) -> ToolOutput:
     if call.app is not None:  # a signed-in app: who it is shown as, and its reach
         with call.db.connect() as conn:
             me["shown_as"] = agents.shown(conn, call.agent).text()
+        reads = "every page the owner can read, closed to agents included"
+        if call.reach.reads_person():
+            reads = f"the pages of {call.reach.person}'s own agents and the pages open to agents"
         me["reach"] = {
-            "reads": "every page the owner can read, closed to agents included",
+            "reads": reads,
             "changes_pages_of": list(call.reach.writes()),
         }
     return ToolOutput(structured=me)

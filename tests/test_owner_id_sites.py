@@ -37,6 +37,10 @@ KINDS = {REQUEST, PAGE_OWNER, SEED}
 # (file, enclosing function) -> (kind, number of calls)
 SITES: dict[tuple[str, str], tuple[str, int]] = {
     ("admin.py", "cmd_list_apps"): (SEED, 1),
+    # `people.owner_person()` calls: "is this person the deployment's owner", by setting.
+    ("access.py", "reads_sql"): (SEED, 1),  # the owner reads every live page
+    ("mcp_apps.py", "reach_of"): (SEED, 1),  # the owner's app reads as the owner
+    ("people.py", "current"): (SEED, 1),  # sign-in off: the request is the owner's
     ("agents.py", "shared_owner"): (
         PAGE_OWNER,
         1,
@@ -92,6 +96,22 @@ def _found() -> dict[tuple[str, str], int]:
         for node in ast.walk(tree):
             # Every read of an `owner_id` attribute (`settings.owner_id()`, `settings.current()
             # .owner_id`, `cfg.owner_id`) and every `from ... import owner_id`.
+            # `people.owner_person()` is the owner id too, read from settings: a call of it counts.
+            if isinstance(node, ast.Call) and (
+                (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "owner_person"
+                )
+                or (isinstance(node.func, ast.Name) and node.func.id == "owner_person")
+            ):
+                up = node
+                while up in parent and not isinstance(
+                    up, (ast.FunctionDef, ast.AsyncFunctionDef)
+                ):
+                    up = parent[up]
+                key = (path.name, getattr(up, "name", "?"))
+                found[key] = found.get(key, 0) + 1
+                continue
             if not (
                 (isinstance(node, ast.Attribute) and node.attr == "owner_id")
                 or (

@@ -773,7 +773,7 @@ def _owned(
     can read, closed to agents included, never the trash, and changes the pages of any
     of the person's app agents. `widen=False` keeps a check to `agent`'s own pages
     whoever calls (asking on a page, until a question can have its own asker, 11.4).
-    Another person's app (`reads_person`) reads what `access.person_reads` says: that
+    Another person's app (`reads_person`) reads what `access.reads_sql` says: that
     person's personal agents' pages and pages open to agents, and changes only those agents'.
     A key's reach widens nothing: the queries below it are today's."""
     wide = caller_reach.widened(agent) if widen else None
@@ -784,7 +784,7 @@ def _owned(
         ).fetchone()
     if wide is not None and as_reader and wide.reads_person():
         # Another person's app: its person's personal agents' pages and pages open to agents
-        # (`access.person_reads`, the same clause), never the trash; a page it may not read is
+        # (`access.reads_sql`, the same clause), never the trash; a page it may not read is
         # the same empty answer as one that is not there.
         clause, extra = access.reads_sql(wide.person)
         return conn.execute(
@@ -2053,7 +2053,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
     their colleagues' open work, 5a). Whether he has read a page is reported
     only on the caller's own rows."""
     wide = caller_reach.widened(agent)
-    # An app of another person reads what `access.person_reads` says; the owner's app reads
+    # An app of another person reads what `access.reads_sql` says; the owner's app reads
     # all; a key neither. `or %s` is the old fixed shape for the first two of those.
     person_sql, person_params = "%s", (wide is not None and wide.reads_all(),)
     if wide is not None and wide.reads_person():

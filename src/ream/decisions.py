@@ -1876,6 +1876,11 @@ def record_elsewhere(
     if by_app:
         if source != MCP_SOURCE:
             raise InvalidSource(source)
+        # A second person's app cannot relay: the answer stored is the owner's (agents
+        # design, slice 2). Out of reach, as a question that is not there.
+        wide = caller_reach.widened(recorded_by)
+        if wide is not None and wide.reads_person():
+            raise store.NotFound()
     elif source not in relay_sources():
         raise InvalidSource(source)
     require_stored_source(source)
