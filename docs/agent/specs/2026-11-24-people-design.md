@@ -262,8 +262,8 @@ Where it differs from the design above:
   every call from an address and answers 429 once an address has earned it.
 - The gate keeps a response's own `private` `Cache-Control` (the icon, a thumbnail keep their longer
   policy) and otherwise stamps `private, no-store`; every gated response also varies on `Cookie`.
-- `mcp_apps.agent_for` skips (it does not refuse) a name a person holds (and `rename` and `mcp_apps` refuse a person's id as an
-  agent or app name), so an agent can never act as a person.
+- `mcp_apps.agent_for` skips (it does not refuse) a name a person holds (and making a key and `rename` refuse a person's id
+  as an agent name), so an agent can never act as a person.
 - "Not yours answers identically to no such page" is tested only on the owner-only routes until
   `people.OPEN_SIGN_IN` is flipped: with one person who may sign in there is no second reader to
   test it against.

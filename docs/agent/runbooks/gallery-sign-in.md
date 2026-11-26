@@ -53,6 +53,9 @@ the owner's own retries, could keep the owner at 429.
 
 Tabs restored after a browser restart reload with the session cookie, so they keep working until the
 12 hours end; after that each one is sent to sign in and, once signed in, returns to its own path.
+Sent there together, they do not all get through: a browser holds one sign-in in progress (one
+`__Host-ream_signin` cookie), so only the tab that started last comes back signed in; the others
+answer "This sign-in was not started in this browser". Reload one of them once the first is signed in.
 
 ## Registering the redirect address
 
