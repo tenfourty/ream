@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import admin, comments, decisions, events, keys, rename, store
+from ream import admin, comments, decisions, events, keys, rename, store, watches
 from ream.app import create_gallery_app
 from ream.db import jsonb
 
@@ -36,6 +36,7 @@ COLUMNS = [
     ("seat_grant", "agent", ""),
     ("seat_read", "agent", ""),
     ("idempotency", "agent", ""),
+    ("page_watch", "agent", ""),
 ]
 
 
@@ -122,6 +123,7 @@ def _populate(db, agent: str, *, session: str = "s1", scope: str = "x:one"):
                 agent,
             ),
         )
+    assert watches.watch(db, agent, page.id, session=f"{agent}/{session}")
     return token, page.id, asked.id
 
 
