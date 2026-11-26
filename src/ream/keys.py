@@ -53,6 +53,15 @@ class NameHeld(Exception):
     """A key may not be made under this name: the words say why."""
 
 
+def person_holds(conn, name: str) -> bool:
+    """Whether `name` is a person's id (a row of `person`): no agent may take it. Call inside a
+    transaction that holds the name lock."""
+    return (
+        conn.execute("select 1 from person where id = %s", (name,)).fetchone()
+        is not None
+    )
+
+
 def refuse_app_agent_name(conn, agent: str) -> None:
     """Take the name lock and refuse `agent` when a person-and-app agent or a person holds it, so
     no key publishes under (and shares the pages of) an MCP app's agent. Call inside
@@ -61,8 +70,7 @@ def refuse_app_agent_name(conn, agent: str) -> None:
     held = conn.execute("select 1 from mcp_agent where agent = %s", (agent,)).fetchone()
     if held is not None:
         raise NameHeld(f"no key may be made for {agent!r}: {APP_AGENT_REASON}")
-    person = conn.execute("select 1 from person where id = %s", (agent,)).fetchone()
-    if person is not None:
+    if person_holds(conn, agent):
         raise NameHeld(f"no key may be made for {agent!r}: {PERSON_REASON}")
 
 

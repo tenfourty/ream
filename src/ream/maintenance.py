@@ -96,7 +96,7 @@ def next_run(now: datetime) -> datetime:
 def nightly(db: Database) -> None:
     """The snapshot (SQLite only), then the purge. A failed snapshot stops the
     purge: nothing is destroyed that is not in a backup."""
-    from ream import image_store, oauth, store
+    from ream import image_store, oauth, signin, store
 
     folder = backup_folder(db)
     if folder is not None:
@@ -106,6 +106,7 @@ def nightly(db: Database) -> None:
     image_store.sweep(db)
     try:
         oauth.sweep(db)
+        signin.sweep(db)
     except Exception:  # noqa: BLE001 -- the rest of the night still runs
         _log.error("sign-in sweep failed", exc_info=True)
     # After the purge, so the statistics describe what is left.

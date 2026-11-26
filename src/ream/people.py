@@ -5,7 +5,8 @@ the one that says a route is the owner's alone. Today there is one person, the o
 `REAM_OWNER_ID`), so `current` answers the owner from settings whatever the request says: no
 identity header, cookie or address is read, and the values are exactly what
 `settings.owner_id()` gave before. Per-person sign-in (people design, slice 4) changes only the
-body of `current`; the handlers that take it do not change again.
+body of `current` (with `REAM_GALLERY_SIGN_IN` on it answers the person the gate found); the
+handlers that take it do not change again.
 
 `OPEN_SIGN_IN` stays False until step 4 of the design: nothing here lets a second person in.
 """
@@ -40,6 +41,10 @@ def _person(row) -> Person:
     return Person(id=row[0], name=row[1] or row[0], is_owner=False)
 
 
+# The public name: `signin.session_person` makes a Person from the rows it joins.
+person_from_row = _person
+
+
 def owner_person() -> Person:
     """Person #1, from settings, read at call time."""
     s = settings.current()
@@ -47,9 +52,17 @@ def owner_person() -> Person:
 
 
 def current(request: Request) -> Person:
-    """The person this gallery request is for. A FastAPI dependency; `request` is taken so the
-    signature is the one slice 4 needs, and is not read yet."""
-    return owner_person()
+    """The person this gallery request is for. A FastAPI dependency. With gallery sign-in off
+    (`REAM_GALLERY_SIGN_IN` unset) the owner, whatever the request says; on, the person the gate
+    (`signin.install_gate`) found from the session cookie and put on `request.state`, and a 401
+    if the gate somehow did not run. Nothing else of the request is read: no identity header,
+    address or parameter."""
+    if not settings.current().gallery_signs_in():
+        return owner_person()
+    person = getattr(request.state, "ream_person", None)
+    if not isinstance(person, Person):
+        raise HTTPException(401, "sign in required")
+    return person
 
 
 CURRENT = Depends(current)

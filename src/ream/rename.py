@@ -28,8 +28,10 @@ from ream.db import Database, Rollback
 from ream.keys import (
     AGENT_NAME,
     NAME_LOCK_KEY,
+    PERSON_REASON,
     RESERVED_REASON,
     is_reserved_agent_name,
+    person_holds,
 )
 
 # The one name lock (keys.NAME_LOCK_KEY): two renames, or a rename and a first
@@ -162,6 +164,9 @@ def rename_agent(
                     f"{name} is a person-and-app agent (an MCP app's): its name cannot "
                     f"be {said}"
                 )
+        # A person's id is a name in the same space (people design, slice 4).
+        if person_holds(conn, new):
+            raise Refused(f"invalid agent name {new!r}: {PERSON_REASON}")
         onward = conn.execute(
             "select new from agent_alias where old = %s", (new,)
         ).fetchone()

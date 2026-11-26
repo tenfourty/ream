@@ -126,8 +126,9 @@ def agent_names(person: str, host: str):
 
 def _taken(conn, name: str) -> bool:
     """Whether an agent already answers to `name`: a person-and-app agent, a key's agent,
-    an old name a rename left behind, or a page's publisher."""
+    an old name a rename left behind, a page's publisher, or a person's id."""
     for sql in (
+        "select 1 from person where id = %s",
         "select 1 from mcp_agent where agent = %s",
         "select 1 from agent_key where agent = %s",
         "select 1 from agent_alias where old = %s",

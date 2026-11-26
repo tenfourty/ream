@@ -4374,6 +4374,19 @@ _PROFILE = (
 )
 
 
+def _profile() -> str:
+    """The profile menu. With gallery sign-in on it also holds the Sign out form (a POST to
+    `/signout`, answered 200: the CSP's `form-action 'self'` blocks a redirect out of a form
+    post); with it off, exactly `_PROFILE`, byte for byte."""
+    if not settings.current().gallery_signs_in():
+        return _PROFILE
+    out = (
+        '<form method="post" action="/signout">'
+        '<button class="mrow" type="submit">Sign out</button></form>'
+    )
+    return _PROFILE.replace("</div></details>", out + "</div></details>")
+
+
 def _shell(
     title: str,
     body: str,
@@ -4386,6 +4399,7 @@ def _shell(
     bleed: bool = False,
     full: bool = False,
     actions: str = "",
+    profile: bool = True,
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -4416,16 +4430,17 @@ def _shell(
     # chrome and should read as chrome. The gallery index keeps its header
     # inside the column, which is also what the reference does there -- the two
     # are different on purpose, and both were measured off the saved pages.
+    menu = _profile() if profile else ""
     if bleed:
         top = (
             f'<header class="bar bleed{" flush" if full else ""}">{back}{heading}'
-            f"{meta_block}{actions}{_PROFILE}</header>"
+            f"{meta_block}{actions}{menu}</header>"
             f'<div class="wrap{" full" if full else ""}">'
         )
     else:
         top = (
             f'<div class="wrap"><header class="bar">{back}{heading}'
-            f"{meta_block}{_PROFILE}</header>"
+            f"{meta_block}{menu}</header>"
         )
     # The product's name, where a reader first meets it: the wall is "Ream",
     # every other page "<what it is> · Ream", and the foot says what it was.

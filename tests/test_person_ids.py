@@ -201,3 +201,28 @@ def test_fill_owner_identity_refreshes_only_when_asked(db):
         )
         with pytest.raises(people.NameTaken):
             people.fill_owner_identity(conn, ISS, "s3", refresh=True)
+
+
+def test_a_rename_refuses_a_name_a_person_holds(db):
+    from ream import rename
+
+    owner.check(db, "jeremy")
+    _make(db, "s1", preferred="ann")
+    keys.mint(db, agent="alpha")
+    with pytest.raises(rename.Refused, match="person's id"):
+        rename.rename_agent(db, "alpha", "ann", dry_run=False)
+    with pytest.raises(rename.Refused, match="person's id"):
+        rename.rename_agent(db, "alpha", "ann", dry_run=True)
+    rename.rename_agent(db, "alpha", "beta", dry_run=False)  # a free name still works
+
+
+def test_an_app_agent_never_takes_a_name_a_person_holds(db):
+    from ream import mcp_apps
+
+    owner.check(db, "jeremy")
+    with (
+        db.connect() as conn
+    ):  # a person whose id is the name the app agent would try first
+        conn.execute("insert into person (id) values ('ann--claude-ai')")
+    made = mcp_apps.agent_for(db, "ann", "https://claude.ai/client", "claude.ai")
+    assert made.agent == "ann--claude-ai-2"

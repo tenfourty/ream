@@ -16,6 +16,7 @@ Keyed by (file, enclosing function) with how many calls it holds.
 
 import ast
 import pathlib
+import re
 
 from ream import people
 
@@ -153,3 +154,38 @@ def test_every_gallery_route_that_writes_names_its_person(db):
     assert {r.path for r in routes} >= (
         OWNER_ONLY_READS | READS_THAT_WRITE | READS_BY_PERSON
     )
+
+
+def test_no_gallery_route_takes_a_person_id_from_the_request(db):
+    """A person is who the request's session says, never a parameter: no path, query, header,
+    cookie, form or body parameter of any gallery route is named like one (people design,
+    slice 4: 'no route takes a person id')."""
+    from fastapi.routing import APIRoute
+
+    from ream.gallery import gallery_router
+    from ream.signin import signin_router
+
+    routes = [
+        r
+        for router in (gallery_router(db), signin_router(db))
+        for r in router.routes
+        if isinstance(r, APIRoute)
+    ]
+    assert len(routes) > 40, "the walk is broken"
+    named = set()
+    for route in routes:
+        dependant = route.dependant
+        stack = [dependant]
+        while stack:
+            d = stack.pop()
+            stack.extend(d.dependencies)
+            for param in (
+                d.path_params
+                + d.query_params
+                + d.header_params
+                + d.cookie_params
+                + d.body_params
+            ):
+                if re.search(r"person|actor|as_user|on_behalf", param.name):
+                    named.add((route.path, param.name))
+    assert named == set(), named

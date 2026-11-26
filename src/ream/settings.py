@@ -80,6 +80,8 @@ PARTNER_OUT = (
     "REAM_PARTNER_SIGNING_KEY_FILE",
     "REAM_PARTNER_KEY_ID",
 )
+# Who may sign in to the gallery (`REAM_SIGN_IN_WHO`).
+SIGN_IN_WHO = ("owner", "anyone")
 # The values an on/off setting takes.
 _SWITCH = {
     "1": True,
@@ -267,6 +269,14 @@ class Settings:
     oidc_owner_subject: str = ""
     # Stored on the app; unused in the core (unset: `groups`).
     oidc_groups_claim: str = ""
+    # Gallery sign-in (people design, slice 4): `on` puts a gate in front of the whole gallery
+    # host, so a request without a live session is sent to the provider (the same REAM_OIDC_*
+    # client as MCP sign-in, with `<gallery origin>/signin/callback` registered as a second
+    # redirect address). Unset: off, and nothing about the gallery changes.
+    gallery_sign_in: str = ""
+    # Who may sign in to the gallery: `owner` (default) or `anyone` (refused to start while
+    # `people.OPEN_SIGN_IN` is False).
+    sign_in_who: str = "owner"
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -443,7 +453,33 @@ class Settings:
         elif _SWITCH.get(sign_in):
             if not self.mcp_public_url:
                 found.append("REAM_MCP_SIGN_IN=on needs REAM_MCP_PUBLIC_URL")
-            found.extend(self._oidc_problems())
+            found.extend(self._oidc_problems("REAM_MCP_SIGN_IN=on"))
+        gallery_in = self.gallery_sign_in.lower()
+        if gallery_in and gallery_in not in _SWITCH:
+            found.append("REAM_GALLERY_SIGN_IN must be on or off")
+        elif _SWITCH.get(gallery_in):
+            found.extend(
+                p
+                for p in self._oidc_problems("REAM_GALLERY_SIGN_IN=on")
+                if p not in found
+            )
+            gallery = urlsplit(self.gallery_origin)
+            if gallery.scheme != "https" and not is_loopback(
+                (gallery.hostname or "").lower()
+            ):
+                found.append(
+                    "REAM_GALLERY_ORIGIN must be https while REAM_GALLERY_SIGN_IN=on"
+                    " (the session cookie is __Host- and Secure; plain http only on loopback)"
+                )
+        if self.sign_in_who not in SIGN_IN_WHO:
+            found.append(f"REAM_SIGN_IN_WHO must be one of {', '.join(SIGN_IN_WHO)}")
+        elif self.sign_in_who == "anyone":
+            from ream import people
+
+            if not people.OPEN_SIGN_IN:
+                found.append(
+                    "REAM_SIGN_IN_WHO=anyone is not available yet: only the owner may sign in"
+                )
         if self.mcp_accept_keys and self.mcp_accept_keys.lower() not in _SWITCH:
             found.append("REAM_MCP_ACCEPT_KEYS must be 1 or 0")
         elif _SWITCH.get(self.mcp_accept_keys.lower()) is False and not _SWITCH.get(
@@ -489,13 +525,13 @@ class Settings:
                 )
         return found
 
-    def _oidc_problems(self) -> list[str]:
+    def _oidc_problems(self, needed_by: str = "REAM_MCP_SIGN_IN=on") -> list[str]:
         """What sign-in needs of its upstream provider (section 12). Names settings, never
         values; the secret file is checked for being readable and not empty, not shown."""
         found = []
         for field_name in ("oidc_issuer", "oidc_client_id", "oidc_client_secret_file"):
             if not getattr(self, field_name):
-                found.append(f"REAM_MCP_SIGN_IN=on needs {_ENV[field_name]}")
+                found.append(f"{needed_by} needs {_ENV[field_name]}")
         if self.oidc_issuer:
             parts = urlsplit(self.oidc_issuer)
             try:
@@ -602,6 +638,10 @@ class Settings:
         with `/mcp` itself on."""
         return bool(self.mcp_public_url) and bool(_SWITCH.get(self.mcp_sign_in.lower()))
 
+    def gallery_signs_in(self) -> bool:
+        """Whether the gallery host asks for a session (`REAM_GALLERY_SIGN_IN=on`)."""
+        return bool(_SWITCH.get(self.gallery_sign_in.lower()))
+
     def mcp_accepts_keys(self) -> bool:
         """Whether `/mcp` takes agent keys (section 7). Unset: yes without sign-in, no
         with it; `1` takes them beside sign-in. Without sign-in, always."""
@@ -680,6 +720,8 @@ _ENV = {
     "oidc_owner_value": "REAM_OIDC_OWNER_VALUE",
     "oidc_owner_subject": "REAM_OIDC_OWNER_SUBJECT",
     "oidc_groups_claim": "REAM_OIDC_GROUPS_CLAIM",
+    "gallery_sign_in": "REAM_GALLERY_SIGN_IN",
+    "sign_in_who": "REAM_SIGN_IN_WHO",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")
