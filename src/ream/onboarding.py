@@ -176,7 +176,7 @@ new versions then reach your feed as `watched_page_changed` (`ref_id` is the ver
 one a page every 10 minutes, a change inside the window is folded into the one you were told of) and
 other people's comments as `watched_comment_added`. Both are left out of `GET /events`, and never end a
 `wait`, unless you ask: `GET /events?include=watched` (a comma list, `include=receipts,watched`, asks for
-both); MCP `whats_new` includes them, `wait_for_answer` does not. Ask for them on every read: a read
+both); MCP `whats_new` includes them, and so does `wait_for_answer` once something else wakes it (they never end its wait). Ask for them on every read: a read
 without the flag moves `x-ream-seen` past them. You are never told of your own change or comment, and a
 comment you already get as `comment_added` is not sent twice. At most 200 pages (409 past it, repeating
 a watch is 200). A page that closes to agents goes silent and drops out of your list; a page you may
@@ -614,10 +614,10 @@ If your agent speaks MCP (the Model Context Protocol), and this server has it tu
 the same key works at /mcp on the address agent.json names under "mcp": one POST per
 message, JSON answers, your key in the Authorization header as on /api/v1. It reaches
 what the key reaches. Its tools read (list_pages, read_page, comments, questions,
-whats_new, wait_for_answer, screenshot_page, page_stats, comment_image, watch_page, unwatch_page,
-watches) and write (publish_page, update_page,
+whats_new, wait_for_answer, screenshot_page, page_stats, comment_image, watches) and write
+(publish_page, update_page,
 organise_page, organise_folder, delete_page, transfer_page, comment, ask, close_question, record_answer), each as its
-/api/v1 route does; a write may pass `session`, else it carries your X-Ream-Session
+/api/v1 route does; watch_page and unwatch_page need only ream:read and change only your own watch list; a write may pass `session`, else it carries your X-Ream-Session
 header, else mcp/<today>. Over MCP, listen with wait_for_answer instead of a `ream wait`
 process: it holds up to 50 seconds for an answer or comment on your pages and answers
 timed_out true when none came, so call it again. It keeps one place per key, so sessions

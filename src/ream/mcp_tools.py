@@ -1155,7 +1155,8 @@ def _gone(call: Call) -> bool:
     title="Wait for an answer or comment",
     description=(
         "Wait until the person answers or comments on your pages, then answer the events "
-        "whats_new would (same cursor). Holds up to seconds (default 45, at most 50); "
+        "whats_new would, watched pages' too (same cursor; watched events alone never end "
+        "the wait). Holds up to seconds (default 45, at most 50); "
         "nothing by then answers timed_out true: call again. Use it instead of a ream "
         "wait process. Not for a look that must not block: use whats_new."
     ),
@@ -1234,10 +1235,13 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         }
         early = took < seconds - 1
         return ToolOutput(quiet, next=_NEXT_WAIT_BUSY if early else None)
-    # Woken: everything since the cursor, the agent's own events too, so the cursor
-    # whats_new shares never passes an event neither tool answered.
+    # Woken: everything since the cursor, the agent's own events and watched ones too
+    # (they never ended the wait above, but they ride along here), so the cursor whats_new
+    # shares never passes an event neither tool answered.
     pre = events.latest_seq(call.db, call.agent)
-    rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
+    rows = events.list_for_agent(
+        call.db, call.agent, since=since, limit=limit, include_watched=True
+    )
     cursor = events.safe_cursor(since, pre, rows, limit)
     # A client that hung up mid-hold never reads this answer: leave the cursor, so the
     # next wait or whats_new answers these events again rather than losing them.
@@ -1253,7 +1257,7 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     ]
     return ToolOutput(
         {
-            "events": jsonable_encoder(out),
+            "events": jsonable_encoder(_with_page_agent(call.db, out)),
             "since": since,
             "cursor": cursor,
             "more": len(rows) >= limit,

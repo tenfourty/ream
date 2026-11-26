@@ -646,3 +646,75 @@ def test_a_watched_event_whose_writer_cannot_be_named_is_fenced_not_the_owners()
         mcp_tools._event_writer({**base, "page_agent": "owner"}, "summary") == "owner"
     )
     assert mcp_tools._event_writer(base, "note") is OWNER
+
+
+# --- wait_for_answer keeps the watched events whats_new shares its cursor with -----------
+
+
+def _ask(app, page_id):
+    asked = _tool(app, "ask", page_id=page_id, question="Ship?", options=OPTIONS)
+    assert asked["isError"] is False, asked
+    return asked["structuredContent"]["id"]
+
+
+def test_a_wait_woken_by_an_answer_returns_the_watched_events_before_it(
+    db, page, watching_app
+):
+    decision = _ask(watching_app, page)
+    row = store.get_owned(db, "owner", page)
+    store.patch(db, "owner", page, PAGE.format("two"), row.revision, note=INJECT)
+    decisions.answer(db, decision, letter="a", by=settings.owner_id())
+
+    out = _tool(watching_app, "wait_for_answer", seconds=5)["structuredContent"]
+    assert out["timed_out"] is False
+    kinds = [e["kind"] for e in out["events"]]
+    assert "watched_page_changed" in kinds and kinds[-1] != "watched_page_changed"
+    assert decision in [e["ref_id"] for e in out["events"]]
+    changed = next(e for e in out["events"] if e["kind"] == "watched_page_changed")
+    # fenced under the page's agent, as whats_new fences it
+    assert changed["page_agent"] == "owner"
+    match = _FENCE_LABEL.fullmatch(changed["summary"])
+    assert match and match.group(1) == "owner" and INJECT in changed["summary"]
+    # the shared cursor passed nothing unread: whats_new has nothing left for the key
+    after = _tool(watching_app, "whats_new")["structuredContent"]
+    assert after["events"] == []
+    # and a read from the start agrees with what the wait answered
+    again = _tool(watching_app, "whats_new", since=out["since"])["structuredContent"]
+    assert [e["seq"] for e in again["events"]] == [e["seq"] for e in out["events"]]
+
+
+def test_a_watched_event_alone_still_does_not_end_a_wait(db, page, watching_app):
+    _ask(watching_app, page)  # puts the cursor down
+    row = store.get_owned(db, "owner", page)
+    store.patch(db, "owner", page, PAGE.format("two"), row.revision)
+    assert _feed(db, watching_app.agent, ("watched_page_changed",))
+    out = _tool(watching_app, "wait_for_answer", seconds=1)["structuredContent"]
+    assert out["timed_out"] is True and out["events"] == []
+    # nothing was lost: whats_new still has it
+    got = _tool(watching_app, "whats_new")["structuredContent"]
+    assert [e["kind"] for e in got["events"]] == ["watched_page_changed"]
+
+
+def test_a_non_watchers_wait_answers_the_shape_whats_new_does(db, page):
+    app, _ = _call(db, settings.owner_id())
+    decision = _ask(app, page)
+    decisions.answer(db, decision, letter="b", by=settings.owner_id())
+    waited = _tool(app, "wait_for_answer", seconds=5)["structuredContent"]
+    new = _tool(app, "whats_new", since=waited["since"])["structuredContent"]
+    # each fence carries its own random mark, so compare the rows by what they say
+    assert waited["events"]
+    keys_ = ("seq", "kind", "ref_id", "artifact_id", "agent", "actor")
+    assert [[e[k] for k in keys_] for e in waited["events"]] == [
+        [e[k] for k in keys_] for e in new["events"]
+    ]
+    assert [sorted(e) for e in waited["events"]] == [sorted(e) for e in new["events"]]
+    assert all("page_agent" not in e for e in waited["events"])
+    assert set(waited) - {"next"} == {
+        "events",
+        "since",
+        "cursor",
+        "more",
+        "timed_out",
+        "waited",
+    }
+    assert waited["timed_out"] is False

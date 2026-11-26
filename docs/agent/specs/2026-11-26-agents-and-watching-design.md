@@ -121,7 +121,9 @@ beside `include_receipts` and leaves watched rows out by default (`events.py:346
 `wait_for_agent` gains the same parameter; without it a watched event never wakes a waiter (so every existing
 waiter behaves as before), and a caller that passes it is woken by one. MCP `whats_new` (`mcp_tools.py:943`)
 passes it, so its rows include them; the kind is the label, and the summary is fenced with the actor as any
-event's is (`_event_writer`, `mcp_tools.py:903`). `wait_for_answer` does not include them.
+event's is (`_event_writer`, `mcp_tools.py:903`). `wait_for_answer` wakes only on what `whats_new` would have answered without them
+(a watched event never ends its wait), but once woken reads with `include_watched` and `page_agent`, as `whats_new` does, so the
+cursor they share never passes a watched event neither tool returned.
 
 Limits: at most one `watched_page_changed` per watcher and page every 10 minutes (decision C), and at most 200
 watches per agent (a PUT past it answers 409; a repeat PUT of an existing watch is 200). Losing access: the
@@ -314,7 +316,8 @@ Choices made while building:
   404 for a page the caller cannot read (identical to a missing one), 200 `removed: false` for one it can.
 - **Who is not told.** The page's own agent (it has `comment_added` and its own changes) and the actor are skipped;
   a comment that already reaches the watcher as `comment_added` is not sent twice. A held comment sends nothing.
-- **`PUT` on your own page** answers 200 and adds nothing (the owner already hears everything).
+- **`PUT` on your own page** answers 200 and inserts a watch row: it counts against the 200 cap and is listed, but it gets no
+  events (`fan_out` skips the page's own agent, which already hears everything).
 - **Fence of a watching event.** `agent` is the watcher, so the fence cannot use it: `whats_new` adds `page_agent` (the page's
   owner, read when the feed is read) and the labeller fences the title, a change's summary and a mark's quote under that
   agent, another agent's comment under its author, and returns bare only the owner's own plain comment words, which ride in
@@ -322,8 +325,6 @@ Choices made while building:
 
 Known limits:
 
-- `wait_for_answer` shares its cursor with `whats_new` and does not include watching events, so its cursor can pass one that
-  only `whats_new` would return; documented in `docs/mcp.md` (call `whats_new` to collect them).
 - A held comment that is later released (`holds.release`) emits `comment_added` to the page's agent only, and no
   `watched_comment_added`: the design says nothing about release, so a watcher never hears of a comment that was held when
   written. Not changed here.
@@ -370,7 +371,9 @@ agents stay closed); (b) mark Jeremy's own machines personal, so they read his c
   says later changes are folded in.
 - A cursor skips watched rows for a caller that did not ask: `x-ream-seen` advances over them
   (`events.safe_cursor`), so an agent that wants them must always pass the flag.
-- Fan-out cost in event and outbox rows: bounded by the cap and the window.
+- Fan-out cost in event and outbox rows: the window bounds `watched_page_changed` to one a watcher and page every 10 minutes,
+  but comments are not coalesced (every other person's comment writes a row per watcher), and there is no per-page cap on
+  watchers yet (the 200 cap is per watcher). A per-page watcher cap is a follow-up.
 - Slice 1 is wider than it looks: fourteen PAGE_OWNER rows exist (`tests/test_owner_id_sites.py:28-54`)
   and eleven callers of the answering predicates change signature. Land it alone, with the sites test.
 - Display names come from OIDC at the company: sanitised, display-only, and the comma rule stops forgery.
