@@ -1242,6 +1242,20 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         ),
         "create index person_session_person on person_session (person)",
     ),
+    # 26 Nov 2026: watching, agents design slice 3 (see schema.sql). An older image ignores
+    # the table, so watches go silent.
+    41: (
+        (
+            "create table page_watch ("
+            " agent text not null,"
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " session text,"
+            " changed_notified_at timestamptz,"
+            " primary key (agent, artifact_id))"
+        ),
+        "create index page_watch_artifact on page_watch (artifact_id)",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

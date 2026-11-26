@@ -72,6 +72,7 @@ from ream import (
     templates,
     text,
     textvars,
+    watches,
 )
 from ream.mcp import (
     OWNER,
@@ -238,6 +239,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
         (
             "created_at",
             "updated_at",
+            "watching_since",
             "archived_at",
             "pinned_at",
             "deleted_at",
@@ -652,6 +654,86 @@ def _page_stats(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     return ToolOutput(pageviews.report(call.db, page_id, days), written_by=call.agent)
 
 
+# --- watch_page, unwatch_page, watches ------------------------------------------------
+#
+# Following a page (`watches.py`). They hold the caller's own list and change nothing on a
+# page, so they ask for ream:read; the events they lead to arrive in whats_new.
+
+_NEXT_WATCH = (
+    "Its new versions and other people's comments now arrive in whats_new as "
+    "watched_page_changed and watched_comment_added."
+)
+
+
+@tool(
+    "watch_page",
+    title="Follow a page",
+    description=(
+        "Follow a page you can read, yours or another agent's that is open to agents, "
+        "so that whats_new tells you when it gets a new version and when someone else "
+        "comments on it (at most one change a page every 10 minutes). At most 200 "
+        "pages. Repeating it is fine. Not for your own questions or comments: those "
+        "already reach you."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    next_step=_NEXT_WATCH,
+    fences=Fences(ream=_REAM),
+    input_schema=_schema({"page_id": PAGE_ID}, ("page_id",)),
+)
+def _watch_page(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id"})
+    page_id = _str(arguments, "page_id", required=True)
+    return jsonable_encoder(
+        api.watch_page(call.db, call.agent, page_id, call.session or None)
+    )
+
+
+@tool(
+    "unwatch_page",
+    title="Stop following a page",
+    description=(
+        "Stop following a page you followed with watch_page. Nothing else about the "
+        "page changes. Not for deleting a page: use delete_page."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    fences=Fences(ream=_REAM),
+    input_schema=_schema({"page_id": PAGE_ID}, ("page_id",)),
+)
+def _unwatch_page(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id"})
+    page_id = _str(arguments, "page_id", required=True)
+    return jsonable_encoder(api.unwatch_page(call.db, call.agent, page_id))
+
+
+@tool(
+    "watches",
+    title="Pages you follow",
+    description=(
+        "The pages you follow with watch_page and can still read, newest first. A page "
+        "that closed to you drops out of the list. Not for what is new on them: use "
+        "whats_new."
+    ),
+    read_only=True,
+    destructive=False,
+    idempotent=True,
+    # A page's title is by its agent.
+    fences=Fences(ream=_REAM, writer=_by("agent")),
+    input_schema=_schema({"limit": LIMIT}),
+)
+def _watches(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"limit"})
+    limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)
+    rows = watches.listing(call.db, call.agent)
+    return {
+        "watches": jsonable_encoder(rows[:limit]),
+        "truncated": len(rows) > limit,
+    }
+
+
 # --- get_template ---------------------------------------------------------------------
 
 
@@ -910,6 +992,10 @@ def _event_writer(obj: dict, key: str):
         return None
     if obj["actor"] != settings.owner_id():
         return obj["actor"] or None
+    # A watcher's event (`agent` is the watcher, not the page's agent): the owner's comment
+    # is his own words whichever field carries it.
+    if obj.get("kind") in events.WATCHED_KINDS:
+        return OWNER
     return OWNER if key == "note" else obj.get("agent") or None
 
 
@@ -955,7 +1041,10 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
         saved = _seen(call)
         # A key that has never looked starts from now, not from its whole history.
         since = pre if saved is None else saved
-    rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
+    # whats_new is where watching arrives: the one feed that asks for the watched kinds.
+    rows = events.list_for_agent(
+        call.db, call.agent, since=since, limit=limit, include_watched=True
+    )
     cursor = events.safe_cursor(since, pre, rows, limit)
     _save_seen(call, cursor)
     out = [

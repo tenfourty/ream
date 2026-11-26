@@ -44,6 +44,7 @@ from ream import (
     settings,
     store,
     text,
+    watches,
 )
 from ream.anchors import (
     SECTION_MAX,
@@ -926,6 +927,7 @@ def add(
             # seat woken by its own reply is a watcher crying wolf.
             owner_emission = None
             replier_emissions: list[events.Emission] = []
+            watcher_emissions: list[events.Emission] = []
             if not held and (
                 author_kind == "human"
                 or is_foreign(author, session, owning_agent, page_session)
@@ -988,6 +990,28 @@ def add(
                             ),
                         )
                     )
+            # The agents that WATCH the page hear of anyone else's comment under their own
+            # kind (watches.py), except those who already get this one as `comment_added`.
+            if not held:
+                already = tuple(
+                    [owning_agent]
+                    + [e.event.agent for e in replier_emissions]
+                    + ([owner_emission.event.agent] if owner_emission else [])
+                )
+                watcher_emissions = watches.fan_out(
+                    conn,
+                    owned,
+                    "watched_comment_added",
+                    actor=author,
+                    summary=said,
+                    ref_id=comment_id,
+                    skip=already,
+                )
+                if watcher_emissions and callers_txn and after_commit is None:
+                    raise ValueError(
+                        "a comment that raises a watcher event cannot join a"
+                        " caller's transaction: its nudge would precede the commit"
+                    )
         created = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
             (comment_id,),
@@ -997,7 +1021,11 @@ def add(
     # something that never happened. `emit` never raises and never blocks --
     # commenting is what Jeremy came to do, and telling a seat about it is a
     # courtesy on top of a journal that already has the comment durably.
-    for emission in ([owner_emission] if owner_emission else []) + replier_emissions:
+    for emission in (
+        ([owner_emission] if owner_emission else [])
+        + replier_emissions
+        + watcher_emissions
+    ):
         if callers_txn:
             after_commit.append(emission.fire)
         else:

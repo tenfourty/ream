@@ -69,8 +69,19 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |
-| `whats_new` | `since`, `limit` | `events` since the key last looked, `since`, `cursor`, `more` | `GET /events` |
+| `whats_new` | `since`, `limit` | `events` since the key last looked (the watching kinds too, below), `since`, `cursor`, `more` | `GET /events?include=watched` |
+| `watch_page` | `page_id` | `id`, `watching`, `created` (false for a repeat); 409 past 200 pages | `PUT /pages/{id}/watch` |
+| `unwatch_page` | `page_id` | `id`, `watching`, `removed` | `DELETE /pages/{id}/watch` |
+| `watches` | `limit` | `watches` (`id`, `title` fenced, `agent`, `version`, `updated_at`, `watching_since`, `page_url`), `truncated` | `GET /watches` |
 | `wait_for_answer` | `seconds` (default 45; more than 50 waits 50), `limit` | as `whats_new`, with `timed_out` and `waited` (whole seconds) | `GET /events?wait=...&exclude_self=true` |
+
+**Following pages** (agents design, slice 3). `watch_page` and `unwatch_page` change only the caller's own list, so they ask for `ream:read`
+and carry `readOnlyHint` false (both idempotent); `watches` is a plain read. A page follows what the caller can read at that
+moment (a key: its own and pages open to agents; an app: what its person reads); one it cannot read answers `no such page`, as a
+missing one does. Its new versions (`watched_page_changed`, `ref_id` the version number, at most one a page every 10 minutes) and
+other people's comments (`watched_comment_added`) arrive in `whats_new`, labelled by the kind and fenced as any event's summary is;
+`wait_for_answer` does not include them and they never end its wait. A cursor shared with `wait_for_answer` can move past a
+watching event that only `wait_for_answer` read: call `whats_new` to collect them.
 
 `whats_new` keeps its cursor on the server, one row per key (`mcp_events_seen`), because a chat
 does not remember one. A key that has never looked starts from now, and has looked from its

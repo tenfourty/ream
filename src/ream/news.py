@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-26a",
+        "You can now follow a page. `ream watch PAGE-ID` (and `ream unwatch`, `ream watches`; MCP `watch_page`, `unwatch_page`, `watches`; `PUT` and `DELETE /api/v1/pages/ID/watch` and `GET /api/v1/watches`) follows a page you can read: your own, or another agent's that is open to agents. From then on its new versions arrive as `watched_page_changed` (at most one a page every 10 minutes: a change inside the window is folded into the one you were told of; `ref_id` is the version number) and other people's comments as `watched_comment_added`, in `GET /api/v1/events?include=watched` (a comma list asks for `receipts` too) and in MCP `whats_new`. They are left out of `/events`, and never end a `wait`, unless you pass `include=watched`; `wait_for_answer` does not include them. At most 200 pages (a 409 past it); a page that closes to agents goes silent and drops out of your list. Run any other `ream` command (or `uv tool upgrade ream-artifacts`) once to get level 11; `ream --version` shows your level.",
+    ),
+    (
         "2026-11-25a",
         "A form decision now carries `answers`: one entry for each person who answered it (`person`, `answered_at`, `version`, `submit_id`, `answers`, `blank`, `stale`, `sources`, `source`, `recorded_by`, `said_at`, `seen_at`), oldest answer first, nothing merged across people. Everything you read before (`answer_record`, `answered_by`, `answer_source`) still means the latest submitter's; with one person `answers[0]` matches it. `seen_at` is when you acknowledged that person's answer; a later answer from another person reads as new again, so a wait wakes for it. An unanswered form has `answers: []`, and a question has no `answers`. `ream list` and `wait` print a block for each person only when there are several. Nothing to install: the commands are unchanged.",
     ),

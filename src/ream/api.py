@@ -82,6 +82,7 @@ from ream import (
     textvars,
     thumbs,
     traps,
+    watches,
 )
 from ream.db import Database
 
@@ -1440,6 +1441,32 @@ def agents_can_read_page(
     if not store.set_agents_can_read(db, artifact_id, can_read, agent=agent):
         raise HTTPException(404, "no such page")
     return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def watch_page(
+    db: Database, agent: str, artifact_id: str, session: str | None = None
+) -> dict:
+    """PUT /pages/{id}/watch, for the route and the MCP `watch_page` tool. A page the caller
+    cannot read answers as one that does not exist; past the cap it is a 409; a repeat is
+    not an error."""
+    try:
+        created = watches.watch(db, agent, artifact_id, session=session)
+    except store.NotFound:
+        raise HTTPException(404, "no such page") from None
+    except watches.TooMany:
+        raise HTTPException(
+            409, f"you already watch {watches.CAP} pages: unwatch one first"
+        ) from None
+    return {"id": artifact_id, "watching": True, "created": created}
+
+
+def unwatch_page(db: Database, agent: str, artifact_id: str) -> dict:
+    """DELETE /pages/{id}/watch, for the route and the MCP `unwatch_page` tool."""
+    try:
+        removed = watches.unwatch(db, agent, artifact_id)
+    except store.NotFound:
+        raise HTTPException(404, "no such page") from None
+    return {"id": artifact_id, "watching": False, "removed": removed}
 
 
 def delete_page(db: Database, agent: str, artifact_id: str) -> dict:
@@ -2833,6 +2860,29 @@ def agent_router(
         """Pin one of this agent's own pages to the front of the wall."""
         return pin_page(db, agent, artifact_id, payload.pinned)
 
+    @router.put("/artifacts/{artifact_id}/watch")
+    def put_watch(
+        artifact_id: str,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
+        """Follow a page you can read (your own, or one open to agents): its new versions and
+        other people's comments reach your `/events?include=watched` feed as
+        `watched_page_changed` and `watched_comment_added`. At most 200 watches (409 past
+        it); a repeat is 200. A page you cannot read answers exactly as a missing one."""
+        return watch_page(db, agent, artifact_id, seat_session)
+
+    @router.delete("/artifacts/{artifact_id}/watch")
+    def delete_watch(artifact_id: str, agent: str = Depends(caller)):
+        """Stop following a page. Letting go of a watch you hold always works, even when you
+        can no longer read the page; otherwise a page you cannot read answers as a missing one."""
+        return unwatch_page(db, agent, artifact_id)
+
+    @router.get("/watches")
+    def get_watches(agent: str = Depends(caller)):
+        """The pages you follow and can still read, newest watch first."""
+        return {"watches": jsonable_encoder(watches.listing(db, agent))}
+
     @router.post("/artifacts/{artifact_id}/comments-setting")
     def comments_setting(
         artifact_id: str, payload: CommentsBody, agent: str = Depends(caller)
@@ -3915,8 +3965,12 @@ def agent_router(
         # Leave out this agent's own actions (homelab-ij8.106).
         exclude_self: bool = False,
         # `include=receipts` adds the agent's own `receipt_set` rows. They never end a
-        # `wait`, and a plain read does not return them (receipts.py).
-        include: str | None = Query(None, pattern="^receipts$"),
+        # `wait`, and a plain read does not return them (receipts.py). `include=watched`
+        # adds the watching kinds (`watches.py`) and lets them end a `wait`; a comma
+        # list asks for both.
+        include: str | None = Query(
+            None, pattern="^(receipts|watched)(,(receipts|watched))*$"
+        ),
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
@@ -3965,6 +4019,8 @@ def agent_router(
         if request.headers.get("cf-ray"):
             wait = min(wait, PUBLIC_MAX_WAIT)
         exclude = agent if exclude_self else None
+        wanted = set((include or "").split(","))
+        with_watched = "watched" in wanted
         # Before the first look, never after the hold: see events.safe_cursor.
         # Read before the session is marked as waiting, so that a failure here
         # cannot leave a mark that nothing clears.
@@ -3983,6 +4039,7 @@ def agent_router(
                 limit=limit,
                 session=session_filter,
                 exclude_actor=exclude,
+                include_watched=with_watched,
             )
             if not rows and wait:
                 rows = events.wait_for_agent(
@@ -3993,8 +4050,9 @@ def agent_router(
                     seconds=wait,
                     session=session_filter,
                     exclude_actor=exclude,
+                    include_watched=with_watched,
                 )
-            if include == "receipts":
+            if "receipts" in wanted:
                 rows = events.list_for_agent(
                     db,
                     agent,
@@ -4003,6 +4061,7 @@ def agent_router(
                     session=session_filter,
                     exclude_actor=exclude,
                     include_receipts=True,
+                    include_watched=with_watched,
                 )
         finally:
             if held_until is not None:
@@ -4100,6 +4159,7 @@ def agent_router(
         "duplicate",
         "restore",
         "destroy",
+        "watch",
     )
 
     # The same treatment for a decision's sub-routes, added 21 Sep after the

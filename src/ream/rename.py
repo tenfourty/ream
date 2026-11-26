@@ -216,6 +216,7 @@ def rename_agent(
         counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
         counts["agent_pickup.agent"] = _merge_pickup(conn, old, new)
         counts["page_viewer.viewer"] = _merge_viewers(conn, old, new)
+        counts["page_watch.agent"] = _merge_watches(conn, old, new)
 
         moved = sum(counts.values())
         already = conn.execute(
@@ -293,6 +294,26 @@ def _merge_viewers(conn, old: str, new: str) -> int:
     return conn.execute(
         "delete from page_viewer where kind = 'agent' and viewer = %s", (old,)
     ).rowcount
+
+
+def _merge_watches(conn, old: str, new: str) -> int:
+    """What an agent watches moves to `new` (`page_watch`, key `(agent, artifact_id)`): one row
+    per page, `new`'s own kept where it has one, with the later coalescing stamp so a rename
+    never reopens a window. Watch events already written follow through `event.agent`."""
+    conn.execute(
+        "insert into page_watch (agent, artifact_id, created_at, session, changed_notified_at)"
+        " select %s, artifact_id, created_at, session, changed_notified_at from page_watch"
+        " where agent = %s"
+        " on conflict (agent, artifact_id) do update"
+        " set changed_notified_at = case"
+        "   when page_watch.changed_notified_at is null"
+        "     then excluded.changed_notified_at"
+        "   when excluded.changed_notified_at > page_watch.changed_notified_at"
+        "     then excluded.changed_notified_at"
+        "   else page_watch.changed_notified_at end",
+        (new, old),
+    )
+    return conn.execute("delete from page_watch where agent = %s", (old,)).rowcount
 
 
 def _merge_pickup(conn, old: str, new: str) -> int:

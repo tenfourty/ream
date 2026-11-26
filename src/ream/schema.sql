@@ -1526,3 +1526,19 @@ create table if not exists person_session (
     last_seen_at timestamptz
 );
 create index if not exists person_session_person on person_session (person);
+
+-- WATCHING (26 Nov 2026; docs/agent/specs/2026-11-26-agents-and-watching-design.md, slice 3). A row says
+-- this agent follows this page: `watches.fan_out` writes it a `watched_page_changed` or
+-- `watched_comment_added` event, in the transaction of the change, while it can still read the page.
+-- `changed_notified_at` is the coalescing window (one change event per watcher and page every 10 minutes).
+-- No foreign key to an agent (an agent is a name), so `rename-agent` merges rows. Deleting the page
+-- cascades its watches away. An older image ignores the table, so watches go silent. SQLite: step 41.
+create table if not exists page_watch (
+    agent               text        not null,
+    artifact_id         text        not null references artifact(id) on delete cascade,
+    created_at          timestamptz not null default now(),
+    session             text,
+    changed_notified_at timestamptz,
+    primary key (agent, artifact_id)
+);
+create index if not exists page_watch_artifact on page_watch (artifact_id);

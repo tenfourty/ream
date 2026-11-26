@@ -438,6 +438,11 @@ def _seed(database: Database) -> None:
             ["a1", "agent", "beta é", 2, T1, T0],
         ),
         (
+            "page_watch",
+            "agent, artifact_id, created_at, session, changed_notified_at",
+            ["beta é", "a1", T0, "beta/ü", T1],
+        ),
+        (
             "email_share",
             (
                 "id, artifact_id, email, token_sha256, created_at, revoked_at,"

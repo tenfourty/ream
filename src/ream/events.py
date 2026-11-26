@@ -77,7 +77,17 @@ KINDS = (
     # on the Machines page, or a fold. Summary names the key id, who and why, never the token.
     # ref_id is the key id. Same placement as `agent_moved`.
     "agent_key_revoked",
+    # Watching (26 Nov 2026; `watches.fan_out`): written for an agent that WATCHES a page it
+    # does not own. `watched_page_changed`: a version was minted (ref_id is the version number;
+    # at most one per watcher and page every 10 minutes). `watched_comment_added`: someone
+    # else's comment. Never in a feed, and never waking a waiter, unless the caller asks for
+    # them (`include_watched`). Stored names: never renamed.
+    "watched_page_changed",
+    "watched_comment_added",
 )
+
+# The kinds a caller sees only by asking (`include_watched`).
+WATCHED_KINDS = ("watched_page_changed", "watched_comment_added")
 
 # The other namespace (core-and-plugins design, 4.1): what the partner bridge carries.
 # Not in the journal and never seen by an agent polling /events. Sink `kinds` may name
@@ -318,6 +328,7 @@ def list_for_agent(
     session: str | None = None,
     exclude_actor: str | None = None,
     include_receipts: bool = False,
+    include_watched: bool = False,
 ) -> list[EventRow]:
     """Every event recorded for `agent`, strictly above `since`, oldest first --
     the order a cursor needs: a caller that stores the last `seq` it saw and asks
@@ -348,6 +359,12 @@ def list_for_agent(
     # it: `wait_for_agent` never passes `include_receipts`.
     if not include_receipts:
         sql += " and event.kind <> 'receipt_set'"
+    # The two watching kinds are left out the same way, and for the same reason: no
+    # existing reader changes and no waiter wakes on them unless it passes the flag.
+    if not include_watched:
+        sql += (
+            " and event.kind not in ('watched_page_changed', 'watched_comment_added')"
+        )
     if session is not None:
         sql += " and event.session = %s"
         params += (session,)
@@ -589,6 +606,7 @@ def wait_for_agent(
     seconds: float,
     session: str | None = None,
     exclude_actor: str | None = None,
+    include_watched: bool = False,
 ) -> list[EventRow]:
     """Hold until an event lands for `agent` above `since`, or `seconds` pass.
 
@@ -616,6 +634,7 @@ def wait_for_agent(
             limit=limit,
             session=session,
             exclude_actor=exclude_actor,
+            include_watched=include_watched,
         )
     try:
         deadline = time.monotonic() + seconds
@@ -632,6 +651,7 @@ def wait_for_agent(
                     limit=limit,
                     session=session,
                     exclude_actor=exclude_actor,
+                    include_watched=include_watched,
                 )
             # The deadline is checked BEFORE the look as well as after. A look
             # is a database round trip, not a free operation, and the caller was
@@ -647,6 +667,7 @@ def wait_for_agent(
                     limit=limit,
                     session=session,
                     exclude_actor=exclude_actor,
+                    include_watched=include_watched,
                 )
                 failing_since = None
             except TRANSIENT:
@@ -685,6 +706,7 @@ def wait_for_agent(
                     limit=limit,
                     session=session,
                     exclude_actor=exclude_actor,
+                    include_watched=include_watched,
                 )
     finally:
         _waiters.release()

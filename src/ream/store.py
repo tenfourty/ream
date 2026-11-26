@@ -1030,6 +1030,8 @@ def patch(
         # text in `body`: a write never has to rebuild anything. Encoded before the
         # transaction, so a slow encode holds no lock.
         packed = packing.pack(n, body, live[1])
+        # Watchers' events, written inside the transaction below and fired after it commits.
+        watch_emissions: list = []
         try:
             # One transaction: a failure between the two writes must leave the
             # artifact exactly as it was, not pointing at a version that was
@@ -1110,6 +1112,24 @@ def patch(
                 )
                 _record_check(conn, artifact_id, interval)
                 _write_comments(conn, artifact_id, comments)
+                # A version was minted: tell the agents that watch the page (watches.py).
+                # Looked up at call time, as `decisions` is: watches imports this module.
+                from ream import watches
+
+                what = (note or section or "").strip()
+                watch_emissions = watches.fan_out(
+                    conn,
+                    (artifact_id, title if title is not None else row[1], row[2]),
+                    "watched_page_changed",
+                    actor=agent,
+                    summary=(
+                        f"{title if title is not None else row[1]}: version {n}"
+                        + (f", {what}" if what else "")
+                        + " (changes in the next 10 minutes are folded in)"
+                    ),
+                    ref_id=str(n),
+                    data={"version": n},
+                )
         except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them
@@ -1131,6 +1151,10 @@ def patch(
             # real collision as a stale revision. Re-check both premises
             # before adding any such write path.
             raise RevisionMismatch() from exc
+    # Only once the version has committed: a nudge for a write that rolled back would send
+    # a watcher to read something that never happened.
+    for emission in watch_emissions:
+        emission.fire()
     return Published(
         id=artifact_id,
         version=n,

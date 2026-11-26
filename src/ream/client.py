@@ -3208,6 +3208,117 @@ def stats_run() -> None:
     sys.exit(stats_main())
 
 
+# --- ream watch, unwatch, watches (agents design, slice 3) ------------------------------
+
+
+def build_watch_parser(verb: str) -> argparse.ArgumentParser:
+    descriptions = {
+        "watch": (
+            "Follow a page you can read, yours or another agent's that is open to agents "
+            "(PUT /api/v1/pages/ID/watch): its new versions and other people's comments "
+            "reach GET /api/v1/events?include=watched (and whats_new over MCP) as "
+            "watched_page_changed and watched_comment_added, at most one change a page "
+            "every 10 minutes. At most 200 pages; repeating it is fine."
+        ),
+        "unwatch": "Stop following a page (DELETE /api/v1/pages/ID/watch).",
+        "watches": (
+            "The pages you follow and can still read, newest first (GET /api/v1/watches)."
+        ),
+    }
+    parser = _Parser(prog=prog_name(f"ream {verb}"), description=descriptions[verb])
+    if verb != "watches":
+        parser.add_argument("page_id", metavar="PAGE-ID")
+    parser.add_argument(
+        "--json", action="store_true", help="print the service's answer as JSON"
+    )
+    parser.add_argument(
+        "--key-file",
+        help=f"the file holding the agent key (default {_DEFAULT_KEY_FILE}, "
+        "or $REAM_KEY_FILE)",
+    )
+    parser.add_argument(
+        "--key-fd",
+        type=int,
+        metavar="N",
+        help="read the key from an already-open descriptor (or set $REAM_KEY_FD)",
+    )
+    parser.add_argument("--session", help="the session label (default $REAM_SESSION)")
+    return parser
+
+
+def _watch_text(verb: str, found: dict) -> str:
+    """Counts and fixed words, and every string from the service (a title another agent
+    wrote) passed through `_printable`."""
+    if verb == "watches":
+        rows = found.get("watches") or []
+        if not rows:
+            return "you watch no pages"
+        return "\n".join(
+            f"{_printable(r.get('id'))}  v{int(r.get('version') or 0)}  "
+            f"{_printable(r.get('agent'))}  {_printable(r.get('title'))}"
+            for r in rows
+        )
+    page = _printable(found.get("id"))
+    if verb == "watch":
+        return (
+            f"{'now watching' if found.get('created') else 'already watching'} {page}"
+        )
+    return (
+        f"{'stopped watching' if found.get('removed') else 'was not watching'} {page}"
+    )
+
+
+def watch_main(verb: str, argv: list[str] | None = None) -> int:
+    args = build_watch_parser(verb).parse_args(
+        argv if argv is not None else sys.argv[1:]
+    )
+    use_session(session_label(args.session))
+    try:
+        key = _resolve_key(args)
+        key = maybe_rotate(args, key)
+        if verb == "watches":
+            found = _request("GET", f"{_api_base()}/watches", key, None)
+        else:
+            found = _request(
+                "PUT" if verb == "watch" else "DELETE",
+                f"{_api_base()}/pages/{quote(args.page_id, safe='')}/watch",
+                key,
+                None,
+            )
+        print(
+            json.dumps(found, ensure_ascii=False)
+            if args.json
+            else _watch_text(verb, found)
+        )
+        return 0
+    except HTTPFailure as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    except UsageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- last resort: `str(exc)` can carry
+        # the key. Only the exception's class name is ever safe to print.
+        print(f"error: {type(exc).__name__}", file=sys.stderr)
+        return 1
+
+
+def _watch_runner(verb: str):
+    def run_verb() -> None:
+        plugin_cli.load_or_exit()
+        news.announce()
+        sys.exit(watch_main(verb))
+
+    run_verb.__doc__ = f"`ream {verb}`."
+    return run_verb
+
+
+watch_run = _watch_runner("watch")
+unwatch_run = _watch_runner("unwatch")
+watches_run = _watch_runner("watches")
+
+
 def changes_run() -> None:
     """`ream changes ID [--from N] [--to M]`: the publish tool's --changes, with its other flags."""
     rest = sys.argv[1:]
