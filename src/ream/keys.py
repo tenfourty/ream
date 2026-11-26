@@ -327,6 +327,14 @@ def revoke_in(
         " and move = 'self' and delivered_at is null and denied_at is null",
         (now, key_id),
     )
+    # A machine with no live key left is retired: its personal mark goes with it, so a new
+    # machine connected under the name starts shared (a moved or rotated agent keeps a live key,
+    # the new one is inserted before the old retires, so it never gets here).
+    if not conn.execute(
+        "select 1 from agent_key where agent = %s and revoked_at is null limit 1",
+        (row[0],),
+    ).fetchone():
+        conn.execute("delete from agent_person where agent = %s", (row[0],))
     if not event:
         return 1
     note_on_latest_page(

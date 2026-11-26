@@ -352,8 +352,17 @@ form field `belongs_to`, empty means shared; behind `people.require_owner`). Run
   reads its own closed page through its own `agent_person` row.
 - **Watching.** `watches._reads` asks `agents.person_of` (app or personal key), so fan-out and the cap use the same
   clause as `_owned`; clearing a key's person makes it read as a key at once and its closed-page watches go silent.
-- **`/me` and `whoami`.** `me_view` adds `belongs_to` and `shown_as` only when the key is personal (`shown_as` is the
-  agent's name: a key has no host, so the via line is the name). A shared key's answer is byte-identical.
+- **`/me` and `whoami`.** `me_view` adds `belongs_to` and `shown_as` only when the key is personal (`shown_as` is the via line
+  `<person name>, via <agent name>`, built in `agents.shown` from the `Shown.machine` field, so `/me`, `whoami` and the
+  cards share the sanitising and escaping of apps; `Shown.via` stays None, which is what marks an app). A shared key's answer is byte-identical.
+- **Comments.** A personal key may post plain comments on every page it can read: its reads widen, and with them
+  where it may comment; it changes only its own pages (update, delete, transfer, the agents-can-read toggle, moves to a
+  folder and asking are unchanged: `tests/test_personal_key.py`).
+- **Retiring a machine (security).** `keys.revoke_in` deletes the `agent_person` row when no live key of the agent
+  remains (a move or rotation inserts the new key first, so it never triggers it); `set_person` needs a live key and the
+  Machines route looks the key up with `revoked_at is null`. `person_of` / `key_reach` do not check live keys. The
+  trade-off: once a retired machine's row goes, its pages count as shared (open questions go back to the owner, another
+  person loses read of its closed pages); a new machine under the same name starts shared.
 - **Rename.** `rename._check_same_person` refuses (dry run too) a merge where the two agents' persons differ, a shared
   agent counting as "nobody", unless the target name is held by nothing (no key, page or person row). The person row
   follows a rename (`_merge_person`; the same person on both keeps one row).

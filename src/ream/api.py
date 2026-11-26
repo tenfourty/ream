@@ -778,7 +778,8 @@ def open_questions(
         ]
     else:
         # A signed-in MCP app sees the questions on every page it may read, not only
-        # those on its own agent's pages (MCP design 11.2). A key's reach widens nothing.
+        # those on its own agent's pages (MCP design 11.2). A shared key's reach widens nothing; a personal
+        # key's reads widen to its person's (slice 4).
         wide = reach.widened(agent)
         every = wide is not None and wide.reads_all()
         with db.connect() as conn:

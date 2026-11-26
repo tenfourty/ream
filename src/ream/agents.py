@@ -53,7 +53,7 @@ def set_person(db, agent: str, person: str, by: str) -> bool:
     """Mark the KEY agent `agent` as `person`'s machine (agents design, slice 4). Returns True when
     this changed anything. Only `artifacts-admin` and the owner's Machines page call it: no
     /api/v1 or MCP route does (`tests/test_personal_key.py` walks the routes). Raises `Refused`
-    for an agent no key holds, an app agent (its person is the one that signed in), or a person
+    for an agent no live key holds, an app agent (its person is the one that signed in), or a person
     who does not exist."""
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
@@ -62,9 +62,10 @@ def set_person(db, agent: str, person: str, by: str) -> bool:
         ).fetchone():
             raise Refused(f"{agent} is an app agent: it already belongs to its person")
         if not conn.execute(
-            "select 1 from agent_key where agent = %s limit 1", (agent,)
+            "select 1 from agent_key where agent = %s and revoked_at is null limit 1",
+            (agent,),
         ).fetchone():
-            raise Refused(f"no agent named {agent} holds a key")
+            raise Refused(f"no agent named {agent} holds a live key")
         if not conn.execute("select 1 from person where id = %s", (person,)).fetchone():
             raise Refused(f"no person with id {person!r}")
         before = conn.execute(
@@ -143,12 +144,17 @@ class Shown:
     person_name: str = ""
     via: str | None = None
     team: str | None = None
+    machine: str | None = (
+        None  # a personal key's agent name: its line is "<person>, via <name>"
+    )
 
     def text(self) -> str:
         """The line `<person name>, via <host>` for a personal agent, else the agent's own name.
         Escape it where it is drawn."""
         if self.person is not None and self.via:
             return f"{self.person_name}, via {self.via}"
+        if self.person is not None and self.machine:
+            return f"{self.person_name}, via {self.machine}"
         return self.agent
 
 
@@ -169,12 +175,22 @@ def unknown_app() -> Shown:
 
 
 def shown(conn, agent: str) -> Shown:
-    """The via line of `agent`: an app agent is "<its person>, via <host>", any other is its name."""
+    """The via line of `agent`: an app agent is "<its person>, via <host>", a personal key's agent
+    (an `agent_person` row, slice 4) "<its person>, via <agent name>", any other is its name.
+    A personal key's `via` stays None (that marks an app, which the gallery's asker and relay
+    lines read), its name rides in `machine`."""
     row = conn.execute(
         "select m.person, m.host, p.name from mcp_agent m"
         " left join person p on p.id = m.person where m.agent = %s",
         (agent,),
     ).fetchone()
     if row is None:
-        return Shown(agent)
+        mine = conn.execute(
+            "select k.person, p.name from agent_person k"
+            " left join person p on p.id = k.person where k.agent = %s",
+            (agent,),
+        ).fetchone()
+        if mine is None:
+            return Shown(agent)
+        return Shown(agent, mine[0], person_label(mine[0], mine[1]), None, None, agent)
     return app_shown(agent, row[0], row[2], row[1])

@@ -775,7 +775,8 @@ def _owned(
     whoever calls (asking on a page, until a question can have its own asker, 11.4).
     Another person's app (`reads_person`) reads what `access.reads_sql` says: that
     person's personal agents' pages and pages open to agents, and changes only those agents'.
-    A key's reach widens nothing: the queries below it are today's."""
+    A shared key's reach widens nothing: the queries below it are today's. A personal key's READS
+    widen to its person's (`agents.key_reach`); what it changes stays its own pages."""
     wide = caller_reach.widened(agent) if widen else None
     if wide is not None and as_reader and wide.reads_all():
         return conn.execute(
@@ -2394,7 +2395,8 @@ def _scoped(
     # A signed-in MCP app (`reach.widened`, MCP design 11.2) organises the pages of any of
     # the person's app agents, as `_owned` lets it change them. `widen=False` keeps a
     # check to `agent`'s own pages whoever calls (destroy, give away, who may read:
-    # "never" for an app). A key's reach widens nothing. For another person's app `writes()` is
+    # "never" for an app). A shared key's reach widens nothing, and a personal key's writes stay
+    # its own (its reads widen to its person's, in `_owned`). For another person's app `writes()` is
     # that person's own agents (`mcp_apps.reach_of`), so this clause needs no person branch:
     # `_scoped` only ever changes pages, never reads one.
     wide = caller_reach.widened(agent) if widen and agent is not None else None

@@ -139,7 +139,7 @@ def test_me_says_whose_it_is_read_only_and_only_for_a_personal_key(db, api, worl
     before = api.get("/api/v1/me", headers=h).json()
     agents.set_person(db, "ann-box", "ann", "admin")
     after = api.get("/api/v1/me", headers=h).json()
-    assert after["belongs_to"] == "ann" and after["shown_as"] == "ann-box"
+    assert after["belongs_to"] == "ann" and after["shown_as"] == "ann, via ann-box"
     assert {
         k: v for k, v in after.items() if k not in ("belongs_to", "shown_as")
     } == before
@@ -157,7 +157,7 @@ def test_clearing_narrows_back_at_once(db, api, world):
 
 
 def test_set_person_refusals(db, world):
-    with pytest.raises(agents.Refused, match="holds a key"):
+    with pytest.raises(agents.Refused, match="holds a live key"):
         agents.set_person(db, "nobody", "ann", "admin")
     with pytest.raises(agents.Refused, match="no person"):
         agents.set_person(db, "ann-box", "zed", "admin")
@@ -279,7 +279,9 @@ def test_only_the_owners_surfaces_write_agent_person():
                 "clear_person",
             ):
                 callers.add(path.name)
-    assert writers <= {"agents.py", "rename.py", "owner.py", "db.py"}, writers
+    assert writers <= {"agents.py", "keys.py", "rename.py", "owner.py", "db.py"}, (
+        writers
+    )
     assert callers == {"admin.py", "gallery.py"}, callers
 
 
@@ -327,3 +329,136 @@ def test_the_owner_marks_a_machine_personal_on_the_machines_page(db, world):
         ).status_code
         == 404
     )
+
+
+def _writes(pid, ids):
+    """Every change a key can aim at one page, as (name, method, url, json body)."""
+    return [
+        (
+            "patch",
+            "patch",
+            f"/api/v1/pages/{pid}",
+            {"body": PAGE.format("x"), "expected_revision": "r1"},
+        ),
+        ("delete", "delete", f"/api/v1/pages/{pid}", None),
+        ("transfer", "post", f"/api/v1/pages/{pid}/transfer", {"to": "owner-box"}),
+        ("agents", "post", f"/api/v1/pages/{pid}/agents", {"can_read": True}),
+        ("move", "post", "/api/v1/pages/move", {"ids": [pid], "folder": "mine"}),
+        (
+            "ask",
+            "post",
+            f"/api/v1/pages/{pid}/decisions",
+            {
+                "question": "q?",
+                "options": [
+                    {"letter": "a", "label": "A"},
+                    {"letter": "b", "label": "B"},
+                ],
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize("page", ["office_closed", "office_open"])
+def test_a_personal_key_changes_nothing_on_another_agents_page(db, api, world, page):
+    """Reads widen, writes do not: on another agent's page, closed to agents or open, each change
+    answers as it does for a shared key, and on a closed page as for a missing one."""
+    agents.set_person(db, "owner-box", world["owner"], "admin")
+    mine, shared = world["heads"]["owner-box"], world["heads"]["ann-box"]
+    pid = world[page]
+    for name, method, url, body in _writes(pid, None):
+        a = api.request(method, url, headers=mine, json=body)
+        b = api.request(method, url, headers=shared, json=body)
+        assert (a.status_code, a.json()) == (b.status_code, b.json()), name
+        if name == "move":  # a 200 that moves nothing: "missing" covers "not yours"
+            assert a.json()["moved"] == [] and pid in a.json()["missing"]
+        else:
+            assert a.status_code in (403, 404, 409), (name, a.status_code)
+        if page == "office_closed":
+            _n, m_method, m_url, m_body = next(
+                w for w in _writes(MISSING, None) if w[0] == name
+            )
+            gone = api.request(m_method, m_url, headers=mine, json=m_body)
+            assert a.status_code == gone.status_code, name
+    row = store.get_owned(db, "office", pid)
+    assert row.title in ("Open", "Office closed")
+    assert row.deleted_at is None and row.agent == "office"
+
+
+def test_a_personal_key_may_comment_where_it_may_read(db, api, world):
+    agents.set_person(db, "ann-box", "ann", "admin")
+    agents.set_person(db, "ann-box2", "ann", "admin")
+    h = world["heads"]["ann-box"]
+    ok = api.post(
+        f"/api/v1/pages/{world['ann_closed']}/comments",
+        headers=h,
+        json={"body": "hello"},
+    )
+    assert ok.status_code == 201, ok.text
+    no = api.post(
+        f"/api/v1/pages/{world['office_closed']}/comments",
+        headers=h,
+        json={"body": "hello"},
+    )
+    assert no.status_code == 404
+
+
+def _live(db, agent):
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from agent_key where agent = %s and revoked_at is null",
+            (agent,),
+        ).fetchone()[0]
+
+
+def test_revoking_the_last_key_drops_the_personal_mark(db, world):
+    _t, key_id = keys.mint(db, agent="laptop")
+    agents.set_person(db, "laptop", "ann", "admin")
+    assert keys.revoke(db, key_id, actor="admin") == 1
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") is None
+    # A machine connected under that name afterwards is a shared key.
+    keys.mint(db, agent="laptop")
+    with db.connect() as conn:
+        assert agents.key_reach(conn, "laptop") == reach.of_key("laptop")
+        assert agents.shown(conn, "laptop").text() == "laptop"
+
+
+def test_revoking_one_of_two_live_keys_keeps_the_mark(db, world):
+    _t1, first = keys.mint(db, agent="laptop")
+    keys.mint(db, agent="laptop")
+    agents.set_person(db, "laptop", "ann", "admin")
+    assert keys.revoke(db, first, actor="admin") == 1
+    assert _live(db, "laptop") == 1
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") == "ann"
+
+
+def test_a_revoked_only_agent_cannot_be_marked(db, world):
+    _t, key_id = keys.mint(db, agent="laptop")
+    keys.revoke(db, key_id, actor="admin")
+    with pytest.raises(agents.Refused, match="live key"):
+        agents.set_person(db, "laptop", "ann", "admin")
+    page = TestClient(create_gallery_app(db))
+    same = {"sec-fetch-site": "same-origin"}
+    refused = page.post(
+        f"/machines/{key_id}/belongs", data={"belongs_to": "ann"}, headers=same
+    )
+    missing = page.post(
+        "/machines/nope/belongs", data={"belongs_to": "ann"}, headers=same
+    )
+    assert refused.status_code == missing.status_code == 404
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") is None
+
+
+def test_a_cross_origin_post_to_belongs_is_refused(db, world):
+    _t, key_id = keys.mint(db, agent="laptop")
+    page = TestClient(create_gallery_app(db))
+    for hdr in ({"sec-fetch-site": "cross-site"}, {"origin": "https://evil.example"}):
+        r = page.post(
+            f"/machines/{key_id}/belongs", data={"belongs_to": "ann"}, headers=hdr
+        )
+        assert r.status_code in (400, 403), (hdr, r.status_code)
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") is None

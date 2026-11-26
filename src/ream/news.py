@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-26b",
-        "The owner can now mark a machine (a key's agent) as one person's. A personal key reads what that person reads: pages of that person's other personal agents and pages open to agents, and for the owner every live page, pages closed to agents included (never the trash). It still changes only its own pages, asks and relays as before, and no API or MCP route sets or clears this: only the owner on the Machines page or `artifacts-admin set-agent-person` / `clear-agent-person`. `GET /api/v1/me` and the MCP `whoami` then add `belongs_to` and `shown_as` (a shared key's answer is unchanged). A rename will not merge agents that belong to different people. Nothing to install: the commands are unchanged.",
+        "The owner can now mark a machine (a key's agent) as one person's. A personal key reads what that person reads: pages of that person's other personal agents and pages open to agents, and for the owner every live page, pages closed to agents included (never the trash). Its reads widen, and with them the pages it may comment on (plain comments, as a shared key does on pages open to agents); it still changes only its own pages, asks and relays as before, and no API or MCP route sets or clears this: only the owner on the Machines page or `artifacts-admin set-agent-person` / `clear-agent-person`. `GET /api/v1/me` and the MCP `whoami` then add `belongs_to` and `shown_as` (a shared key's answer is unchanged). A rename will not merge agents that belong to different people. Nothing to install: the commands are unchanged.",
     ),
     (
         "2026-11-26a",

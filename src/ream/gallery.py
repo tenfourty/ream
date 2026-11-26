@@ -7666,7 +7666,8 @@ def gallery_router(db: Database) -> APIRouter:
         _same_origin_write(request)
         with db.connect() as conn:
             row = conn.execute(
-                "select agent from agent_key where id = %s", (key_id,)
+                "select agent from agent_key where id = %s and revoked_at is null",
+                (key_id,),
             ).fetchone()
         if row is None:
             raise HTTPException(404, "no such machine")

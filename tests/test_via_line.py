@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ream import agents, gallery, keys, mcp_apps, mcp_clients, oauth, settings
+from ream import agents, gallery, keys, mcp_apps, mcp_clients, oauth, owner, settings
 
 CLIENT = "https://claude.ai/oauth/claude-ai/client.json"
 SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "ream"
@@ -35,6 +35,32 @@ def test_a_second_persons_app_shows_their_name_not_the_owners(db):
     assert _line(db, ann).text() == "Ann Lee, via claude.ai"
     assert _line(db, mine).text() == "Jeremy, via claude.ai"
     assert _line(db, ann).agent == ann  # the stored name rides along unchanged
+
+
+def test_a_personal_key_is_shown_as_its_person_via_its_agent_name(db):
+    _person(db, "ann", "Ann Lee")
+    keys.mint(db, agent="ann-box")
+    agents.set_person(db, "ann-box", "ann", "admin")
+    shown = _line(db, "ann-box")
+    assert shown.text() == "Ann Lee, via ann-box"
+    assert shown.agent == "ann-box" and shown.via is None  # via is what marks an app
+    # the owner's own machine reads with the owner's name
+    owner.check(db, settings.owner_id())
+    keys.mint(db, agent="owner-box")
+    agents.set_person(db, "owner-box", settings.owner_id(), "admin")
+    assert _line(db, "owner-box").text() == "Jeremy, via owner-box"
+    agents.clear_person(db, "ann-box")
+    assert _line(db, "ann-box").text() == "ann-box"
+
+
+def test_a_hostile_person_name_on_a_personal_key_is_sanitised_and_capped(db):
+    _person(db, "eve", "Eve\x1b[31m\n<b>" + "x" * 200)
+    keys.mint(db, agent="eve-box")
+    agents.set_person(db, "eve-box", "eve", "admin")
+    shown = _line(db, "eve-box")
+    assert len(shown.person_name) <= agents.NAME_LIMIT
+    assert "\x1b" not in shown.text() and "\n" not in shown.text()
+    assert shown.text().endswith(", via eve-box")
 
 
 def test_a_person_without_a_name_is_shown_by_their_id(db):

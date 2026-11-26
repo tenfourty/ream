@@ -4,7 +4,8 @@ per request, from a key (exactly today's reach) or from a signed-in app (wider).
 The `/mcp` endpoint sets the caller's reach for the length of one message (`acting`); the
 store's one page check (`store._owned`, and `store.list_readable`) asks `widened(agent)`
 whether the agent it was given is acting with a wider reach than a key's. Nothing else sets
-it, so `/api/v1` and every key behave exactly as before: a key's reach widens nothing.
+it, so `/api/v1` and every SHARED key behave exactly as before. A PERSONAL key (slice 4) reads
+as its person does (`agents.key_reach`, `access.reads_sql`) but still changes only its own pages.
 `_scoped` (rename, pin, archive, delete, restore) widens the same way; purge (`destroy`),
 transfer and who-can-read never do (`widen=False`).
 
