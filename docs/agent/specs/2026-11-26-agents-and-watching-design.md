@@ -1,6 +1,6 @@
 # Agents: personal or shared, ownership by agent, the via line, watching pages (26 Nov 2026)
 
-Status: designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
+Status: slice 1 built (see "Slice 1 as built"); slices 2-4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
 artifacts office's decisions of 24 and 26 Nov 2026 (reversible), after checking the blueprint against the code
 (the corrections are listed under "Where this differs from the blueprint").
 
@@ -208,6 +208,42 @@ Each lands on its own, in this order. CI only: no suite on the management machin
    `test_no_gallery_route_takes_a_person_id_from_the_request`, `tests/test_owner_id_sites.py:159`);
    extensions to `test_rename_agent.py` and the `change-owner` test in `tests/test_owner.py`. Homelab: does
    nothing until the owner marks a machine personal.
+
+## Slice 1 as built (26 Nov 2026)
+
+`src/ream/agents.py`: `person_of`, `page_owners`, `shared_owner` (SEED), `owner_sql`/`owns_sql`, `shown` and
+`Shown` (with `.text()`), plus `app_shown`, `owner_app`, `unknown_app`, `person_label` for callers that hold the
+pieces and no connection. No migration: everything is derived from `mcp_agent`.
+
+- `mcp_apps.via` and `display_name` are gone; their callers use `agents.shown(conn, agent).text()`
+  (`mcp.py` `whoami`, `mcp_tools.py` comment `author_name`), `agents.app_shown` (the Connected apps list in
+  `gallery._apps_section`) or the `Shown` dict that replaces `app_hosts` (`_passed_on`, `_asker_line`). The OAuth
+  consent screen (`oauth._consent_page`) also wrote the line and now calls `agents.owner_app`: a sixth site the
+  blueprint did not list.
+- `decisions.addressed_ok_id(conn, person_id, addressed_to, agent)`, `addressed_ok` and `may_answer` take the
+  page's agent; `addressed_ok_owners(person_id, addressed_to, owners)` is the rule for a caller that already holds
+  the owners (`forms_ui.payload`, the gallery's `_render_decisions` via its new `page_owners` argument).
+  `addressed_sql(column, person_expr="%s", agent_col="artifact.agent")` lost its `person_id` argument: it is
+  `coalesce(column, agents.owner_sql(agent_col)) = person_expr`, so the person still appears once and every
+  caller's positional parameters are unchanged.
+- The relay's default "said by" (`record_elsewhere`, `formanswer.relay`) is now the page's first owner, not the
+  deployment owner. The signed-in-app checks (`by_app`) still use the owner id: an app is the owner's until
+  slice 2.
+- `_asker_line` takes the reader's person id (rule 7).
+
+Where it departs from the text above:
+
+- `owner_sql` writes the shared owner as a quoted literal (checked against `[a-z0-9-]+`), not a bound parameter:
+  a parameter would sit in the middle of four long wall queries whose positional parameters each caller
+  builds by hand. `shared_owner()` is still the one place the owner is read.
+- `addressed_sql` is built on `owner_sql` and not on `owns_sql`, which is the same text with the person put
+  first; this keeps the person to one occurrence.
+- `Shown` is `(agent, person, person_name, via, team)`: `person` is the person's id (rule 7 compares it with
+  the reader), `person_name` the shown name.
+- Fourteen PAGE_OWNER rows were reviewed in `tests/test_owner_id_sites.py`: two moved to `page_owners`, the rest
+  stay for the reason stated there. `_provenance`'s "<owner name> said ..." is not changed: it is not in the
+  slice's list and the stored `answered_by` is what names who said it.
+- Tests: `tests/test_agent_belongs.py`, `tests/test_via_line.py`. Not run on Postgres here (CI does).
 
 ## Guards
 
