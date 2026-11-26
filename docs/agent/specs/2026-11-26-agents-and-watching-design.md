@@ -1,6 +1,6 @@
 # Agents: personal or shared, ownership by agent, the via line, watching pages (26 Nov 2026)
 
-Status: slice 1 built (see "Slice 1 as built"); slices 2-4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
+Status: slices 1 and 2 built (see "Slice 1 as built", "Slice 2 as built"); slices 3-4 designed, not built. Step 3 of the company plan. Written up from the architect's blueprint and the
 artifacts office's decisions of 24 and 26 Nov 2026 (reversible), after checking the blueprint against the code
 (the corrections are listed under "Where this differs from the blueprint").
 
@@ -255,6 +255,34 @@ Where it departs from the text above:
   stay for the reason stated there. `_provenance`'s "<owner name> said ..." is not changed: it is not in the
   slice's list and the stored `answered_by` is what names who said it.
 - Tests: `tests/test_agent_belongs.py`, `tests/test_via_line.py`. Not run on Postgres here (CI does).
+
+## Slice 2 as built (26 Nov 2026)
+
+`src/ream/access.py` (new): `person_reads(conn, person, page_id)` and `reads_sql(person, table)`, the same
+predicate as a check and as a WHERE clause (the owner reads every live page; anyone else reads the pages of
+their `mcp_agent` agents and the pages with `agents_can_read`; never the trash). `reach.Reach` gains `person`
+and a third `readable` value, `READS_AS_PERSON`, with `reads_person()`; `widened()` also returns a reach that
+`reads_person()`. `mcp_apps.reach_of` gives the owner's app `READS_AS_OWNER` exactly as before and every other
+person's `READS_AS_PERSON` with `person` set; `writes()` stays that person's `mcp_agent` agents.
+`store._owned` (reader branch) and `store.list_readable` use `access.reads_sql`. Test: `tests/test_person_reach.py`.
+
+Sites classified (every reader of the reach or of readability):
+
+- `store._owned`: widened (person branch, reader only). Writer branch unchanged: `writes()` is already the person's.
+- `store.list_readable`: widened (the owner's `or %s` shape is kept for the owner and keys, so their SQL is the same).
+- `store._scoped`, `store.move_many`: unchanged code; they read `writes()`, which `reach_of` already scopes to the person.
+  They never read a page's contents. `widen=False` callers (purge, transfer, who-can-read, ask) still never widen.
+- `reach.widened()`: matches on the agent, so a nudge for another agent inside the app's request sees key reach (tested).
+- Narrower on purpose for another person's app, because the slice names no change there (a deferral, not a leak;
+  the owner's app is unchanged): `decisions.ask` on a page the app reads but does not own (`reads_all()` only),
+  the questions listing in `api.py` (`reads_all()` only), `by_app` relay checks (still the owner's until their
+  own slice). A second person's app can read an open page but cannot yet ask a question on it.
+- Unchanged and key-only: `api.py` decision outcome routes (`agent = %s or agents_can_read`), `comments.add`'s
+  replier query, `store.copy` (its own scope), `pageviews.record_agent_read` (takes `writes()`).
+- Callers of `_owned(as_reader=True)` (`get_owned`, `get_body`, `comments`, `image_store`, `api.py:3046`) widen
+  through `_owned`; a refused page is the same `NotFound` as a missing one, so the 404s are identical.
+
+Run here on SQLite and on the test fixture's default Postgres, one file at a time (not the full suite: CI).
 
 ## Guards
 
