@@ -11,7 +11,8 @@ of three things, and a new call fails this test until someone says which:
 * SEED: the deployment's own owner by setting (a CLI listing, a fallback for a stored record that
   names nobody). It stays the setting.
 
-Keyed by (file, enclosing function) with how many calls it holds.
+Keyed by (file, enclosing function) with how many calls it holds. The walker counts reads of an
+`owner_id` attribute, imports of `owner_id`, and calls of `owner_person()` (the owner id read from settings).
 """
 
 import ast

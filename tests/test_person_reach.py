@@ -328,7 +328,7 @@ def test_a_second_persons_app_cannot_relay_for_the_owner(db, world):
     with db.connect() as conn:
         left = conn.execute(
             "select count(*) from decision where id in (%s, %s, %s)"
-            " and closed_at is not null",
+            " and answer is not null",
             (closed.id, shared.id, mine.id),
         ).fetchone()[0]
     assert left == 0
