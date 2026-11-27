@@ -387,3 +387,43 @@ def test_the_agent_picker_and_counts_ignore_the_search(client, db):
     found = client.get("/?q=photo").text
     assert "Zebrafish ledger" not in found
     assert "seat-two" in found, "the picker still lists every agent on the wall"
+
+
+def test_a_word_with_a_quote_pages_across_batches_and_older_pages(
+    client, db, monkeypatch
+):
+    """`it's` is prefiltered on `it`, so `Item` rows pass the SQL and fail the word check.
+    With two rows to a page and two batches to a search, the cursor must hand over cleanly:
+    every match once, in order, whichever batch or "Older pages" click it falls in."""
+    from ream import gallery
+
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 2)
+    monkeypatch.setattr(gallery, "_SEARCH_BATCHES", 2)
+    for i in range(6):
+        store.publish(db, "seat", f"It's match {i}", PAGE)
+        for j in range(2):
+            store.publish(db, "seat", f"Item filler {i}{j}", PAGE)
+    seen: list[str] = []
+    url = "/?q=it%27s"
+    for _ in range(20):
+        out = client.get(url).text
+        assert "Item filler" not in out
+        seen += dict.fromkeys(re.findall(r"It(?:'|&#x27;|&#39;)s match (\d)", out))
+        # "Older pages" is the link carrying `older` that is not the Select toggle.
+        links = [
+            h
+            for h in re.findall(r'href="([^"]*older=[^"]*)"', out)
+            if "select=1" not in h
+        ]
+        if not links:
+            break
+        url = links[-1].replace("&amp;", "&")
+    assert seen == ["5", "4", "3", "2", "1", "0"]
+
+
+def test_a_word_with_no_ascii_letters_is_still_found(client, db):
+    store.publish(db, "seat", "Dash", _body("one &mdash; two"))
+    store.publish(db, "seat", "Plain", _body("one two"))
+    found = client.get("/?q=%E2%80%94").text
+    assert "Dash" in found
+    assert "Plain" not in found

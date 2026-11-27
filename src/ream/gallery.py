@@ -3454,8 +3454,8 @@ def _search_words(needle: str) -> list[str]:
     return needle.split()[:8]
 
 
-# Letters and digits only: what a body stores as itself, and what SQL can fold the same way.
-_SQL_SAFE_WORD = re.compile(r"[a-z0-9]+")
+# Letters and digits SQL can compare the same on both databases (ASCII, lower-cased).
+_SQL_RUN = re.compile(r"[a-z0-9]+")
 # Most batches of `_WALL_PAGE` rows one search reads: 10,000 pages.
 _SEARCH_BATCHES = 50
 
@@ -5637,6 +5637,7 @@ def gallery_router(db: Database) -> APIRouter:
         older: str = "",
         needle: str = "",
         agent: str = "",
+        bodies: bool = True,
     ):
         """`_wall_fetch`, and with a `needle` the newest `_WALL_PAGE` pages that MATCH it.
 
@@ -5647,14 +5648,22 @@ def gallery_router(db: Database) -> APIRouter:
         """
         if not needle:
             return _wall_fetch(
-                conn, person, archived, folder_id, grouped, older, "", agent
+                conn, person, archived, folder_id, grouped, older, "", agent, bodies
             )
         kept: list = []
         cursor = older
         more = False
         for _ in range(_SEARCH_BATCHES):
             batch = _wall_fetch(
-                conn, person, archived, folder_id, grouped, cursor, needle, agent
+                conn,
+                person,
+                archived,
+                folder_id,
+                grouped,
+                cursor,
+                needle,
+                agent,
+                bodies,
             )
             kept.extend(r for r in batch if _matches(r, needle))
             more = batch.more
@@ -5680,14 +5689,16 @@ def gallery_router(db: Database) -> APIRouter:
         older: str = "",
         needle: str = "",
         agent: str = "",
+        bodies: bool = True,
     ):
-        """The pages of the live wall, or the archived ones.
+        """The pages of the live wall, or the archived ones. `bodies` False leaves the body
+        column null: for a caller that only counts (waiting, pinned, agents).
 
         `needle` (a lower-cased search) narrows to pages whose title, agent, id or first
-        `text_module.SEARCH_LIMIT` characters of body hold each of its plain words (letters
-        and digits only: a word with `&`, a quote, or any other character is left to
-        `_matches`, since a body stores `R&amp;D` and `it&#39;s`, and SQLite folds only ASCII
-        case). Raw body text, so a superset of what `_matches` confirms. `agent` is exact.
+        `text_module.SEARCH_LIMIT` characters of body hold the longest run of ASCII letters and
+        digits of each word (a body stores `R&amp;D` and `it&#39;s`, and SQLite folds only ASCII
+        case, so the whole word cannot be asked). Raw body text, so a superset of what
+        `_matches` confirms. `agent` is exact.
 
         `folder_id` lists only that folder's pages. `grouped` leaves out the pages a folder
         tile stands for: a page in a folder that is not archived (live wall), or in an
@@ -5712,7 +5723,12 @@ def gallery_router(db: Database) -> APIRouter:
             scope, extra = "", ()
         found, found_params = "", ()
         for word in _search_words(needle):
-            if not _SQL_SAFE_WORD.fullmatch(word):
+            # The word's longest run of ASCII letters and digits, as a plain substring:
+            # whatever the word check accepts holds it in the raw text (entities decode to
+            # other characters, and SQL folds only ASCII). A word with no such run (an em dash,
+            # a CJK word) is left to `_matches` alone.
+            run = max(_SQL_RUN.findall(word), key=len, default="")
+            if not run:
                 continue
             found += (
                 " and (lower(a.title) like %s or lower(a.agent) like %s"  # noqa: S608
@@ -5721,7 +5737,7 @@ def gallery_router(db: Database) -> APIRouter:
                 "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
                 f"   1, {text_module.SEARCH_LIMIT})) like %s)"
             )
-            found_params += (f"%{word}%",) * 4
+            found_params += (f"%{run}%",) * 4
         if agent:
             found += " and a.agent = %s"
             found_params += (agent,)
@@ -5756,12 +5772,16 @@ def gallery_router(db: Database) -> APIRouter:
             # The CURRENT version's text: the only one whose `body` is always plain.
             # Only the head: a page can be megabytes, and the tile and the search read
             # no further than `SEARCH_LIMIT` (the wall pulled up to 200 whole bodies).
-            f"       (select substr(v.body, 1, {text_module.SEARCH_LIMIT}) from version v"
-            "          where v.artifact_id = a.id and v.n = a.current_version"
-            "       ) as body,"
+            + (
+                f"       (select substr(v.body, 1, {text_module.SEARCH_LIMIT}) from version v"  # noqa: S608
+                "          where v.artifact_id = a.id and v.n = a.current_version"
+                "       ) as body,"
+                if bodies
+                else "       null as body,"
+            )
             # The boolean only. Selecting the bytes here would pull every
             # thumbnail on the wall into memory to render a list of links.
-            "       exists (select 1 from version v"
+            + "       exists (select 1 from version v"  # noqa: S608
             "          where v.artifact_id = a.id and v.n = a.current_version"
             "            and v.thumbnail is not null) as has_thumb,"
             "       pp.pinned_at,"
@@ -6107,7 +6127,9 @@ def gallery_router(db: Database) -> APIRouter:
             # follows the search (the fold must count the archived hit it offers).
             count_rows, count_archived = rows, archived_rows
             if older or needle or chosen_agent:
-                count_rows = _wall(conn, person, False, folder_id, grouped=grouped)
+                count_rows = _wall(
+                    conn, person, False, folder_id, grouped=grouped, bodies=False
+                )
             if older and on_archived:
                 count_archived = _wall(
                     conn,
