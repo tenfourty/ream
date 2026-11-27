@@ -1378,17 +1378,30 @@ for d in (re.split(r"^diff ", toks[1], flags=re.M) if len(toks) == 2 else []):
         sys.stdout.write(json.dumps(re.match(r"--git a/.* b/(.*)\n", d).group(1)) + "\n")
 ' "$id"
 }
+# The entries of the commit under scan are as the documents it sends, except in these two modes: the report is
+# clean, with the last document's entry dropped (short-reply) or one more entry than documents (extra-entry).
+shape=
+case "$mode" in
+  short-reply) shape=short mode=clean ;;
+  extra-entry) shape=extra mode=clean ;;
+esac
 scan() { # scan <commit id> <incidents in it>
-  local ents="" f first=1 inc="" n
+  local ents="" f first=1 inc="" n es=() e
   if [ "$1" = "$id" ]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       inc='[]' n=0
       if [ "$2" != 0 ] && [ "$first" = 1 ]; then inc='[{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}]' n=1; fi
-      [ "$first" = 1 ] || ents="$ents, "
-      ents="$ents{\"mode\": \"NEW\", \"filename\": $f, \"incidents\": $inc, \"total_incidents\": $n}"
+      es+=("{\"mode\": \"NEW\", \"filename\": $f, \"incidents\": $inc, \"total_incidents\": $n}")
       first=0
     done < <(docnames)
+    # short-reply drops the last document's entry; extra-entry adds one for a file that was never sent
+    [ "$shape" != short ] || [ "${#es[@]}" -eq 0 ] || unset 'es[${#es[@]}-1]'
+    [ "$shape" != extra ] || es+=('{"mode": "NEW", "filename": "never-sent.txt", "incidents": [], "total_incidents": 0}')
+    for e in "${es[@]}"; do
+      [ -z "$ents" ] || ents="$ents, "
+      ents="$ents$e"
+    done
   fi
   if [ -z "$ents" ] && [ "$2" != 0 ]; then
     ents='{"mode": "NEW", "filename": "stub.txt", "incidents": [{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}], "total_incidents": 1}'
@@ -1507,7 +1520,7 @@ EOF
   local m
   for m in errors text cut twice-json silent error-line coloured-error-line log-error-line \
     scanning-failed may-be-incomplete no-commit other-commit extra-commit commit-twice \
-    wrong-type skipped-file; do
+    wrong-type skipped-file short-reply extra-entry; do
     out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=$m); rc=$?
     check "rc 0, report '$m': BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
   done
@@ -1522,6 +1535,10 @@ EOF
   fi
   out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=no-commit); rc=$?
   check "a report covering less than was handed over says so" "$rc" 1 "$out" "commits scanned are not the range's"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=short-reply); rc=$?
+  check "a reply with one document's entry dropped is refused, naming the document sent without a result" "$rc" 1 "$out" "1 sent without a result"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=extra-entry); rc=$?
+  check "a reply with an entry for a file never sent is refused, naming the result not for a document" "$rc" 1 "$out" "1 result(s) not for a document sent"
   out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=skipped-file); rc=$?
   check "a file ggshield skipped is named as skipped, not scanned" "$rc" 1 "$out" "skipped 1 file(s)"
   # A scan that does not finish is stopped at the judge's time limit (lowered here), not waited for.
