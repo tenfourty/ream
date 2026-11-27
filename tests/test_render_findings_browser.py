@@ -34,13 +34,34 @@ def page(body, head=""):
     )
 
 
+def _renderd_said():
+    from conftest import RENDERD_STDERR
+
+    return "".join(RENDERD_STDERR[0][-40:]) if RENDERD_STDERR else ""
+
+
 def verdict(html):
-    """(verdict, finding kinds) of one real render, as the background render builds it."""
-    report = thumbs.render_report(html)
-    found = renderfind.assess(
-        report[1], report.check, renderfind.missing_files(html), False
-    )
-    return found[0], [f["kind"] for f in found[1]]
+    """(verdict, finding kinds) of one real render, as the background render builds it.
+
+    A render that gave no answer (`unchecked`: the browser hung to its 20 s timeout in
+    CI run 90863, once, on a page that rendered fine in the 3 s before and after) is
+    tried once more; it is never taken as a pass, and if the second also gives none the
+    test fails with the report's reason, its findings and what renderd logged."""
+    for _attempt in (1, 2):
+        report = thumbs.render_report(html)
+        found = renderfind.assess(
+            report[1], report.check, renderfind.missing_files(html), False
+        )
+        if found[0] != "unchecked":
+            break
+    kinds = [f["kind"] for f in found[1]]
+    if found[0] == "unchecked":
+        pytest.fail(
+            f"render gave no answer twice: reason={getattr(report, 'reason', None)!r} "
+            f"findings={found[1]!r} png={report[0] is not None} "
+            f"renderd stderr:\n{_renderd_said()}"
+        )
+    return found[0], kinds
 
 
 def test_a_page_that_throws_gives_a_script_error():

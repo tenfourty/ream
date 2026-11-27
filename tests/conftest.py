@@ -1148,6 +1148,9 @@ def _new_pages_say_comments(request, monkeypatch):
 _RENDERD_LISTENING = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ")
 
 
+RENDERD_STDERR: list[list[str]] = []  # [the live renderd's stderr lines], when one runs
+
+
 @contextlib.contextmanager
 def _renderd_process():
     """`python -m ream.renderd` on loopback, on a port it picks itself (`--port 0`, read
@@ -1176,6 +1179,7 @@ def _renderd_process():
         text=True,
     )
     lines: list[str] = []
+    RENDERD_STDERR[:] = [lines]  # a test that fails shows what renderd said
     seen: queue.Queue = queue.Queue()
 
     def read():
