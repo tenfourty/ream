@@ -24,19 +24,46 @@ as if it were never there; deleting the page cascades the rows away. A rename me
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 from ream import access, agents, events, store
 from ream.db import Database
 
 # At most this many watches per agent (a PUT past it is a 409; a repeat PUT is not past it).
+# A soft limit: a page that was closed to agents and opens again counts against its watcher's
+# cap once more, so an agent can sit above CAP; further new watches are refused until it is back
+# under (nothing is removed).
 CAP = 200
+# At most this many watchers per page (a PUT past it is a 409; a repeat PUT by a watcher is not).
+# Counts every `page_watch` row of the page, readable or not, so `fan_out` stays bounded.
+PAGE_CAP = 200
 # At most one `watched_page_changed` per watcher and page in this long (decision C).
 WINDOW = timedelta(minutes=10)
 
 
 class TooMany(Exception):
     """The agent already holds `CAP` watches."""
+
+
+class PageFull(Exception):
+    """The page already has `PAGE_CAP` watchers."""
+
+
+def _lock_key(namespace: str, name: str) -> int:
+    """A stable signed 64-bit advisory-lock key for `name` within `namespace`. The namespaces
+    here ("ream.watch.agent", "ream.watch.page") are hashed in, so neither can meet
+    `db._MIGRATE_LOCK_KEY` or another module's key except by a 2**-64 accident."""
+    digest = hashlib.blake2b(f"{namespace}\0{name}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def agent_lock_key(agent: str) -> int:
+    return _lock_key("ream.watch.agent", agent)
+
+
+def page_lock_key(artifact_id: str) -> int:
+    return _lock_key("ream.watch.page", artifact_id)
 
 
 def _reads(conn, agent: str, table: str = "artifact") -> tuple[str, tuple]:
@@ -54,8 +81,16 @@ def watch(
     db: Database, agent: str, artifact_id: str, *, session: str | None = None
 ) -> bool:
     """Follow a page. True when the watch is new, False for a repeat (nothing changes). Raises
-    `store.NotFound` for a page the agent cannot read now, and `TooMany` past `CAP`."""
+    `store.NotFound` for a page the agent cannot read now, `PageFull` when the page already has
+    `PAGE_CAP` watchers, and `TooMany` past `CAP`.
+
+    The counts and the insert run under two transaction locks, always taken page first, then
+    agent, so two PUTs racing at the edge cannot both pass (a no-op on SQLite, whose writers
+    are serialised). `CAP` is a soft limit: pages that reopen to agents count again, so an agent
+    can end up above it, and then every new watch is refused until it is back under."""
     with db.connect() as conn, conn.transaction():
+        conn.advisory_lock(page_lock_key(artifact_id))
+        conn.advisory_lock(agent_lock_key(agent))
         if store._owned(conn, artifact_id, agent, as_reader=True) is None:
             raise store.NotFound()
         if conn.execute(
@@ -63,6 +98,11 @@ def watch(
             (agent, artifact_id),
         ).fetchone():
             return False
+        (watchers,) = conn.execute(
+            "select count(*) from page_watch where artifact_id = %s", (artifact_id,)
+        ).fetchone()
+        if watchers >= PAGE_CAP:
+            raise PageFull()
         # What counts against the cap is what the agent can see in its list.
         if len(_listing(conn, agent)) >= CAP:
             raise TooMany()
@@ -133,7 +173,8 @@ def fan_out(
 ) -> list[events.Emission]:
     """Write one event of `kind` to each watcher of `page` who may hear it, on `conn` (the
     change's own transaction), and return the emissions for the caller to `fire()` after the
-    commit. `page` is a row whose first three columns are id, title and agent (what
+    commit. The watchers it walks are bounded by `PAGE_CAP`, so the transaction stays small.
+    `page` is a row whose first three columns are id, title and agent (what
     `store._owned` returns). Never raises for a watcher it cannot place."""
     if kind not in events.WATCHED_KINDS:
         raise ValueError(f"not a watching kind: {kind!r}")

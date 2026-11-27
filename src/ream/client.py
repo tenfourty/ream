@@ -3218,7 +3218,7 @@ def build_watch_parser(verb: str) -> argparse.ArgumentParser:
             "(PUT /api/v1/pages/ID/watch): its new versions and other people's comments "
             "reach GET /api/v1/events?include=watched (and whats_new over MCP) as "
             "watched_page_changed and watched_comment_added, at most one change a page "
-            "every 10 minutes. At most 200 pages; repeating it is fine."
+            "every 10 minutes. At most 200 pages, and 200 watchers on a page; repeating it is fine."
         ),
         "unwatch": "Stop following a page (DELETE /api/v1/pages/ID/watch).",
         "watches": (

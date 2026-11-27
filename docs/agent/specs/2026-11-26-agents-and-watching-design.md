@@ -125,8 +125,9 @@ event's is (`_event_writer`, `mcp_tools.py:903`). `wait_for_answer` wakes only o
 (a watched event never ends its wait), but once woken reads with `include_watched` and `page_agent`, as `whats_new` does, so the
 cursor they share never passes a watched event neither tool returned.
 
-Limits: at most one `watched_page_changed` per watcher and page every 10 minutes (decision C), and at most 200
-watches per agent (a PUT past it answers 409; a repeat PUT of an existing watch is 200). Losing access: the
+Limits: at most one `watched_page_changed` per watcher and page every 10 minutes (decision C), at most 200
+watches per agent and at most 200 watchers per page (a PUT past either answers 409; a repeat PUT of an existing watch is 200).
+The two counts run under two transaction advisory locks, page then agent, so racing PUTs at the edge cannot both pass. Losing access: the
 watch stays but goes silent and drops out of the agent's list, as if it were never there; deleting the page
 cascades it away. Step 5 hook: data behind a page will emit `watched_data_changed` through the same fan-out.
 
@@ -311,7 +312,8 @@ Choices made while building:
 - **Coalescing is one atomic conditional update.** `update page_watch set changed_notified_at = now where ... and
   (changed_notified_at is null or <= now - 10 minutes)`; the rowcount is the claim, so two racing changes cannot both notify.
 - **The cap counts only watches the agent can still read** (what its own list shows), so a watch on a page that closed does
-  not use up a place. A rename merge can exceed the cap (it keeps one row per page from both names and does not refuse).
+  not use up a place. A rename merge can exceed the cap (it keeps one row per page from both names and does not refuse), and so can a page that reopens
+  to agents (its watch counts again): the cap is a soft limit, and every new watch is refused until the agent is back under it.
 - **Letting go always works.** `DELETE` of a held watch removes it even when the page is no longer readable. With no row:
   404 for a page the caller cannot read (identical to a missing one), 200 `removed: false` for one it can.
 - **Who is not told.** The page's own agent (it has `comment_added` and its own changes) and the actor are skipped;
@@ -421,8 +423,8 @@ agents stay closed); (b) mark Jeremy's own machines personal, so they read his c
 - A cursor skips watched rows for a caller that did not ask: `x-ream-seen` advances over them
   (`events.safe_cursor`), so an agent that wants them must always pass the flag.
 - Fan-out cost in event and outbox rows: the window bounds `watched_page_changed` to one a watcher and page every 10 minutes,
-  but comments are not coalesced (every other person's comment writes a row per watcher), and there is no per-page cap on
-  watchers yet (the 200 cap is per watcher). A per-page watcher cap is a follow-up.
+  but comments are not coalesced (every other person's comment writes a row per watcher), and a page takes at most 200
+  watchers (`watches.PAGE_CAP`, every row of the page, readable or not), which bounds the fan-out inside the change's transaction.
 - Slice 1 is wider than it looks: fourteen PAGE_OWNER rows exist (`tests/test_owner_id_sites.py:28-54`)
   and eleven callers of the answering predicates change signature. Land it alone, with the sites test.
 - Display names come from OIDC at the company: sanitised, display-only, and the comma rule stops forgery.

@@ -31,6 +31,7 @@ from ream import (
     watches,
 )
 from ream.app import create_gallery_app
+from ream.db import _MIGRATE_LOCK_KEY
 from ream.mcp import OWNER
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>{}</body></html>"
@@ -193,6 +194,73 @@ def test_a_watch_on_a_page_that_closed_does_not_count_against_the_cap(
     _put(api, page, heads["reader"])
     store.set_agents_can_read(db, page, False, agent="owner")
     assert _put(api, second, heads["reader"]).status_code == 200
+
+
+def test_the_lock_keys_are_stable_and_specific():
+    assert watches.agent_lock_key("reader") == watches.agent_lock_key("reader")
+    assert watches.agent_lock_key("reader") != watches.agent_lock_key("other")
+    assert watches.page_lock_key(MISSING) == watches.page_lock_key(MISSING)
+    assert watches.page_lock_key(MISSING) != watches.page_lock_key(MISSING[::-1])
+    # the same name in the two namespaces, and the migration's key, never meet
+    assert watches.agent_lock_key("x") != watches.page_lock_key("x")
+    assert _MIGRATE_LOCK_KEY not in {
+        watches.agent_lock_key("x"),
+        watches.page_lock_key("x"),
+    }
+    for key in (watches.agent_lock_key("reader"), watches.page_lock_key(MISSING)):
+        assert -(2**63) <= key < 2**63
+
+
+def test_a_watch_takes_the_page_lock_then_the_agent_lock_before_it_counts(
+    db, page, monkeypatch
+):
+    taken = []
+    with db.connect() as conn:
+        conn_type = type(conn)
+    monkeypatch.setattr(conn_type, "advisory_lock", lambda self, key: taken.append(key))
+    assert watches.watch(db, "reader", page) is True
+    assert taken == [watches.page_lock_key(page), watches.agent_lock_key("reader")]
+
+
+def test_the_page_cap_is_two_hundred():
+    assert watches.PAGE_CAP == 200
+
+
+def test_a_watch_on_a_full_page_is_a_409_and_an_existing_watcher_is_not(
+    api, db, heads, page, monkeypatch
+):
+    monkeypatch.setattr(watches, "PAGE_CAP", 1)
+    assert _put(api, page, heads["reader"]).status_code == 200
+    over = _put(api, page, heads["other"])
+    assert over.status_code == 409
+    assert "most watchers it takes" in over.json()["detail"]
+    assert watches.listing(db, "other") == []
+    again = _put(api, page, heads["reader"])  # a repeat at the cap is not a refusal
+    assert again.status_code == 200 and again.json()["created"] is False
+    assert _put(api, page, heads["other"], word="artifacts").status_code == 409
+    assert _delete(api, page, heads["reader"]).status_code == 200
+    assert _put(api, page, heads["other"]).status_code == 200
+
+
+def test_the_page_cap_counts_a_watcher_who_can_no_longer_read_the_page(
+    api, db, heads, page, monkeypatch
+):
+    monkeypatch.setattr(watches, "PAGE_CAP", 1)
+    _put(api, page, heads["reader"])
+    store.set_agents_can_read(db, page, False, agent="owner")
+    store.set_agents_can_read(db, page, True, agent="owner")
+    assert _put(api, page, heads["other"]).status_code == 409
+
+
+def test_a_watch_on_a_full_page_is_refused_by_the_mcp_tool(
+    db, api, heads, page, monkeypatch
+):
+    monkeypatch.setattr(watches, "PAGE_CAP", 1)
+    assert _put(api, page, heads["reader"]).status_code == 200
+    call, _ = _call(db, settings.owner_id())
+    refused = _tool(call, "watch_page", page_id=page)
+    assert refused["isError"]
+    assert "most watchers it takes" in refused["content"][0]["text"]
 
 
 # --- a version was minted --------------------------------------------------------------

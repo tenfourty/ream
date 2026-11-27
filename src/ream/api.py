@@ -1462,12 +1462,16 @@ def watch_page(
     db: Database, agent: str, artifact_id: str, session: str | None = None
 ) -> dict:
     """PUT /pages/{id}/watch, for the route and the MCP `watch_page` tool. A page the caller
-    cannot read answers as one that does not exist; past the cap it is a 409; a repeat is
-    not an error."""
+    cannot read answers as one that does not exist; past the agent's cap, or a page's, it is a
+    409; a repeat is not an error."""
     try:
         created = watches.watch(db, agent, artifact_id, session=session)
     except store.NotFound:
         raise HTTPException(404, "no such page") from None
+    except watches.PageFull:
+        raise HTTPException(
+            409, "this page already has the most watchers it takes"
+        ) from None
     except watches.TooMany:
         raise HTTPException(
             409, f"you already watch {watches.CAP} pages: unwatch one first"
@@ -2891,7 +2895,7 @@ def agent_router(
         """Follow a page you can read (your own, or one open to agents): its new versions and
         other people's comments reach your `/events?include=watched` feed as
         `watched_page_changed` and `watched_comment_added`. At most 200 watches (409 past
-        it); a repeat is 200. A page you cannot read answers exactly as a missing one."""
+        it, and 409 when the page already has 200 watchers); a repeat is 200. A page you cannot read answers exactly as a missing one."""
         return watch_page(db, agent, artifact_id, seat_session)
 
     @router.delete("/artifacts/{artifact_id}/watch")
