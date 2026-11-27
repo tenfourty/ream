@@ -287,3 +287,28 @@ def test_a_search_term_with_like_wildcards_is_literal(client, db):
     found = client.get("/?q=100%25").text
     assert "100% done" in found
     assert "Other page" not in found
+
+
+def test_a_search_matches_words_not_the_middle_of_words(client, db):
+    store.publish(db, "seat", "Chips", page_about("Silicon and the favicon."))
+    store.publish(db, "seat", "Pictures", page_about("The icons are redrawn."))
+    found = client.get("/?q=icon").text
+    assert "Pictures" in found
+    assert "Chips" not in found
+
+
+def test_every_word_of_a_search_must_match_in_any_order(client, db):
+    store.publish(db, "seat", "Office avatars", page_about("Round, with a border."))
+    store.publish(db, "seat", "Office chairs", page_about("Ergonomic."))
+    found = client.get("/?q=border+avatars").text
+    assert "Office avatars" in found
+    assert "Office chairs" not in found
+
+
+def test_a_title_match_comes_before_a_body_match(client, db):
+    store.publish(db, "seat", "Title hit avatar", PAGE)
+    store.publish(db, "seat", "Body hit", page_about("About the avatar."))
+    store.publish(db, "seat", "Newest filler", page_about("avatar"))
+    out = client.get("/?q=avatar").text
+    assert out.index("Title hit avatar") < out.index("Body hit")
+    assert out.index("Title hit avatar") < out.index("Newest filler")

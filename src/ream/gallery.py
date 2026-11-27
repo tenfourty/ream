@@ -3449,30 +3449,47 @@ class _FolderItem(NamedTuple):
     unread: bool
 
 
+def _search_words(needle: str) -> list[str]:
+    """The words of a search: split on whitespace, at most eight."""
+    return needle.split()[:8]
+
+
+def _starts_a_word(word: str, text: str) -> bool:
+    """`word` begins a word of `text` (`icon` finds `icons`, not `silicon` or `favicon`)."""
+    return re.search(r"(?<!\w)" + re.escape(word), text) is not None
+
+
 def _matches(row, needle: str) -> bool:
-    """Does this page match? Title, owning agent, and the page's own words.
+    """Does this page match? EVERY word of the search must begin a word in the title, the
+    owning agent, the page id or the page's own words (any order, not necessarily the same
+    field), compared lower-cased.
 
-    The agent is in there because on a wall with a dozen seats "what has
-    warpgate-arc published" is a question worth being able to ask, and it is
-    the same keystrokes as searching for a title.
-
-    Case-insensitive substring, deliberately: this is a wall of tens of pages,
-    not a corpus. Anything cleverer -- stemming, ranking, fuzzy matching --
-    would mean a page failing to appear for a reason he cannot see, and the
-    honest answer at this size is that everything either contains the string or
-    does not.
+    A word is matched at its start, so `icon` finds `icons` and `iconography` but not
+    `silicon`, `favicon` or `disable_icon_download`. The agent is in there because on a
+    wall with a dozen seats "what has warpgate-arc published" is a question worth asking.
+    The page's words are `text.searchable` (script, style, svg and templates dropped, so a
+    query never matches a class name or a path), not `describe`, which says "" for most pages.
     """
     artifact_id, title, _updated, agent, _v, _w, body, *_rest = row
-    haystacks = (title or "", agent or "", artifact_id or "")
-    if any(needle in h.lower() for h in haystacks):
+    words = _search_words(needle)
+    named = " ".join((title or "", agent or "", artifact_id or "")).lower()
+    left = [w for w in words if not _starts_a_word(w, named)]
+    if not left:
         return True
-    # The page's readable words. NOT `describe`, which answers "what is this
-    # page about?" and returns "" when the page does not say -- which is most
-    # pages, so searching through it silently missed them. `searchable` answers
-    # "what words are on it?", which is what a search is actually asking, and
-    # it drops script, style and inline SVG first so a query can never match a
-    # class name or a path.
-    return needle in text_module.searchable(body or "")
+    prose = text_module.searchable(body or "")
+    return all(_starts_a_word(w, prose) for w in left)
+
+
+def _title_first(rows, needle: str) -> list:
+    """Pages whose title (or agent) hold every search word ahead of those found only in
+    their body, each group in the wall's own order."""
+    words = _search_words(needle)
+
+    def key(row) -> int:
+        named = f"{row[1] or ''} {row[3] or ''}".lower()
+        return 0 if all(_starts_a_word(w, named) for w in words) else 1
+
+    return sorted(rows, key=key)
 
 
 def _search_box(query: str, view: str, base: str = "/") -> str:
@@ -5644,16 +5661,16 @@ def gallery_router(db: Database) -> APIRouter:
         else:
             scope, extra = "", ()
         found, found_params = "", ()
-        if needle:
-            like = "%" + re.sub(r"([!%_])", r"!\1", needle) + "%"
-            found = (
+        for word in _search_words(needle):
+            like = "%" + re.sub(r"([!%_])", r"!\1", word) + "%"
+            found += (
                 " and (lower(a.title) like %s escape '!' or lower(a.agent) like %s escape '!'"  # noqa: S608
                 " or lower(a.id) like %s escape '!'"
                 " or lower(substr(coalesce((select v.body from version v"
                 "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
                 f"   1, {text_module.SEARCH_LIMIT})) like %s escape '!')"
             )
-            found_params = (like,) * 4
+            found_params += (like,) * 4
         fetched = conn.execute(
             # Bounded: an unpaginated list is fine at ten artifacts and a
             # page nobody can load at ten thousand. `, id desc` breaks a tie
@@ -6261,8 +6278,10 @@ def gallery_router(db: Database) -> APIRouter:
             # Both walls are filtered. Searching only the live one would hide
             # the archived hit AND still count it in the fold's total, which
             # reads as the search having missed something.
-            rows = [r for r in rows if _matches(r, needle)]
-            archived_rows = [r for r in archived_rows if _matches(r, needle)]
+            rows = _title_first([r for r in rows if _matches(r, needle)], needle)
+            archived_rows = _title_first(
+                [r for r in archived_rows if _matches(r, needle)], needle
+            )
 
         asked = request.query_params.get("view")
         view = (
