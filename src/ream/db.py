@@ -1268,6 +1268,14 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         ),
         "create index agent_person_person on agent_person (person)",
     ),
+    # 27 Nov 2026: the machines page's sessions query reads only these columns of `version`;
+    # without a covering index it scanned every wide row (body, thumbnail, blobs inline).
+    43: (
+        (
+            "create index if not exists version_session_idx"
+            " on version (artifact_id, session, created_at) where session is not null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

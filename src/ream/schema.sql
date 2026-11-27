@@ -1555,3 +1555,8 @@ create table if not exists agent_person (
     set_by  text
 );
 create index if not exists agent_person_person on agent_person (person);
+
+-- The machines page's sessions query (keys.machines) reads only these columns of `version`:
+-- covering, so it never reads a wide row. SQLite: step 43.
+create index if not exists version_session_idx on version (artifact_id, session, created_at)
+    where session is not null;
