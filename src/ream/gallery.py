@@ -3454,6 +3454,12 @@ def _search_words(needle: str) -> list[str]:
     return needle.split()[:8]
 
 
+# Letters and digits only: what a body stores as itself, and what SQL can fold the same way.
+_SQL_SAFE_WORD = re.compile(r"[a-z0-9]+")
+# Most batches of `_WALL_PAGE` rows one search reads: 10,000 pages.
+_SEARCH_BATCHES = 50
+
+
 def _starts_a_word(word: str, text: str) -> bool:
     """`word` begins a word of `text` (`icon` finds `icons`, not `silicon` or `favicon`)."""
     return re.search(r"(?<!\w)" + re.escape(word), text) is not None
@@ -5630,14 +5636,58 @@ def gallery_router(db: Database) -> APIRouter:
         grouped: bool = False,
         older: str = "",
         needle: str = "",
+        agent: str = "",
+    ):
+        """`_wall_fetch`, and with a `needle` the newest `_WALL_PAGE` pages that MATCH it.
+
+        The SQL only narrows (`_wall_fetch`); `_matches` decides, on the page's words. So
+        batches are read forward, each from where the last ended, until `_WALL_PAGE` + 1
+        rows match or the wall runs out: a search never loses a match to a false positive of
+        the SQL, and passes over the table once at most (`_SEARCH_BATCHES` batches).
+        """
+        if not needle:
+            return _wall_fetch(
+                conn, person, archived, folder_id, grouped, older, "", agent
+            )
+        kept: list = []
+        cursor = older
+        more = False
+        for _ in range(_SEARCH_BATCHES):
+            batch = _wall_fetch(
+                conn, person, archived, folder_id, grouped, cursor, needle, agent
+            )
+            kept.extend(r for r in batch if _matches(r, needle))
+            more = batch.more
+            if len(kept) > _WALL_PAGE or not more:
+                break
+            cursor = batch.cursor
+        rows = _WallRows(_title_first(kept[:_WALL_PAGE], needle))
+        if len(kept) > _WALL_PAGE or more:
+            rows.more = True
+            rows.cursor = (
+                _wall_cursor(kept[_WALL_PAGE - 1])
+                if len(kept) > _WALL_PAGE
+                else batch.cursor
+            )
+        return rows
+
+    def _wall_fetch(
+        conn,
+        person: str,
+        archived: bool,
+        folder_id: str | None = None,
+        grouped: bool = False,
+        older: str = "",
+        needle: str = "",
+        agent: str = "",
     ):
         """The pages of the live wall, or the archived ones.
 
-        `needle` (a lower-cased search) keeps only pages whose title, agent, id or first
-        `text_module.SEARCH_LIMIT` characters of body contain it, so the newest
-        `_WALL_PAGE` rows are the newest MATCHES, not the matches among the newest rows.
-        The match is on the raw body, a superset of what `_matches` then confirms on the
-        page's words.
+        `needle` (a lower-cased search) narrows to pages whose title, agent, id or first
+        `text_module.SEARCH_LIMIT` characters of body hold each of its plain words (letters
+        and digits only: a word with `&`, a quote, or any other character is left to
+        `_matches`, since a body stores `R&amp;D` and `it&#39;s`, and SQLite folds only ASCII
+        case). Raw body text, so a superset of what `_matches` confirms. `agent` is exact.
 
         `folder_id` lists only that folder's pages. `grouped` leaves out the pages a folder
         tile stands for: a page in a folder that is not archived (live wall), or in an
@@ -5662,15 +5712,19 @@ def gallery_router(db: Database) -> APIRouter:
             scope, extra = "", ()
         found, found_params = "", ()
         for word in _search_words(needle):
-            like = "%" + re.sub(r"([!%_])", r"!\1", word) + "%"
+            if not _SQL_SAFE_WORD.fullmatch(word):
+                continue
             found += (
-                " and (lower(a.title) like %s escape '!' or lower(a.agent) like %s escape '!'"  # noqa: S608
-                " or lower(a.id) like %s escape '!'"
+                " and (lower(a.title) like %s or lower(a.agent) like %s"  # noqa: S608
+                " or lower(a.id) like %s"
                 " or lower(substr(coalesce((select v.body from version v"
                 "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
-                f"   1, {text_module.SEARCH_LIMIT})) like %s escape '!')"
+                f"   1, {text_module.SEARCH_LIMIT})) like %s)"
             )
-            found_params += (like,) * 4
+            found_params += (f"%{word}%",) * 4
+        if agent:
+            found += " and a.agent = %s"
+            found_params += (agent,)
         fetched = conn.execute(
             # Bounded: an unpaginated list is fine at ten artifacts and a
             # page nobody can load at ten thousand. `, id desc` breaks a tie
@@ -5968,6 +6022,9 @@ def gallery_router(db: Database) -> APIRouter:
         query = (request.query_params.get("q") or "").strip()
         needle = query.lower()
         chosen_agent = (request.query_params.get("agent") or "").strip()
+        if chosen_agent:
+            # A link saved before an agent was renamed still finds its pages.
+            chosen_agent = rename.resolve(db, chosen_agent)
         chosen = request.query_params.get("filter")
         # THE WALL GROUPS, A SEARCH DOES NOT. A page in a folder is hidden behind its folder
         # tile only while he is looking at the plain wall (or the plain Archived tab). Any
@@ -5999,11 +6056,25 @@ def gallery_router(db: Database) -> APIRouter:
                     []
                     if shelved
                     else _wall(
-                        conn, person, False, folder_id, older=older, needle=needle
+                        conn,
+                        person,
+                        False,
+                        folder_id,
+                        older=older,
+                        needle=needle,
+                        agent=chosen_agent,
                     )
                 )
                 archived_rows = (
-                    _wall(conn, person, True, folder_id, older=older, needle=needle)
+                    _wall(
+                        conn,
+                        person,
+                        True,
+                        folder_id,
+                        older=older,
+                        needle=needle,
+                        agent=chosen_agent,
+                    )
                     if shelved
                     else []
                 )
@@ -6018,6 +6089,7 @@ def gallery_router(db: Database) -> APIRouter:
                     grouped=grouped,
                     older="" if on_archived else older,
                     needle=needle,
+                    agent=chosen_agent,
                 )
                 archived_rows = _wall(
                     conn,
@@ -6026,20 +6098,26 @@ def gallery_router(db: Database) -> APIRouter:
                     grouped=grouped,
                     older=older if on_archived else "",
                     needle=needle,
+                    agent=chosen_agent,
                 )
                 pages = [] if flat else _folder_pages(conn, person)
             # On a later page the header counts still describe the first page, so they do
-            # not change under the reader as they page.
+            # not change under the reader as they page. The counts and the agent picker take
+            # the whole wall, whatever is searched for or picked; only the Archived total
+            # follows the search (the fold must count the archived hit it offers).
             count_rows, count_archived = rows, archived_rows
-            if older:
-                if on_archived:
-                    count_archived = _wall(
-                        conn, person, True, folder_id, grouped=grouped
-                    )
-                else:
-                    count_rows = _wall(
-                        conn, person, False, folder_id, grouped=grouped, needle=needle
-                    )
+            if older or needle or chosen_agent:
+                count_rows = _wall(conn, person, False, folder_id, grouped=grouped)
+            if older and on_archived:
+                count_archived = _wall(
+                    conn,
+                    person,
+                    True,
+                    folder_id,
+                    grouped=grouped,
+                    needle=needle,
+                    agent=chosen_agent,
+                )
         later = bool(older)
         paged = (
             archived_rows if on_archived else rows
@@ -6265,23 +6343,10 @@ def gallery_router(db: Database) -> APIRouter:
         # options is a control you cannot get out of without editing the URL.
         # Archived pages do not add names of their own: a seat whose only pages
         # are archived is not somebody you filter the wall by.
-        agents = sorted(
-            {r[3] for r in (count_rows if later else rows)} | set(folder_agents)
-        )
-        if chosen_agent:
-            # A link saved before an agent was renamed still finds its pages.
-            chosen_agent = rename.resolve(db, chosen_agent)
-            rows = [r for r in rows if r[3] == chosen_agent]
-            archived_rows = [r for r in archived_rows if r[3] == chosen_agent]
-
-        if needle:
-            # Both walls are filtered. Searching only the live one would hide
-            # the archived hit AND still count it in the fold's total, which
-            # reads as the search having missed something.
-            rows = _title_first([r for r in rows if _matches(r, needle)], needle)
-            archived_rows = _title_first(
-                [r for r in archived_rows if _matches(r, needle)], needle
-            )
+        agents = sorted({r[3] for r in count_rows} | set(folder_agents))
+        # The search and the agent were applied where the rows were read (`_wall`), to both
+        # walls: searching only the live one would hide the archived hit AND still count it
+        # in the fold's total, which reads as the search having missed something.
 
         asked = request.query_params.get("view")
         view = (

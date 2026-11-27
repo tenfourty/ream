@@ -312,3 +312,78 @@ def test_a_title_match_comes_before_a_body_match(client, db):
     out = client.get("/?q=avatar").text
     assert out.index("Title hit avatar") < out.index("Body hit")
     assert out.index("Title hit avatar") < out.index("Newest filler")
+
+
+def _body(text: str) -> str:
+    return f"<!doctype html><html><head><title>B</title></head><body><p>{text}</p></body></html>"
+
+
+def test_a_search_finds_words_a_body_stores_as_entities(client, db):
+    """A body holds `R&amp;D`, `it&#39;s`, `&mdash;`; the words on the page are decoded."""
+    store.publish(
+        db, "seat", "Plans", _body("R&amp;D budget and &quot;quoted&quot; text")
+    )
+    store.publish(db, "seat", "Other", _body("Nothing"))
+    assert "Plans" in client.get("/?q=R%26D").text
+    assert "Plans" in client.get("/?q=%22quoted%22").text
+    assert "Other" not in client.get("/?q=R%26D").text
+
+
+def test_a_search_is_not_case_blind_only_for_ascii(client, db):
+    store.publish(db, "seat", "Grüße", _body("Über alles in café"))
+    store.publish(db, "seat", "Other", _body("nothing"))
+    for q in ("%C3%BCber", "%C3%9CBER", "caf%C3%A9", "gr%C3%BC"):
+        found = client.get(f"/?q={q}").text
+        assert "Grüße" in found, q
+        assert "Other" not in found, q
+
+
+def test_false_positives_of_the_prefilter_do_not_push_a_match_past_the_limit(
+    client, db, monkeypatch
+):
+    """`icon` is in `silicon`: the SQL keeps those rows, the word check drops them, and the
+    true match older than all of them must still be listed."""
+    from ream import gallery
+
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 3)
+    store.publish(db, "seat", "True icons", PAGE)
+    for i in range(7):
+        store.publish(db, "seat", f"Silicon {i}", PAGE)
+    found = client.get("/?q=icon").text
+    assert "True icons" in found
+    assert "Silicon 3" not in found
+
+
+def test_a_search_pages_on_with_older_pages_of_matches(client, db, monkeypatch):
+    from ream import gallery
+
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 2)
+    for i in range(5):
+        store.publish(db, "seat", f"Match {i}", PAGE)
+        store.publish(db, "seat", f"Filler {i}", PAGE)
+    first = client.get("/?q=match").text
+    assert "Match 4" in first and "Match 3" in first and "Match 2" not in first
+    older = re.search(r'href="([^"]*older=[^"]*)"', first)
+    assert older, "an Older pages link"
+    second = client.get(older.group(1).replace("&amp;", "&")).text
+    assert "Match 2" in second and "Match 1" in second and "Match 3" not in second
+
+
+def test_the_agent_filter_is_applied_before_the_limit(client, db, monkeypatch):
+    from ream import gallery
+
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 2)
+    store.publish(db, "quiet-seat", "Mine avatar", PAGE)
+    for i in range(5):
+        store.publish(db, "busy-seat", f"Theirs avatar {i}", PAGE)
+    found = client.get("/?q=avatar&agent=quiet-seat").text
+    assert "Mine avatar" in found
+    assert "Theirs avatar" not in found
+
+
+def test_the_agent_picker_and_counts_ignore_the_search(client, db):
+    store.publish(db, "seat-one", "Photo", PAGE)
+    store.publish(db, "seat-two", "Zebrafish ledger", PAGE)
+    found = client.get("/?q=photo").text
+    assert "Zebrafish ledger" not in found
+    assert "seat-two" in found, "the picker still lists every agent on the wall"
