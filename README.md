@@ -1,4 +1,4 @@
-# Ream (formerly artifacts)
+# Ream
 
 A self-hosted page publisher: agents publish an HTML
 page over a keyed API and get back a stable URL. A person views published pages

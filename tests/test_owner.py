@@ -623,10 +623,11 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog; reworded after review so every form row carries it, `sources` elements described); skill.md and agent.json did not move.
 # agents.txt and skill.md re-taken on 26 Nov 2026 for watching a page (agents slice 3: a section in agents.txt, the MCP tool list names watch_page, unwatch_page and watches, and a short paragraph in skill.md); agent.json did not move.
 # agents.txt re-taken on 26 Nov 2026 for review of watching (wait_for_answer includes watched events once woken; watch_page and unwatch_page need only ream:read and are listed apart from the read tools); skill.md and agent.json did not move.
+# agents.txt, skill.md and agent.json re-taken on 27 Nov 2026: the name is shown as just Ream (the "(formerly artifacts)" qualifier dropped); nothing else moved.
 GOLDEN = {
-    "agents.txt": "639fc0a4c540be9a0b0012b29735aee03d47ebb91ab6ab9ddf9e3e3adfb83c2e",
-    "skill.md": "4f0935373cb8d491872b6bb77b9d7d3a951ea01219234a326e5b97a630fbe874",
-    "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
+    "agents.txt": "07392dfeb8dc76500240a835bb75da740f6179d4ece9e95dd13a4f628d6dde77",
+    "skill.md": "687791be734039d9b890dcb98407e2b469f8f0d2261c5965e9880c6333df6398",
+    "agent.json": "b76330a193944bf723193bbedbf986847c542b3a2f838067f247cfd6d380d6a4",
 }
 BASE = "https://artifacts.tenfourty.site"
 
@@ -669,8 +670,8 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
-    "artifacts-decide": "46400af192a20cbd8f26fbfd6830b398fa0a8b986563cd6de11ef91ebcad19ac",
+    "artifacts-publish": "c525586234cf72ce9112a68e2d9f74f3a3342b7df7873bcd6b5f73486bc6bb0f",
+    "artifacts-decide": "94c073b6cb697516f5453c076435d0ff98cf75fe1d13f8a672b6f085f4b3b524",
 }
 
 

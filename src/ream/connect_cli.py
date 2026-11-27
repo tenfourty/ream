@@ -101,7 +101,7 @@ def _start_move(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=prog_name("artifacts-connect"),
-        description="connect this machine to {{owner_name}}'s Ream (formerly artifacts); {{owner_they}} approve{{owner_s}} a code. Also run as `ream connect`.",
+        description="connect this machine to {{owner_name}}'s Ream; {{owner_they}} approve{{owner_s}} a code. Also run as `ream connect`.",
         formatter_class=client._HelpFormatter,
     )
     parser.add_argument(

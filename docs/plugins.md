@@ -1,4 +1,4 @@
-# Writing a plug-in for Ream (formerly artifacts)
+# Writing a plug-in for Ream
 
 A plug-in adds what is particular to one deployment (a chat bridge, a mail sender, an extra secret
 scanner, a house command) without touching the core. The core runs with none installed; a plug-in

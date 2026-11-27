@@ -421,7 +421,7 @@ def cmd_change_owner(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog_name("artifacts-admin"),
-        description="Key and database tooling for Ream (formerly artifacts). Also run as `ream admin`.",
+        description="Key and database tooling for Ream. Also run as `ream admin`.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

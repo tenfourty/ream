@@ -57,7 +57,7 @@ DECIDE_VERBS = (
 
 _HELP = """usage: ream [GLOBAL FLAGS] VERB [ARGS ...]
 
-One command for Ream (formerly artifacts). Each verb runs the program of the same job and passes the rest of
+One command for Ream. Each verb runs the program of the same job and passes the rest of
 the command line on unchanged, so `ream VERB --help` shows that program's own help.
 
   publish        publish or update a page             (artifacts-publish)

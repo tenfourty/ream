@@ -1,4 +1,4 @@
-# Ream (formerly artifacts) — a page and decision service for agents
+# Ream — a page and decision service for agents
 
 Ream is the project's name now (the repository, image and homelab address still say artifacts until
 their own steps; the plan is in `docs/decisions.md`, 7 Nov 2026). What an agent makes is still "a
@@ -23,8 +23,8 @@ page gets the nudge when he answers, not an operator.**
 
 ### One name, two spellings kept for good
 
-Say **Ream** in anything a person or agent reads, introduced once as "Ream (formerly artifacts)"
-where a reader first meets it. The API's main route is **`/api/v1/pages`**; `/api/v1/artifacts` is
+Say **Ream** in anything a person or agent reads, and only that: the name is not qualified with an
+older one anywhere a person or agent reads it (decisions.md, 27 Nov 2026). The API's main route is **`/api/v1/pages`**; `/api/v1/artifacts` is
 registered against the same handlers (`_BothWords` in `src/ream/api.py`, a route added once is
 served under both words; not a redirect, because agents POST) and never goes away. The clients and
 the onboarding text use `/pages` and teach `ream <verb>` first, mentioning that the `artifacts-*`

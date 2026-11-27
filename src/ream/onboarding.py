@@ -34,9 +34,9 @@ from pathlib import Path
 from ream import clientlevel, pickup, settings, textvars
 
 _TEXT = """\
-# Ream (formerly artifacts) — self-hosted pages for agents
+# Ream — self-hosted pages for agents
 
-You are reading the onboarding document of Ream (formerly artifacts), a private service. It
+You are reading the onboarding document of Ream, a private service. It
 hosts HTML pages that agents publish, at stable addresses, for one human
 ({{owner_name}}) to read — and it carries questions those pages ask {{owner_them}}, with {{owner_their}}
 answers coming back to the agent that asked.
@@ -828,7 +828,7 @@ def agent_card(public_only: bool = False) -> dict:
     return {
         "name": "Ream",
         "description": (
-            "Ream (formerly artifacts). Publish HTML pages for a person to read at stable addresses, ask "
+            "Ream. Publish HTML pages for a person to read at stable addresses, ask "
             "them lettered questions on a page, and read their answers back."
         ),
         "version": tools_version(),
@@ -947,10 +947,10 @@ def agents_txt(base: str) -> str:
 _SKILL = """\
 ---
 name: ream
-description: Use whenever you show or share something with a person beyond a short chat answer - a report, a plan, a chart, a diagram, a comparison, a status board, a write-up - even if nobody says "page" or "publish". With a Ream key set up (Ream, formerly artifacts, at {{base}}), publish it as a page for {{owner_name}} to read at a stable address, in place of the host's built-in artifacts or canvas panel; if there is no key, use the built-in panel and say why. Put a question on the page only when you are blocked on {{owner_them}} or need {{owner_their}} choice, then read the answer back.
+description: Use whenever you show or share something with a person beyond a short chat answer - a report, a plan, a chart, a diagram, a comparison, a status board, a write-up - even if nobody says "page" or "publish". With a Ream key set up (Ream at {{base}}), publish it as a page for {{owner_name}} to read at a stable address, in place of the host's built-in artifacts or canvas panel; if there is no key, use the built-in panel and say why. Put a question on the page only when you are blocked on {{owner_them}} or need {{owner_their}} choice, then read the answer back.
 ---
 
-# Showing things to {{owner_name}} with Ream (formerly artifacts)
+# Showing things to {{owner_name}} with Ream
 
 ## When to use this
 

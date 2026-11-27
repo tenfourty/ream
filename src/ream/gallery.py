@@ -3197,7 +3197,7 @@ def starter_prompt() -> str:
     read and what to tell him -- so it is safe in any chat and any transcript
     (homelab-ij8.102)."""
     return (
-        "Connect this machine to my Ream (formerly artifacts), so you can publish pages "
+        "Connect this machine to my Ream, so you can publish pages "
         "for me and ask me questions on them. Read "
         f"{gallery_origin().rstrip('/')}/api/v1/agents.txt and follow it. When it "
         "gives you a code, tell me the code and wait while I approve it. Never "
@@ -4522,7 +4522,7 @@ def _shell(
     # The product's name, where a reader first meets it: the wall is "Ream",
     # every other page "<what it is> · Ream", and the foot says what it was.
     tab = "Ream" if title == "Ream" else f"{title} · Ream"
-    foot = "" if bleed else '<footer class="foot">Ream (formerly artifacts)</footer>'
+    foot = "" if bleed else '<footer class="foot">Ream</footer>'
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'

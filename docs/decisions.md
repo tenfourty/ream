@@ -1676,3 +1676,17 @@ and its hand pin) were skipped.
 checked that the diff and commit messages carry no tracker ids, embargo wording or private-repository
 names; Jeremy approved this release on 27 Nov 2026 (lettered answer (a): release it to public main
 without a production rollout, once security agrees).
+
+## The name is shown as just Ream (27 Nov 2026)
+
+Wherever a person or agent reads the name (the gallery, the onboarding documents, the tools' `--help`,
+the docs), the product is "Ream" with no "(formerly artifacts)" qualifier after it.
+
+**Chosen:** show just Ream. Every old name that works stays and is unchanged: the `/api/v1/artifacts`
+route, the `artifacts-*` commands, `ARTIFACTS_*` settings, `import artifacts`, stored names, and the
+homelab address. The old news entries in `src/ream/news.py` are not edited. Earlier entries in this file
+and dated design specs keep their wording as history.
+
+**Not chosen:** keeping the qualifier "where a reader first meets it" (the rule this replaces, from 7 Nov 2026).
+
+**Evidence:** the owner confirmed it on 27 Nov 2026. Tracker item runcove-5t3oj.171.

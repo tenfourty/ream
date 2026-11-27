@@ -1778,7 +1778,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog=prog_name("artifacts-decide"),
         description=(
-            "Ream (formerly artifacts): ask {{owner_name}} a lettered question on a page, "
+            "Ream: ask {{owner_name}} a lettered question on a page, "
             "and read the answer. Also run as `ream ask`, `ream wait` and so on; this "
             "older command name still works."
         ),

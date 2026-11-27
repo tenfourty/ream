@@ -2024,7 +2024,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog=prog_name("artifacts-publish"),
         description=(
-            "Publish a page to Ream (formerly artifacts), update it, list and "
+            "Publish a page to Ream, update it, list and "
             "fetch pages. Also run as `ream publish`; this older command name "
             "still works."
         ),

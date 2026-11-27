@@ -1,6 +1,6 @@
 # Ream over MCP (`/mcp`)
 
-Ream (formerly artifacts) can answer the Model Context Protocol at `/mcp`, for an agent that
+Ream can answer the Model Context Protocol at `/mcp`, for an agent that
 speaks MCP rather than the agent API. The design is
 `docs/agent/specs/2026-11-08-mcp-oauth-design.md`; this page says how to turn it on and try it.
 

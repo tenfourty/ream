@@ -1,6 +1,6 @@
 # Ream's look: the logo and the gallery's design values
 
-Ream (formerly artifacts) ships one standard look. This guide says how to use the logo and
+Ream ships one standard look. This guide says how to use the logo and
 lists the named values the gallery is drawn with. Why it is this way: `docs/decisions.md`,
 "The Ream logo" and "A standard look first" (8 Nov 2026).
 
