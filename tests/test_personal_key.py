@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from ream import (
     agents,
+    connect,
     events,
     keys,
     mcp,
@@ -473,6 +474,28 @@ def _ask_connect(gallery, name):
     return r.json()
 
 
+def _approve_same(gallery, name):
+    """Ask to connect as `name` and approve it as "same agent, new machine" through the real
+    approve route; returns the new machine's key."""
+    started = _ask_connect(gallery, name)
+    page = gallery.get("/connect", params={"code": started["code"]}).text
+    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
+    gallery.post(
+        "/connect/approve",
+        data={
+            "request_id": request_id,
+            "code": started["code"],
+            "name": "",
+            "choice": "same",
+        },
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    polled = gallery.post(
+        "/api/v1/connect/poll", json={"poll_token": started["poll_token"]}
+    ).json()
+    return polled["key"]
+
+
 def test_the_approve_page_says_a_marked_agent_belongs_to_a_person(db, world):
     """The "same agent, new machine" choice names the person a marked agent belongs to (escaped),
     so the owner knows the new machine will read what they read; an unmarked agent gets no line."""
@@ -524,23 +547,8 @@ def test_a_new_key_approved_onto_a_marked_agent_inherits_the_mark(db, world):
     keys.mint(db, agent="laptop")  # the existing machine
     agents.set_person(db, "laptop", "ann", "admin")
     gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
-    started = _ask_connect(gallery, "laptop")
-    page = gallery.get("/connect", params={"code": started["code"]}).text
-    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
-    gallery.post(
-        "/connect/approve",
-        data={
-            "request_id": request_id,
-            "code": started["code"],
-            "name": "",
-            "choice": "same",
-        },
-        headers={"sec-fetch-site": "same-origin"},
-    )
-    polled = gallery.post(
-        "/api/v1/connect/poll", json={"poll_token": started["poll_token"]}
-    ).json()
-    new = keys.verify(db, polled["key"])
+    token = _approve_same(gallery, "laptop")
+    new = keys.verify(db, token)
     assert new is not None and new.agent == "laptop"
     # The first use of the new key retires the old one; the agent keeps its person throughout.
     keys.first_use(db, new)
@@ -580,5 +588,15 @@ def test_an_expired_key_with_no_other_live_key_keeps_the_mark_on_purpose(db, wor
         )
     assert keys.verify(db, _t) is None  # it has expired: it no longer opens anything
     assert "expired" in keys.refusal_reason(db, _t)
+    # It is still a working name (no `revoked_at`), so the approve page offers "same agent, new
+    # machine" and a real approval of a new key onto it goes through.
+    assert connect.existing_agent(db, "laptop") == "laptop"
+    gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
+    token = _approve_same(gallery, "laptop")
+    new = keys.verify(db, token)
+    assert new is not None and new.agent == "laptop"
+    keys.first_use(db, new)  # retires the lapsed key; the new one is live
+    assert _live(db, "laptop") == 1
     with db.connect() as conn:
         assert agents.person_of(conn, "laptop") == "ann"
+        assert agents.key_reach(conn, "laptop").reads_person()
