@@ -254,3 +254,25 @@ def test_a_reused_app_uses_the_database_this_test_patched(db, monkeypatch, facto
 @_FACTORIES
 def test_two_apps_from_one_factory_in_one_test_are_two_apps(db, factory):
     assert factory(db) is not factory(db)
+
+
+def test_a_route_added_to_a_reused_app_is_caught(db):
+    from conftest import _ReusedApps
+
+    from ream import app as app_module
+
+    if not _reusing():
+        pytest.skip("apps are not reused here")
+    app = app_module.create_gallery_app(db)
+    _ReusedApps.check_routes_unchanged()  # as handed out: fine
+
+    @app.get("/_leaked_route")
+    def _leak():
+        return {}
+
+    try:
+        with pytest.raises(AssertionError, match="/_leaked_route"):
+            _ReusedApps.check_routes_unchanged()
+    finally:
+        app.router.routes.pop()  # leave the reused app as it was
+    _ReusedApps.check_routes_unchanged()
