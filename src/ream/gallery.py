@@ -5612,8 +5612,15 @@ def gallery_router(db: Database) -> APIRouter:
         folder_id: str | None = None,
         grouped: bool = False,
         older: str = "",
+        needle: str = "",
     ):
         """The pages of the live wall, or the archived ones.
+
+        `needle` (a lower-cased search) keeps only pages whose title, agent, id or first
+        `text_module.SEARCH_LIMIT` characters of body contain it, so the newest
+        `_WALL_PAGE` rows are the newest MATCHES, not the matches among the newest rows.
+        The match is on the raw body, a superset of what `_matches` then confirms on the
+        page's words.
 
         `folder_id` lists only that folder's pages. `grouped` leaves out the pages a folder
         tile stands for: a page in a folder that is not archived (live wall), or in an
@@ -5636,6 +5643,17 @@ def gallery_router(db: Database) -> APIRouter:
             extra = ()
         else:
             scope, extra = "", ()
+        found, found_params = "", ()
+        if needle:
+            like = "%" + re.sub(r"([!%_])", r"!\1", needle) + "%"
+            found = (
+                " and (lower(a.title) like %s escape '!' or lower(a.agent) like %s escape '!'"  # noqa: S608
+                " or lower(a.id) like %s escape '!'"
+                " or lower(substr(coalesce((select v.body from version v"
+                "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
+                f"   1, {text_module.SEARCH_LIMIT})) like %s escape '!')"
+            )
+            found_params = (like,) * 4
         fetched = conn.execute(
             # Bounded: an unpaginated list is fine at ten artifacts and a
             # page nobody can load at ten thousand. `, id desc` breaks a tie
@@ -5665,7 +5683,9 @@ def gallery_router(db: Database) -> APIRouter:
             f"            and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
-            "       (select v.body from version v"
+            # Only the head: a page can be megabytes, and the tile and the search read
+            # no further than `SEARCH_LIMIT` (the wall pulled up to 200 whole bodies).
+            f"       (select substr(v.body, 1, {text_module.SEARCH_LIMIT}) from version v"
             "          where v.artifact_id = a.id and v.n = a.current_version"
             "       ) as body,"
             # The boolean only. Selecting the bytes here would pull every
@@ -5700,6 +5720,7 @@ def gallery_router(db: Database) -> APIRouter:
             + " where (a.archived_at is null) = %s and a.deleted_at is null"
             + scope
             + after
+            + found
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
             # that is him saying so explicitly. Then anything with an
             # unanswered question, because this service exists so he can
@@ -5722,7 +5743,15 @@ def gallery_router(db: Database) -> APIRouter:
             f"          {_WALL_UNREAD} desc,"
             # One more than a page, to know whether an older page exists.
             f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
-            (person, person, person, not archived, *extra, *after_params),
+            (
+                person,
+                person,
+                person,
+                not archived,
+                *extra,
+                *after_params,
+                *found_params,
+            ),
         ).fetchall()
         rows = _WallRows(fetched[:_WALL_PAGE])
         if len(fetched) > _WALL_PAGE:
@@ -5920,6 +5949,7 @@ def gallery_router(db: Database) -> APIRouter:
         request: Request, person: str, folder_id: str | None = None
     ) -> HTMLResponse:
         query = (request.query_params.get("q") or "").strip()
+        needle = query.lower()
         chosen_agent = (request.query_params.get("agent") or "").strip()
         chosen = request.query_params.get("filter")
         # THE WALL GROUPS, A SEARCH DOES NOT. A page in a folder is hidden behind its folder
@@ -5951,10 +5981,14 @@ def gallery_router(db: Database) -> APIRouter:
                 rows = (
                     []
                     if shelved
-                    else _wall(conn, person, False, folder_id, older=older)
+                    else _wall(
+                        conn, person, False, folder_id, older=older, needle=needle
+                    )
                 )
                 archived_rows = (
-                    _wall(conn, person, True, folder_id, older=older) if shelved else []
+                    _wall(conn, person, True, folder_id, older=older, needle=needle)
+                    if shelved
+                    else []
                 )
                 pages = []
             else:
@@ -5966,6 +6000,7 @@ def gallery_router(db: Database) -> APIRouter:
                     False,
                     grouped=grouped,
                     older="" if on_archived else older,
+                    needle=needle,
                 )
                 archived_rows = _wall(
                     conn,
@@ -5973,6 +6008,7 @@ def gallery_router(db: Database) -> APIRouter:
                     True,
                     grouped=grouped,
                     older=older if on_archived else "",
+                    needle=needle,
                 )
                 pages = [] if flat else _folder_pages(conn, person)
             # On a later page the header counts still describe the first page, so they do
@@ -5984,7 +6020,9 @@ def gallery_router(db: Database) -> APIRouter:
                         conn, person, True, folder_id, grouped=grouped
                     )
                 else:
-                    count_rows = _wall(conn, person, False, folder_id, grouped=grouped)
+                    count_rows = _wall(
+                        conn, person, False, folder_id, grouped=grouped, needle=needle
+                    )
         later = bool(older)
         paged = (
             archived_rows if on_archived else rows
@@ -6219,7 +6257,6 @@ def gallery_router(db: Database) -> APIRouter:
             rows = [r for r in rows if r[3] == chosen_agent]
             archived_rows = [r for r in archived_rows if r[3] == chosen_agent]
 
-        needle = query.lower()
         if needle:
             # Both walls are filtered. Searching only the live one would hide
             # the archived hit AND still count it in the fold's total, which

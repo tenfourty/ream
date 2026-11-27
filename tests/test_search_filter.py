@@ -263,3 +263,27 @@ def test_the_archived_tab_keeps_the_view_it_was_asked_for(client, db):
     gone = store.publish(db, "seat", "Put away", PAGE)
     store.set_archived(db, gone.id, True, agent=None)
     assert '<ul class="rows">' in client.get("/?filter=archived&view=list").text
+
+
+def test_a_search_finds_a_match_older_than_the_newest_wall_page(
+    client, db, monkeypatch
+):
+    """The search ran over the newest `_WALL_PAGE` rows only, so an older page that matched
+    was never found (and every wall load pulled whole bodies). The match is in the query."""
+    from ream import gallery
+
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 3)
+    store.publish(db, "seat", "Old avatar notes", PAGE)
+    for i in range(6):
+        store.publish(db, "seat", f"Filler {i}", PAGE)
+    found = client.get("/?q=avatar").text
+    assert "Old avatar notes" in found
+    assert "Filler 5" not in found
+
+
+def test_a_search_term_with_like_wildcards_is_literal(client, db):
+    store.publish(db, "seat", "100% done", PAGE)
+    store.publish(db, "seat", "Other page", PAGE)
+    found = client.get("/?q=100%25").text
+    assert "100% done" in found
+    assert "Other page" not in found
