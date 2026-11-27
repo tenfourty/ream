@@ -107,8 +107,10 @@ unset CDPATH
 # colour, format.pretty, the diff prefixes, diff.relative (from a subdirectory
 # it dropped the file), i18n.logOutputEncoding, log.showSignature,
 # log.showRoot (off, it emptied the patch of a first commit, or of any commit
-# the shallow list names) and core.commitGraph (off: a planted commit-graph
-# gave the scanned commit another tree) (see SCAN_PINS). Also for ggshield's
+# the shallow list names), core.commitGraph (off: a planted commit-graph
+# gave the scanned commit another tree) and core.useReplaceRefs (off: on a git
+# older than 2.42 a repository's own true re-enables replace refs despite
+# GIT_NO_REPLACE_OBJECTS=1) (see SCAN_PINS). Also for ggshield's
 # git: GIT_LITERAL_PATHSPECS=1 with the glob, noglob and icase variables
 # unset (a path is never read as pathspec magic; ggshield 1.56.1 itself dies on
 # a staged path that starts with ":" before it asks for the patch, measured,
@@ -566,7 +568,7 @@ glist_stop() {
 SCAN_PINS=(core.fsmonitor=false core.bigFileThreshold=512m color.ui=never color.diff=never
   format.pretty=medium diff.noprefix=false diff.mnemonicPrefix=false diff.srcPrefix=a/ diff.dstPrefix=b/
   diff.relative=false i18n.logOutputEncoding=UTF-8 log.showSignature=false advice.graftFileDeprecated=false
-  log.showRoot=true core.commitGraph=false)
+  log.showRoot=true core.commitGraph=false core.useReplaceRefs=false)
 
 # scan_env: sets, in the current shell (always a subshell), the environment ggshield and its git get. The
 # settings check and the scan call both use it, so the check reads what the scan's git reads.
@@ -1307,6 +1309,12 @@ mode=${GGSHIELD_STUB_MODE:-auto}
   echo "pythonuserbase=${PYTHONUSERBASE-unset} pythoninspect=${PYTHONINSPECT-unset}"
   echo "no_replace=${GIT_NO_REPLACE_OBJECTS-unset} graft_file=${GIT_GRAFT_FILE-unset} gg_git_config=${GG_GIT_CONFIG-unset} attr_source=${GIT_ATTR_SOURCE-unset} ext_diff=${GIT_EXTERNAL_DIFF-unset}"
   echo "config_file=${GIT_CONFIG-unset} shallow_file=${GIT_SHALLOW_FILE-unset} literal=${GIT_LITERAL_PATHSPECS-unset}"
+  pins=
+  for ((i = 0; i < ${GIT_CONFIG_COUNT:-0}; i++)); do
+    k=GIT_CONFIG_KEY_$i v=GIT_CONFIG_VALUE_$i
+    pins="$pins ${!k-unset}=${!v-unset}"
+  done
+  echo "pins=$pins"
   echo "notes_ref=${GIT_NOTES_REF-unset} notes_display=${GIT_NOTES_DISPLAY_REF-unset}"
   echo "commits=$(git rev-list "$range" -- 2>/dev/null | wc -l)"
   echo "tree=$(git rev-parse -q --verify "$id^{tree}" 2>/dev/null)"
@@ -2232,6 +2240,13 @@ PROTO
   out=$(mgate "$mk" GGSHIELD_STUB_LOG="$log"); rc=$?
   check "a replace ref for HEAD is ignored by the gate's and ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
   check "…GIT_NO_REPLACE_OBJECTS=1 for the scan" 0 0 "$(cat "$log")" "no_replace=1"
+  # Before git 2.42 a repository's core.useReplaceRefs=true re-enables replace refs despite that variable, so the
+  # scan's group pins it off (this git is newer, so only the pin reaching the scan can be shown, not the bypass).
+  git -C "$mk" config core.useReplaceRefs true
+  : >"$log"
+  out=$(mgate "$mk" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "a repository's core.useReplaceRefs=true does not stop the scan: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…core.useReplaceRefs=false is in the scan's pinned group" 0 0 "$(cat "$log")" " core.useReplaceRefs=false"
   # A graft giving the scanned commit a parent that already holds its tree. The commit is predictable
   # because the date is fixed here, and made exactly as the gate makes it.
   mk="$tmp/mk15"; mkmark "$mk"
