@@ -163,8 +163,8 @@ unset CDPATH
 # judge should refuse (inferred, not run through ggshield). These are the
 # settings measured, not a proof that no other one exists: a git setting or
 # variable not listed here is outside what this gate defends. The gate's own
-# git calls run with core.fsmonitor and core.commitGraph off, no replace refs
-# and no grafts, and an inherited GIT_CONFIG_COUNT group is dropped.
+# git calls run with core.fsmonitor, core.commitGraph and core.useReplaceRefs
+# off, no replace refs and no grafts, and an inherited GIT_CONFIG_COUNT group is dropped.
 # GIT_CONFIG_PARAMETERS is dropped for ggshield's git. A machine whose git
 # config holds git-lfs's filter.lfs.* is accepted only when every filter.lfs
 # key present is one of clean, smudge, process and required, at exactly git-lfs's
@@ -446,11 +446,13 @@ git_env_proven() {
 }
 
 # ggit: git for the gate's own reads of the repository, with core.fsmonitor off (an inherited setting of
-# it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored. A
+# it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored (the
+# variable GIT_NO_REPLACE_OBJECTS=1 and core.useReplaceRefs=false: on a git older than 2.42 a repository's own
+# true re-enables replace refs despite the variable). A
 # filter driver's program also runs in write-tree: settings_proven refuses those before it is called,
 # except git-lfs's own stock one (its stock program may run there; filters_proven and pointers_proven then refuse
 # what it would have changed).
-GGIT_OPTS=(-c core.fsmonitor=false -c core.commitGraph=false)
+GGIT_OPTS=(-c core.fsmonitor=false -c core.commitGraph=false -c core.useReplaceRefs=false)
 ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@"; }
 
 # glist <out file> <what> <git arguments...>: ggit with its output to <out file>, stopped after LIST_TIMEOUT
@@ -2839,6 +2841,19 @@ exec %q "$@"
   check "…and says the staged index is not the tree scanned" "$rc" 1 "$out" "not exactly the tree that was scanned"
   out=$(gate GGSHIELD_STUB_RC=0); rc=$?
   check "a clean scan says how many staged files it covered" "$rc" 0 "$out" "2 staged file(s) scanned"
+  # The gate's own git calls (those with core.fsmonitor=false among their options, the listings of the change
+  # included) all carry core.useReplaceRefs=false: a logging git sees every call's options.
+  local glog="$tmp/gitcalls.log" gshim="$tmp/gitlogshim" calls nopin
+  mkdir -p "$gshim"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>%q\nexec %q "$@"\n' "$glog" "$realgit" >"$gshim/git"
+  chmod +x "$gshim/git"
+  : >"$glog"
+  out=$(cd "$repo" && PATH="$gshim:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "with a logging git the scan still allows a clean change" "$rc" 0 "$out" "$SELF: clean"
+  calls=$(grep -c 'core.fsmonitor=false' "$glog")
+  nopin=$(grep 'core.fsmonitor=false' "$glog" | grep -vc 'core.useReplaceRefs=false')
+  check "the gate's own git calls were seen" 0 0 "gate_calls=$calls" "gate_calls=[1-9]"
+  check "…and every one of them carries core.useReplaceRefs=false" 0 0 "without_pin=$nopin" "without_pin=0$"
   # A git whose write-tree answers a tree of its own with as many changed files as are staged (counts
   # equal, content not): what is scanned is not what is staged, so it is refused.
   local swap="$tmp/swap" alt
