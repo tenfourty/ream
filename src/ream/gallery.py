@@ -3215,10 +3215,25 @@ def _alias_note(typed: str | None, resolved: str | None) -> str:
     return ""
 
 
-def _connect_choice(taken: str, name: str, pending) -> str:
+def _taken_belongs_to(db, taken: str) -> str:
+    """The shown name of the person the existing agent `taken` was marked for
+    (`agent_person`, slice 4), or "" for a shared agent."""
+    if not taken:
+        return ""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select k.person, p.name from agent_person k"
+            " left join person p on p.id = k.person where k.agent = %s",
+            (taken,),
+        ).fetchone()
+    return "" if row is None else agents.person_label(row[0], row[1])
+
+
+def _connect_choice(taken: str, name: str, pending, belongs: str = "") -> str:
     """The two ways to approve a request whose name belongs to an existing agent.
     "New agent" comes first in the form so Enter in the name box never picks the
-    move; "Same agent" needs its own deliberate press."""
+    move; "Same agent" needs its own deliberate press. An agent marked as one
+    person's says so: a new machine given to it reads what that person reads."""
     return (
         f'<p class="err">{escape(taken)} is already an agent. Is this its new machine, '
         "or a different agent?</p>"
@@ -3230,8 +3245,14 @@ def _connect_choice(taken: str, name: str, pending) -> str:
         f"<p>Or give the machine to {escape(taken)} itself: its pages, comments and "
         "decisions stay with it. Its earlier keys keep working until this machine's "
         "key is first used, then they stop.</p>"
-        '<div class="row"><button class="btn primary" type="submit" name="choice" '
-        f'value="same">Same agent, new machine</button>'
+        + (
+            f'<p class="belongs-note"><strong>{escape(taken)} belongs to {escape(belongs)}: '
+            f"this machine will read what {escape(belongs)} reads.</strong></p>"
+            if belongs
+            else ""
+        )
+        + '<div class="row"><button class="btn primary" type="submit" name="choice" '
+        'value="same">Same agent, new machine</button>'
         '<button class="btn" type="submit" formaction="/connect/deny">Deny</button>'
         '<a class="btn" href="/connect">Cancel</a></div>'
     )
@@ -3245,6 +3266,7 @@ def _connect_page(
     name: str = "",
     alias_note: str = "",
     taken: str = "",
+    belongs: str = "",
 ) -> str:
     """The page he approves a machine on. Step one asks for the code his agent
     is showing; step two shows that one request, lets him name the machine,
@@ -3289,7 +3311,7 @@ def _connect_page(
             f'<input type="hidden" name="request_id" value="{escape(pending.id)}">'
             f'<input type="hidden" name="code" value="{escape(pending.code)}">'
             + (
-                _connect_choice(taken, name, pending)
+                _connect_choice(taken, name, pending, belongs)
                 if taken
                 else (
                     "<label>Name this machine"
@@ -7790,11 +7812,17 @@ def gallery_router(db: Database) -> APIRouter:
                 if suggested is not None:
                     alias_note = _alias_note(suggested, rename.resolve(db, suggested))
                 taken = connect.existing_agent(db, pending.suggested_name) or ""
+        belongs = _taken_belongs_to(db, taken)
         return HTMLResponse(
             _shell(
                 "Connect a machine",
                 _connect_page(
-                    code, pending, message, alias_note=alias_note, taken=taken
+                    code,
+                    pending,
+                    message,
+                    alias_note=alias_note,
+                    taken=taken,
+                    belongs=belongs,
                 ),
                 scripts='<script src="/connect.js" defer></script>'
                 if pending is None
@@ -7839,6 +7867,7 @@ def gallery_router(db: Database) -> APIRouter:
                 )
         else:
             taken = connect.existing_agent(db, pending.suggested_name) or ""
+            belongs = _taken_belongs_to(db, taken)
             agent = connect.clean_name(name)
             typed_name, alias_note = agent, ""
             if agent is not None:
@@ -7854,6 +7883,7 @@ def gallery_router(db: Database) -> APIRouter:
                     name=name,
                     alias_note=alias_note,
                     taken=taken,
+                    belongs=belongs,
                 )
             elif keys.is_reserved_agent_name(agent):
                 body = _connect_page(
@@ -7863,6 +7893,7 @@ def gallery_router(db: Database) -> APIRouter:
                     name=name,
                     alias_note=alias_note,
                     taken=taken,
+                    belongs=belongs,
                 )
             elif connect.app_agent_name(db, agent):
                 body = _connect_page(
@@ -7872,6 +7903,7 @@ def gallery_router(db: Database) -> APIRouter:
                     name=name,
                     alias_note=alias_note,
                     taken=taken,
+                    belongs=belongs,
                 )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
@@ -7887,6 +7919,7 @@ def gallery_router(db: Database) -> APIRouter:
                     name=name,
                     alias_note=alias_note,
                     taken=taken,
+                    belongs=belongs,
                 )
             elif connect.approve(db, pending.id, agent):
                 body = _connect_page(

@@ -24,4 +24,14 @@ not look at whether a key is live (the mark is the whole test), so the row must 
 Once the row goes, the retired machine's pages count as shared: its open questions go back to the owner
 and another person loses read of its closed pages. Mark the new machine again to restore that.
 
+Expiry is not retirement: a rotating key that lapses (not replaced within two weeks) sets no
+`revoked_at`, so it clears nothing and the mark stays, on purpose. Only a revocation of the agent's
+last live key deletes the mark. A weekly rotation, and a machine connected again after a lapse
+under the same name ("same agent, new machine" on the approve page), therefore keep it: the new
+key reads as the person does. Because the owner would otherwise hand a person's read reach to a
+new machine unknowingly, the approve page names it when the existing agent is marked: "<agent>
+belongs to <person>: this machine will read what <person> reads." To start the new machine
+shared instead, approve it as a new agent (another name), or clear the mark afterwards.
+(`tests/test_personal_key.py`: rotation, expiry, approve page.)
+
 Rollback: an older image ignores `agent_person`, so a personal key narrows back to a key's reach.

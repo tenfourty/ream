@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -462,3 +463,122 @@ def test_a_cross_origin_post_to_belongs_is_refused(db, world):
         assert r.status_code in (400, 403), (hdr, r.status_code)
     with db.connect() as conn:
         assert agents.person_of(conn, "laptop") is None
+
+
+def _ask_connect(gallery, name):
+    r = gallery.post(
+        "/api/v1/connect", json={"name": name}, headers={"x-real-ip": "203.0.113.5"}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_the_approve_page_says_a_marked_agent_belongs_to_a_person(db, world):
+    """The "same agent, new machine" choice names the person a marked agent belongs to (escaped),
+    so the owner knows the new machine will read what they read; an unmarked agent gets no line."""
+    with db.connect() as conn:
+        conn.execute("update person set name = %s where id = 'ann'", ("<b>Ann</b>",))
+    keys.mint(db, agent="laptop")
+    keys.mint(db, agent="shared-box")
+    agents.set_person(db, "laptop", "ann", "admin")
+    gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
+    marked = gallery.get(
+        "/connect", params={"code": _ask_connect(gallery, "laptop")["code"]}
+    ).text
+    assert "Same agent, new machine" in marked
+    assert (
+        "laptop belongs to &lt;b&gt;Ann&lt;/b&gt;: this machine will read what "
+        "&lt;b&gt;Ann&lt;/b&gt; reads." in marked
+    )
+    assert "<b>Ann</b>" not in marked and "belongs-note" in marked
+    plain = gallery.get(
+        "/connect", params={"code": _ask_connect(gallery, "shared-box")["code"]}
+    ).text
+    assert "Same agent, new machine" in plain
+    assert "belongs-note" not in plain and "will read what" not in plain
+
+
+def test_the_approve_page_keeps_the_line_when_it_redraws_after_a_refused_name(
+    db, world
+):
+    keys.mint(db, agent="laptop")
+    agents.set_person(db, "laptop", "ann", "admin")
+    gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
+    code = _ask_connect(gallery, "laptop")["code"]
+    page = gallery.get("/connect", params={"code": code}).text
+    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
+    again = gallery.post(
+        "/connect/approve",
+        data={
+            "request_id": request_id,
+            "code": code,
+            "name": "laptop",
+            "choice": "new",
+        },
+        headers={"sec-fetch-site": "same-origin"},
+    ).text
+    assert "laptop belongs to ann: this machine will read what ann reads." in again
+
+
+def test_a_new_key_approved_onto_a_marked_agent_inherits_the_mark(db, world):
+    # keys.mint(db, agent="laptop")
+    agents.set_person(db, "laptop", "ann", "admin")
+    gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
+    started = _ask_connect(gallery, "laptop")
+    page = gallery.get("/connect", params={"code": started["code"]}).text
+    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
+    gallery.post(
+        "/connect/approve",
+        data={
+            "request_id": request_id,
+            "code": started["code"],
+            "name": "",
+            "choice": "same",
+        },
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    polled = gallery.post(
+        "/api/v1/connect/poll", json={"poll_token": started["poll_token"]}
+    ).json()
+    new = keys.verify(db, polled["key"])
+    assert new is not None and new.agent == "laptop"
+    # The first use of the new key retires the old one; the agent keeps its person throughout.
+    keys.first_use(db, new)
+    assert _live(db, "laptop") == 1
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") == "ann"
+
+
+def test_a_weekly_rotation_keeps_the_personal_mark(db, world):
+    _t, old_id = keys.mint(db, agent="laptop")
+    with db.connect() as conn:
+        conn.execute("update agent_key set rotating = true where id = %s", (old_id,))
+    agents.set_person(db, "laptop", "ann", "admin")
+    token, _new_id = keys.rotate(
+        db, keys.AgentKey(id=old_id, agent="laptop", rotating=True)
+    )
+    # The old key is revoked ('replaced') at the new key's first use: its replacement is live.
+    keys.first_use(db, keys.verify(db, token))
+    with db.connect() as conn:
+        reason = conn.execute(
+            "select revoked_reason from agent_key where id = %s", (old_id,)
+        ).fetchone()[0]
+        assert reason == "replaced"
+        assert agents.person_of(conn, "laptop") == "ann"
+    assert _live(db, "laptop") == 1
+
+
+def test_an_expired_key_with_no_other_live_key_keeps_the_mark_on_purpose(db, world):
+    """Expiry sets no `revoked_at`, so it is not a retirement: only revoking the last live key
+    clears the mark. A rotation or a re-approval after a lapse then still finds it."""
+    _t, key_id = keys.mint(db, agent="laptop")
+    agents.set_person(db, "laptop", "ann", "admin")
+    with db.connect() as conn:
+        conn.execute(
+            "update agent_key set rotating = true, created_at = %s where id = %s",
+            (datetime.now(UTC) - keys.ROTATING_MAX_AGE - timedelta(days=1), key_id),
+        )
+    assert keys.verify(db, _t) is None  # it has expired: it no longer opens anything
+    assert "expired" in keys.refusal_reason(db, _t)
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") == "ann"
