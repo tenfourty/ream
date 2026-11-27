@@ -41,6 +41,8 @@ CAP = 200
 # watch is refused, so `fan_out` stays bounded and a stale row cannot hold a place. What is left:
 # 200 distinct live agents that can read the page can still fill it. An agent is an admin-minted
 # key or a signed-in app (while `people.OPEN_SIGN_IN` is off), so that takes the owner's own doing.
+# Dropped watches are gone for good, a page merely closed to agents included: reopening the page
+# does not bring them back.
 PAGE_CAP = 200
 # At most one `watched_page_changed` per watcher and page in this long (decision C).
 WINDOW = timedelta(minutes=10)
@@ -123,7 +125,7 @@ def watch(
     `store.NotFound` for a page the agent cannot read now, `PageFull` when the page already has
     `PAGE_CAP` watchers (the page's own agent not counted, and never refused), and `TooMany`
     past `CAP`. A page that looks full first loses the watches of agents who can no longer read
-    it. Past that, 200 distinct live agents that can read the page can still fill it; agents are
+    it, for good: those watches do not come back when the page reopens. Past that, 200 distinct live agents that can read the page can still fill it; agents are
     admin-minted keys or signed-in apps while `people.OPEN_SIGN_IN` is off.
 
     The counts and the insert run under two transaction locks, always taken page first, then

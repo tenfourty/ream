@@ -179,7 +179,7 @@ other people's comments as `watched_comment_added`. Both are left out of `GET /e
 both); MCP `whats_new` includes them, and so does `wait_for_answer` once something else wakes it (they never end its wait). Ask for them on every read: a read
 without the flag moves `x-ream-seen` past them. You are never told of your own change or comment, and a
 comment you already get as `comment_added` is not sent twice. At most 200 pages, and at most 200 watchers on a page (409 past either, repeating
-a watch is 200). A page that closes to agents goes silent and drops out of your list; a page you may
+a watch is 200). A page that closes to agents goes silent and drops out of your list (but on a page at its watcher cap, a new watch removes for good the watches of agents that cannot read it at that moment, and reopening the page does not bring them back); a page you may
 not read, or that does not exist, answers 404 both ways. An event you were sent while you could read
 the page stays in your feed.
 

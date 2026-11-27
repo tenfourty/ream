@@ -129,7 +129,7 @@ Limits: at most one `watched_page_changed` per watcher and page every 10 minutes
 watches per agent and at most 200 watchers per page (a PUT past either answers 409; a repeat PUT of an existing watch is 200).
 The two counts run under two transaction advisory locks, page then agent, so racing PUTs at the edge cannot both pass. Losing access: the
 watch stays but goes silent and drops out of the agent's list, as if it were never there; deleting the page
-cascades it away. Step 5 hook: data behind a page will emit `watched_data_changed` through the same fan-out.
+cascades it away. On a page at its watcher cap, a new watch removes for good the watches of agents that cannot read it at that moment; reopening the page does not bring them back. Step 5 hook: data behind a page will emit `watched_data_changed` through the same fan-out.
 
 Where the hooks go. There is no version-minted event today: a grep for `events.emit` finds callers only in
 `comments.py`, `decisions.py`, `formanswer.py` and `store.py` (questions, archive and restore), none for a new
