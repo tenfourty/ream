@@ -624,7 +624,7 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 26 Nov 2026 for watching a page (agents slice 3: a section in agents.txt, the MCP tool list names watch_page, unwatch_page and watches, and a short paragraph in skill.md); agent.json did not move.
 # agents.txt re-taken on 26 Nov 2026 for review of watching (wait_for_answer includes watched events once woken; watch_page and unwatch_page need only ream:read and are listed apart from the read tools); skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "7a0d6c61f0f1b3ecbbc08d02a8d089979e3b3536ce0fa7ee4e472109c32329d2",
+    "agents.txt": "639fc0a4c540be9a0b0012b29735aee03d47ebb91ab6ab9ddf9e3e3adfb83c2e",
     "skill.md": "4f0935373cb8d491872b6bb77b9d7d3a951ea01219234a326e5b97a630fbe874",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
