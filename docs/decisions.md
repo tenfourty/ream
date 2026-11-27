@@ -1658,3 +1658,21 @@ command or on the Machines page if that changes.
 
 **Evidence:** Jeremy answered (a) to the lettered question in #hq-artifacts on 26 Nov 2026 (decision
 d_01M8BV48TQYDC13ZEX9XHDZD83), after slice 4 landed at d389179. Tracker item runcove-5t3oj.160.6.
+
+## The secret-scan judge re-sync is released without the hand-pinned rollout (27 Nov 2026)
+
+The change re-syncs this repository's copy of the commit-hook secret-scan judge
+(`scripts/guards/ggshield-judge.py`) with runcove's, with the matching lines in
+`scripts/guards/ggshield-gate.sh` and `AGENTS.md`. It changes only a commit hook, nothing in the
+deployed image, so for this one release the embargoed-fix runbook's steps 4 and 5 (the private image
+and its hand pin) were skipped.
+
+**Chosen:** release it to public `main` as with the 19 Nov 2026 gate fix. The private repository's
+`main` held nothing else unreleased, so public `main` was fast-forwarded to it (`364bc5fccceb`).
+
+**Not chosen:** building and hand-pinning a private image that would not differ from the public one.
+
+**Evidence:** security reviewed the change and agreed to skip steps 4 and 5 on 26 Nov 2026, having
+checked that the diff and commit messages carry no tracker ids, embargo wording or private-repository
+names; Jeremy approved this release on 27 Nov 2026 (lettered answer (a): release it to public main
+without a production rollout, once security agrees).
