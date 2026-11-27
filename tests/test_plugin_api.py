@@ -406,10 +406,14 @@ def test_a_sink_may_name_journal_and_bridge_kinds(world):
 def test_a_failed_answer_hook_is_a_503_json_naming_the_plugin(db, world):
     from fastapi.testclient import TestClient
 
+    from ream import ratelimit
     from ream.app import create_api_app, create_gallery_app
 
     for make in (create_api_app, create_gallery_app):
-        app = make(db)
+        # Its own app: a plain `create_gallery_app(db)` is the app the whole worker reuses
+        # (tests/conftest.py `_ReusedApps`), and a route added to it would stay for every
+        # later test (test_gate_covers_every_route saw `/_hook_fail`).
+        app = make(db, ratelimit.FailedAuthLimiter())
 
         @app.get("/_hook_fail")
         def _fail():

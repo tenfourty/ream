@@ -123,7 +123,7 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
                 kind="comment_added",
                 summary=said,
                 ref_id=cid,
-                note=said,
+                note=comments._event_note(kind, body),
                 session=page_session,
             )
     return [r[0] for r in released]

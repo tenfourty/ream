@@ -997,7 +997,23 @@ def _event_writer(obj: dict, key: str):
         return obj["actor"] or None
     if obj.get("kind") in events.WATCHED_KINDS:
         return OWNER if key == "note" else obj.get("page_agent") or _UNKNOWN_WRITER
+    if key == "note" and _old_mark_note(obj):
+        # Rows written before the quote left a mark's note (runcove-5t3oj.160.7) still hold
+        # the label and the page's quote there. Closed on read, not by a migration: fence
+        # the whole note under the page's agent, as the summary is; his own words in it
+        # are over-fenced, which is safe.
+        return obj.get("agent") or None
     return OWNER if key == "note" else obj.get("agent") or None
+
+
+def _old_mark_note(obj: dict) -> bool:
+    """A `comment_added` note in the old mark shape: a mark label, `: "`, then the quote."""
+    note = obj.get("note")
+    return (
+        obj.get("kind") == "comment_added"
+        and isinstance(note, str)
+        and any(note.startswith(f'{label}: "') for label in comments.LABEL.values())
+    )
 
 
 _UNKNOWN_WRITER = "an unknown writer"

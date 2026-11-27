@@ -641,6 +641,17 @@ def _row_to_comment(row) -> CommentRow:
     )
 
 
+def _mark_note(kind: str, body: str) -> str:
+    """The words he added to a mark, without the kind's stock sentence."""
+    default = DEFAULT_BODY.get(kind, "")
+    note = body.strip()
+    if note == default:
+        return ""
+    if default and note.startswith(default + " — "):
+        return note[len(default) + 3 :].strip()
+    return note
+
+
 def _event_summary(kind: str, quote: str, body: str) -> str:
     """What a `comment_added` event says: the body, or for a mark the kind
     label and the quote (the note after it)."""
@@ -648,13 +659,15 @@ def _event_summary(kind: str, quote: str, body: str) -> str:
     if not label:
         return body
     short = " ".join((quote or "").split())[:120]
-    default = DEFAULT_BODY.get(kind, "")
-    note = body.strip()
-    if note == default:
-        note = ""
-    elif default and note.startswith(default + " — "):
-        note = note[len(default) + 3 :].strip()
+    note = _mark_note(kind, body)
     return f'{label}: "{short}"' + (f" — {note}" if note else "")
+
+
+def _event_note(kind: str, body: str) -> str:
+    """The event's `note`: his words and only his. The MCP fence returns it bare when the
+    owner is the actor, so it must never hold the page text a mark quotes: that rides in
+    the summary, which is fenced and labelled with the page's agent."""
+    return _mark_note(kind, body) if LABEL.get(kind) else body
 
 
 def add(
@@ -949,8 +962,9 @@ def add(
                         # quote and where on the page it was anchored.
                         ref_id=comment_id,
                         # His words in full. The summary is one line in a list; the
-                        # comment is the thing he actually said.
-                        note=said,
+                        # comment is the thing he actually said. A mark's quote is
+                        # the page's text, so it stays in the summary only.
+                        note=_event_note(kind, body),
                         session=page_session,
                         # The journal carries his words; the nudge never did.
                         data={"title": title, "nudge_note": ""},
@@ -984,7 +998,7 @@ def add(
                                 actor=author,
                                 summary=said,
                                 ref_id=comment_id,
-                                note=said,
+                                note=_event_note(kind, body),
                                 session=replier_session,
                                 data={"title": title, "nudge_note": ""},
                             ),
