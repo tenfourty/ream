@@ -521,7 +521,7 @@ def test_the_approve_page_keeps_the_line_when_it_redraws_after_a_refused_name(
 
 
 def test_a_new_key_approved_onto_a_marked_agent_inherits_the_mark(db, world):
-    # keys.mint(db, agent="laptop")
+    keys.mint(db, agent="laptop")  # the existing machine
     agents.set_person(db, "laptop", "ann", "admin")
     gallery = TestClient(create_gallery_app(db), base_url="https://testserver")
     started = _ask_connect(gallery, "laptop")
