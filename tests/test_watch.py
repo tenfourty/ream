@@ -242,14 +242,37 @@ def test_a_watch_on_a_full_page_is_a_409_and_an_existing_watcher_is_not(
     assert _put(api, page, heads["other"]).status_code == 200
 
 
-def test_the_page_cap_counts_a_watcher_who_can_no_longer_read_the_page(
+def test_a_full_page_drops_the_watch_of_one_who_can_no_longer_read_it(
+    db, api, heads, page, monkeypatch
+):
+    monkeypatch.setattr(people, "OPEN_SIGN_IN", True)
+    monkeypatch.setattr(watches, "PAGE_CAP", 1)
+    mine, mine_agent = _call(db, settings.owner_id())
+    ann, ann_agent = _call(db, "ann")
+    assert _tool(ann, "watch_page", page_id=page)["structuredContent"]["created"]
+    # still readable: the page is full for the owner's app
+    full = _tool(mine, "watch_page", page_id=page)
+    assert full["isError"] and "most watchers" in full["content"][0]["text"]
+    # ann's person cannot read it once it closes to agents; the owner's app still can
+    store.set_agents_can_read(db, page, False, agent="owner")
+    ok = _tool(mine, "watch_page", page_id=page)
+    assert not ok.get("isError") and ok["structuredContent"]["created"] is True
+    with db.connect() as conn:
+        held = conn.execute(
+            "select agent from page_watch where artifact_id = %s", (page,)
+        ).fetchall()
+    assert [r[0] for r in held] == [mine_agent]
+    assert ann_agent not in [r[0] for r in held]
+
+
+def test_the_pages_own_agent_does_not_count_and_is_never_refused(
     api, db, heads, page, monkeypatch
 ):
     monkeypatch.setattr(watches, "PAGE_CAP", 1)
-    _put(api, page, heads["reader"])
-    store.set_agents_can_read(db, page, False, agent="owner")
-    store.set_agents_can_read(db, page, True, agent="owner")
-    assert _put(api, page, heads["other"]).status_code == 409
+    assert watches.watch(db, "owner", page) is True  # its own row, not counted
+    assert _put(api, page, heads["reader"]).status_code == 200  # still room
+    assert _put(api, page, heads["other"]).status_code == 409  # now full
+    assert watches.watch(db, "owner", page) is False  # a repeat, nothing refused
 
 
 def test_a_watch_on_a_full_page_is_refused_by_the_mcp_tool(

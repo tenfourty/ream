@@ -36,7 +36,11 @@ from ream.db import Database
 # under (nothing is removed).
 CAP = 200
 # At most this many watchers per page (a PUT past it is a 409; a repeat PUT by a watcher is not).
-# Counts every `page_watch` row of the page, readable or not, so `fan_out` stays bounded.
+# The page's own agent never counts toward it and is never refused by it (`fan_out` skips it),
+# and when the page looks full, watchers who can no longer read it are dropped before a new
+# watch is refused, so `fan_out` stays bounded and a stale row cannot hold a place. What is left:
+# 200 distinct live agents that can read the page can still fill it. An agent is an admin-minted
+# key or a signed-in app (while `people.OPEN_SIGN_IN` is off), so that takes the owner's own doing.
 PAGE_CAP = 200
 # At most one `watched_page_changed` per watcher and page in this long (decision C).
 WINDOW = timedelta(minutes=10)
@@ -77,12 +81,50 @@ def _reads(conn, agent: str, table: str = "artifact") -> tuple[str, tuple]:
     return f"({table}.agent = %s or {table}.agents_can_read)", (agent,)
 
 
+def _can_read(conn, agent: str, artifact_id: str) -> bool:
+    """Whether `agent` can read the live page `artifact_id` now: the rule `fan_out` applies."""
+    clause, params = _reads(conn, agent)
+    return (
+        conn.execute(
+            "select 1 from artifact where id = %s and deleted_at is null"  # noqa: S608 -- `clause` is built from fixed names
+            f" and {clause}",
+            (artifact_id, *params),
+        ).fetchone()
+        is not None
+    )
+
+
+def _page_is_full(conn, artifact_id: str, owner: str) -> bool:
+    """Whether the page holds `PAGE_CAP` watchers besides its own agent. Only when it looks full
+    are the others re-checked, and those who can no longer read the page are dropped (their
+    watch was silent anyway), then it is counted again."""
+    count = "select count(*) from page_watch where artifact_id = %s and agent <> %s"
+    (watchers,) = conn.execute(count, (artifact_id, owner)).fetchone()
+    if watchers < PAGE_CAP:
+        return False
+    others = conn.execute(
+        "select agent from page_watch where artifact_id = %s and agent <> %s",
+        (artifact_id, owner),
+    ).fetchall()
+    for (other,) in others:
+        if not _can_read(conn, other, artifact_id):
+            conn.execute(
+                "delete from page_watch where agent = %s and artifact_id = %s",
+                (other, artifact_id),
+            )
+    (watchers,) = conn.execute(count, (artifact_id, owner)).fetchone()
+    return watchers >= PAGE_CAP
+
+
 def watch(
     db: Database, agent: str, artifact_id: str, *, session: str | None = None
 ) -> bool:
     """Follow a page. True when the watch is new, False for a repeat (nothing changes). Raises
     `store.NotFound` for a page the agent cannot read now, `PageFull` when the page already has
-    `PAGE_CAP` watchers, and `TooMany` past `CAP`.
+    `PAGE_CAP` watchers (the page's own agent not counted, and never refused), and `TooMany`
+    past `CAP`. A page that looks full first loses the watches of agents who can no longer read
+    it. Past that, 200 distinct live agents that can read the page can still fill it; agents are
+    admin-minted keys or signed-in apps while `people.OPEN_SIGN_IN` is off.
 
     The counts and the insert run under two transaction locks, always taken page first, then
     agent, so two PUTs racing at the edge cannot both pass (a no-op on SQLite, whose writers
@@ -91,17 +133,15 @@ def watch(
     with db.connect() as conn, conn.transaction():
         conn.advisory_lock(page_lock_key(artifact_id))
         conn.advisory_lock(agent_lock_key(agent))
-        if store._owned(conn, artifact_id, agent, as_reader=True) is None:
+        page = store._owned(conn, artifact_id, agent, as_reader=True)
+        if page is None:
             raise store.NotFound()
         if conn.execute(
             "select 1 from page_watch where agent = %s and artifact_id = %s",
             (agent, artifact_id),
         ).fetchone():
             return False
-        (watchers,) = conn.execute(
-            "select count(*) from page_watch where artifact_id = %s", (artifact_id,)
-        ).fetchone()
-        if watchers >= PAGE_CAP:
+        if agent != page[2] and _page_is_full(conn, artifact_id, page[2]):
             raise PageFull()
         # What counts against the cap is what the agent can see in its list.
         if len(_listing(conn, agent)) >= CAP:
@@ -190,13 +230,7 @@ def fan_out(
         if watcher == actor or watcher in skip:
             continue
         # Read at the moment of the change, by the same rule `watch` used.
-        clause, params = _reads(conn, watcher)
-        can = conn.execute(
-            "select 1 from artifact where id = %s and deleted_at is null"  # noqa: S608 -- `clause` is built from fixed names
-            f" and {clause}",
-            (artifact_id, *params),
-        ).fetchone()
-        if can is None:
+        if not _can_read(conn, watcher, artifact_id):
             continue
         if kind == "watched_page_changed":
             # One claim, atomic: the window opens for the one change that wins the update.

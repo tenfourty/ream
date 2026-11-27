@@ -424,7 +424,10 @@ agents stay closed); (b) mark Jeremy's own machines personal, so they read his c
   (`events.safe_cursor`), so an agent that wants them must always pass the flag.
 - Fan-out cost in event and outbox rows: the window bounds `watched_page_changed` to one a watcher and page every 10 minutes,
   but comments are not coalesced (every other person's comment writes a row per watcher), and a page takes at most 200
-  watchers (`watches.PAGE_CAP`, every row of the page, readable or not), which bounds the fan-out inside the change's transaction.
+  watchers (`watches.PAGE_CAP`), which bounds the fan-out inside the change's transaction. The page's own agent is neither counted nor
+  refused (`fan_out` skips it); when a page looks full, watchers who can no longer read it (the `fan_out` rule) lose their rows before
+  a new watch is refused. Left open: 200 distinct live agents that can read the page can still fill it (agents are admin-minted keys or
+  signed-in apps while `people.OPEN_SIGN_IN` is off).
 - Slice 1 is wider than it looks: fourteen PAGE_OWNER rows exist (`tests/test_owner_id_sites.py:28-54`)
   and eleven callers of the answering predicates change signature. Land it alone, with the sites test.
 - Display names come from OIDC at the company: sanitised, display-only, and the comma rule stops forgery.
