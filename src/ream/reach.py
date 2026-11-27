@@ -4,9 +4,15 @@ per request, from a key (exactly today's reach) or from a signed-in app (wider).
 The `/mcp` endpoint sets the caller's reach for the length of one message (`acting`); the
 store's one page check (`store._owned`, and `store.list_readable`) asks `widened(agent)`
 whether the agent it was given is acting with a wider reach than a key's. Nothing else sets
-it, so `/api/v1` and every key behave exactly as before: a key's reach widens nothing.
+it, so `/api/v1` and every SHARED key behave exactly as before. A PERSONAL key (slice 4) reads
+as its person does (`agents.key_reach`, `access.reads_sql`) but still changes only its own pages.
 `_scoped` (rename, pin, archive, delete, restore) widens the same way; purge (`destroy`),
 transfer and who-can-read never do (`widen=False`).
+
+An app reads as its person (agents design, slice 2): the owner's app as the owner
+(`READS_AS_OWNER`), any other person's through `access.reads_sql` (`READS_AS_PERSON`: the
+pages of that person's personal agents and the pages open to agents). What an app may
+CHANGE is `writes()` in both cases: the agents that person owns, never anyone else's.
 """
 
 from __future__ import annotations
@@ -26,6 +32,8 @@ PERMISSIONS = (READ, WRITE, RELAY)
 # never the trash.
 READS_AS_AGENT = "agent"
 READS_AS_OWNER = "owner"
+# A signed-in app of a person who is not the owner: what `access.reads_sql` says.
+READS_AS_PERSON = "person"
 
 
 @dataclass(frozen=True)
@@ -36,12 +44,17 @@ class Reach:
     writable_agents: tuple[str, ...] = ()
     can_relay: bool = True
     permissions: frozenset[str] = frozenset(PERMISSIONS)
+    # Whose app this is (None for a key).
+    person: str | None = None
 
     def writes(self) -> tuple[str, ...]:
         return self.writable_agents or (self.agent,)
 
     def reads_all(self) -> bool:
         return self.readable == READS_AS_OWNER
+
+    def reads_person(self) -> bool:
+        return self.readable == READS_AS_PERSON and self.person is not None
 
     def writes_others(self) -> bool:
         return self.writes() != (self.agent,)
@@ -65,6 +78,14 @@ def acting(reach: Reach) -> Iterator[Reach]:
         _current.reset(token)
 
 
+def bind(wider: Reach) -> None:
+    """Act with `wider` for the rest of this request: a personal key's reach, set by the
+    `/api/v1` auth dependency (agents design, slice 4). There is nothing to reset: every request
+    runs in its own task, whose context ends with it (an `acting` block is for a message that
+    shares a task with others)."""
+    _current.set(wider)
+
+
 def widened(agent: str | None) -> Reach | None:
     """The reach `agent` acts with right now, when it is wider than a key's; None
     otherwise, and always for a call made for any other agent (a nudge, a housekeeping
@@ -72,4 +93,6 @@ def widened(agent: str | None) -> Reach | None:
     found = _current.get()
     if found is None or agent is None or found.agent != agent:
         return None
-    return found if found.reads_all() or found.writes_others() else None
+    if found.reads_all() or found.reads_person() or found.writes_others():
+        return found
+    return None

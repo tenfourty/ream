@@ -604,6 +604,101 @@ def _sql_text(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
+def _people_slice_2(conn) -> None:
+    """SQLite schema step 37 (people design, slice 2); schema.sql does the same on Postgres.
+
+    `page_read` (person, artifact_id) and `human_pref` (person, key) are rebuilt, `page_pin`
+    (made by the statement before this function in step 37) is filled from `artifact.pinned_at` (kept only as a record, no longer read or written), and
+    `frame_pass` gains `person` (its rows do not count toward the owner refusal, as on
+    Postgres). Every migrated row takes the owner id recorded in
+    `service_meta`; a database that holds such rows and records none is refused, because
+    rows given a guessed owner would be read as a stranger's."""
+    owner = conn.execute(
+        "select value from service_meta where key = 'owner_id'"
+    ).fetchone()
+    owner = owner[0] if owner else None
+    held = sum(
+        conn.execute(f"select count(*) from {table}{where}").fetchone()[0]  # noqa: S608 -- fixed names
+        for table, where in (
+            ("page_read", ""),
+            ("human_pref", ""),
+            ("artifact", " where pinned_at is not null"),
+        )
+    )
+    if held and owner is None:
+        raise RuntimeError(
+            "schema step 37 found per-person rows but service_meta records no owner id:"
+            " start the service once on the previous version, or record it"
+        )
+    conn.execute(
+        "create table page_read_new ("
+        " person text not null,"
+        " artifact_id text not null references artifact(id) on delete cascade,"
+        " read_version integer not null,"
+        " read_at timestamptz not null default (artifacts_now()),"
+        " primary key (person, artifact_id))"
+    )
+    conn.execute(
+        "insert into page_read_new (person, artifact_id, read_version, read_at)"
+        " select %s, artifact_id, read_version, read_at from page_read",
+        (owner,),
+    )
+    conn.execute("drop table page_read")
+    conn.execute("alter table page_read_new rename to page_read")
+    conn.execute(
+        "create table human_pref_new ("
+        " person text not null,"
+        " key text not null,"
+        " value text not null,"
+        " updated_at timestamptz not null default (artifacts_now()),"
+        " primary key (person, key))"
+    )
+    conn.execute(
+        "insert into human_pref_new (person, key, value, updated_at)"
+        " select %s, key, value, updated_at from human_pref",
+        (owner,),
+    )
+    conn.execute("drop table human_pref")
+    conn.execute("alter table human_pref_new rename to human_pref")
+    conn.execute(
+        "insert into page_pin (person, artifact_id, pinned_at)"
+        " select %s, id, pinned_at from artifact where pinned_at is not null",
+        (owner,),
+    )
+    conn.execute("alter table frame_pass add column person text")
+    conn.execute("update frame_pass set person = %s", (owner,))
+
+
+def _people_slice_3(conn) -> None:
+    """SQLite schema step 38 (people design, slice 3); schema.sql does the same on Postgres.
+
+    Fills `form_answer` from each `decision.answer_record` (kept) and sets `receipt.person`,
+    both to the owner id `service_meta` records; a database that holds such rows and records
+    none is refused, because rows given a guessed owner would be read as a stranger's."""
+    owner = conn.execute(
+        "select value from service_meta where key = 'owner_id'"
+    ).fetchone()
+    owner = owner[0] if owner else None
+    held = conn.execute("select count(*) from receipt").fetchone()[0]
+    held += conn.execute(
+        "select count(*) from decision where answer_record is not null"
+    ).fetchone()[0]
+    if held and owner is None:
+        raise RuntimeError(
+            "schema step 38 found receipts or form answers but service_meta records no"
+            " owner id: start the service once on the previous version, or record it"
+        )
+    if owner is None:
+        return
+    conn.execute("update receipt set person = %s", (owner,))
+    conn.execute(
+        "insert into form_answer (decision_id, person, answer_record, answered_at)"
+        " select id, %s, answer_record, coalesce(answered_at, created_at) from decision"
+        " where answer_record is not null",
+        (owner,),
+    )
+
+
 # Step 1 is `schema_sqlite.sql`, run whole on a fresh file. Every later change is
 # a numbered step here, run statement by statement, never an edit to that file.
 _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
@@ -1088,6 +1183,90 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " disabled_at timestamptz,"
             " unique (issuer, subject))"
         ),
+    ),
+    # 24 Nov 2026: per-person state, people design slice 2 (see schema.sql): read marks and
+    # preferences rebuilt with the person in their key, pins in their own table, and the person
+    # a frame pass was minted for. Rows that exist take the owner id `service_meta` records.
+    # `page_pin` is created by the plain statement first (so the table lists find it), then the
+    # function rebuilds the rest and fills it.
+    37: (
+        (
+            "create table page_pin ("
+            " person text not null,"
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " pinned_at timestamptz not null,"
+            " primary key (person, artifact_id))"
+        ),
+        _people_slice_2,
+    ),
+    # 24 Nov 2026: per-person answers and receipts, people design slice 3 (see schema.sql).
+    # `form_answer` is created by the plain statement (so the table lists find it); the
+    # function fills it and `receipt.person` from what `service_meta` records.
+    38: (
+        "alter table decision add column addressed_to text",
+        (
+            "create table form_answer ("
+            " decision_id text not null references decision(id) on delete cascade,"
+            " person text not null,"
+            " answer_record jsonb not null,"
+            " answered_at timestamptz not null,"
+            " primary key (decision_id, person))"
+        ),
+        "alter table receipt add column person text",
+        _people_slice_3,
+    ),
+    # 25 Nov 2026: when the agent acknowledged each person's answer, people design slice 3b
+    # (see schema.sql). An older image ignores the column.
+    39: ("alter table form_answer add column seen_at timestamptz",),
+    # 26 Nov 2026: gallery sign-in's two tables, people design slice 4 (see schema.sql).
+    # Nothing reads them until REAM_GALLERY_SIGN_IN is on.
+    40: (
+        (
+            "create table person_signin ("
+            " id text primary key,"
+            " state_sha256 text unique,"
+            " browser_sha256 text not null,"
+            " oidc_nonce text not null,"
+            " oidc_verifier text not null,"
+            " next_path text not null default '/',"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null)"
+        ),
+        (
+            "create table person_session ("
+            " token_sha256 text primary key,"
+            " person text not null,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null,"
+            " last_seen_at timestamptz)"
+        ),
+        "create index person_session_person on person_session (person)",
+    ),
+    # 26 Nov 2026: watching, agents design slice 3 (see schema.sql). An older image ignores
+    # the table, so watches go silent.
+    41: (
+        (
+            "create table page_watch ("
+            " agent text not null,"
+            " artifact_id text not null references artifact(id) on delete cascade,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " session text,"
+            " changed_notified_at timestamptz,"
+            " primary key (agent, artifact_id))"
+        ),
+        "create index page_watch_artifact on page_watch (artifact_id)",
+    ),
+    # 26 Nov 2026: personal machines, agents design slice 4 (see schema.sql). An older image
+    # ignores the table, so a personal key narrows back to a key's reach (fails closed).
+    42: (
+        (
+            "create table agent_person ("
+            " agent text primary key,"
+            " person text not null,"
+            " set_at timestamptz not null default (artifacts_now()),"
+            " set_by text)"
+        ),
+        "create index agent_person_person on agent_person (person)",
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)

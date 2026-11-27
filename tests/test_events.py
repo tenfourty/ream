@@ -69,7 +69,9 @@ def test_appending_each_kind_records_exactly_one_row_with_the_owning_seat(db, ki
             summary="s",
             ref_id="ref1",
         )
-    rows = events.list_for_agent(db, "ops-seat", include_receipts=True)
+    rows = events.list_for_agent(
+        db, "ops-seat", include_receipts=True, include_watched=True
+    )
     assert len(rows) == 1
     assert rows[0].seq == seq
     assert rows[0].agent == "ops-seat"

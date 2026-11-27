@@ -183,6 +183,15 @@ class _TestsDatabase:
         return getattr(self.target, name)
 
 
+def _route_paths(app) -> set:
+    if not hasattr(
+        app, "router"
+    ):  # `create_app`'s host dispatcher: no routes of its own
+        return set()
+    # A mounted router is one entry with no path of its own: name it by its object.
+    return {getattr(r, "path", None) or f"<router {id(r)}>" for r in app.router.routes}
+
+
 class _ReusedApps:
     """One app per worker and database from each of `create_gallery_app(db)`
     and `create_app(db)`, handed to one test at a time.
@@ -212,6 +221,7 @@ class _ReusedApps:
     real_app = None
     entries: ClassVar[dict] = {}
     handed: ClassVar[set] = set()
+    routes: ClassVar[dict] = {}  # key -> the route paths the app had when built
 
     @classmethod
     def install(cls) -> None:
@@ -234,6 +244,7 @@ class _ReusedApps:
         if entry is None:
             held = _TestsDatabase(db)
             entry = cls.entries[key] = (*build(held), held)
+            cls.routes[key] = _route_paths(entry[0])
         app, limiters, held = entry
         assert limiters, "a reused app must have its limiter to reset"
         held.target = db
@@ -242,6 +253,19 @@ class _ReusedApps:
             ratelimit.FailedAuthLimiter.__init__(limiter)
         cls.handed.add(key)
         return app
+
+    @classmethod
+    def check_routes_unchanged(cls) -> None:
+        """A reused app is every later test's app: a test that adds a route to one
+        (`@app.get(...)`) leaks it into them. Such a test builds its own app (a
+        `limiter=` of its own makes the factory build afresh)."""
+        for key in cls.handed:
+            added = _route_paths(cls.entries[key][0]) - cls.routes[key]
+            assert not added, (
+                f"a test added routes {sorted(added)} to a reused app, which every later "
+                "test on this worker would then see: build its own app (pass "
+                "limiter=ratelimit.FailedAuthLimiter())"
+            )
 
     @classmethod
     def create_gallery_app(cls, db=None, limiter=None):
@@ -292,7 +316,10 @@ def _apps_hand_out_afresh():
     """A reused app goes to at most one caller per test."""
     _ReusedApps.handed.clear()
     yield
-    _ReusedApps.handed.clear()
+    try:
+        _ReusedApps.check_routes_unchanged()
+    finally:
+        _ReusedApps.handed.clear()
 
 
 # How the controller hands its server to the xdist workers it spawns.
@@ -1052,6 +1079,13 @@ def _postgres_only(request):
 def db(_schema: _Schema, dsn: str, request):
     _schema.empty()  # every table empty, every sequence restarted
     database = Database(dsn)
+    # A started service has recorded its owner (`owner.check`), and the SQL rule for a question
+    # with no `addressed_to` (`agents.owner_sql`) reads that record. A test of a database no
+    # service has started (test_owner.py) clears it first.
+    with database.connect() as conn:
+        conn.execute(
+            "insert into service_meta (key, value) values ('owner_id', 'jeremy')"
+        )
     yield database
     database.close()  # its reused SQLite connections, not left to the collector
     if "fresh_schema" in request.fixturenames:

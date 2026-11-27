@@ -28,8 +28,10 @@ from ream.db import Database, Rollback
 from ream.keys import (
     AGENT_NAME,
     NAME_LOCK_KEY,
+    PERSON_REASON,
     RESERVED_REASON,
     is_reserved_agent_name,
+    person_holds,
 )
 
 # The one name lock (keys.NAME_LOCK_KEY): two renames, or a rename and a first
@@ -162,6 +164,9 @@ def rename_agent(
                     f"{name} is a person-and-app agent (an MCP app's): its name cannot "
                     f"be {said}"
                 )
+        # A person's id is a name in the same space (people design, slice 4).
+        if person_holds(conn, new):
+            raise Refused(f"invalid agent name {new!r}: {PERSON_REASON}")
         onward = conn.execute(
             "select new from agent_alias where old = %s", (new,)
         ).fetchone()
@@ -175,6 +180,11 @@ def rename_agent(
                 f"{new} was itself renamed to {onward[0]}; rename {old} "
                 f"to {onward[0]} instead"
             )
+
+        # A personal key (agents design, slice 4) is one person's machine. Merging two that
+        # belong to different people, or a personal one into a shared one that already has keys
+        # or pages (or the reverse), would hand one side's pages to the other's readers.
+        _check_same_person(conn, old, new)
 
         fold: list[str] = []
         if revoke_keys:
@@ -211,6 +221,8 @@ def rename_agent(
         counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
         counts["agent_pickup.agent"] = _merge_pickup(conn, old, new)
         counts["page_viewer.viewer"] = _merge_viewers(conn, old, new)
+        counts["page_watch.agent"] = _merge_watches(conn, old, new)
+        counts["agent_person.agent"] = _merge_person(conn, old, new)
 
         moved = sum(counts.values())
         already = conn.execute(
@@ -288,6 +300,71 @@ def _merge_viewers(conn, old: str, new: str) -> int:
     return conn.execute(
         "delete from page_viewer where kind = 'agent' and viewer = %s", (old,)
     ).rowcount
+
+
+def _person_row(conn, agent: str) -> str | None:
+    row = conn.execute(
+        "select person from agent_person where agent = %s", (agent,)
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def _belongs(person: str | None) -> str:
+    return "a shared agent" if person is None else f"{person}'s personal key"
+
+
+def _check_same_person(conn, old: str, new: str) -> None:
+    """Refuse a rename that would merge agents belonging to different people. A shared agent
+    belongs to nobody: it differs from a personal one, unless `new` is a name nothing holds yet
+    (no key, no page, no person row), where the rename is a plain move."""
+    mine, theirs = _person_row(conn, old), _person_row(conn, new)
+    if mine == theirs:
+        return
+    taken = theirs is not None or any(
+        conn.execute(sql, (new,)).fetchone() is not None
+        for sql in (
+            "select 1 from agent_key where agent = %s limit 1",
+            "select 1 from artifact where agent = %s limit 1",
+        )
+    )
+    if taken:
+        raise Refused(
+            f"{old} is {_belongs(mine)} and {new} is {_belongs(theirs)}: agents that belong to "
+            "different people are not merged (clear or set the person of one first with "
+            "`artifacts-admin set-agent-person` / `clear-agent-person`)"
+        )
+
+
+def _merge_person(conn, old: str, new: str) -> int:
+    """`old`'s person row moves to `new` (the same person, or `new` held none); `new`'s own stays."""
+    mine = _person_row(conn, old)
+    if mine is None:
+        return 0
+    if _person_row(conn, new) is None:
+        return conn.execute(
+            "update agent_person set agent = %s where agent = %s", (new, old)
+        ).rowcount
+    return conn.execute("delete from agent_person where agent = %s", (old,)).rowcount
+
+
+def _merge_watches(conn, old: str, new: str) -> int:
+    """What an agent watches moves to `new` (`page_watch`, key `(agent, artifact_id)`): one row
+    per page, `new`'s own kept where it has one, with the later coalescing stamp so a rename
+    never reopens a window. Watch events already written follow through `event.agent`."""
+    conn.execute(
+        "insert into page_watch (agent, artifact_id, created_at, session, changed_notified_at)"
+        " select %s, artifact_id, created_at, session, changed_notified_at from page_watch"
+        " where agent = %s"
+        " on conflict (agent, artifact_id) do update"
+        " set changed_notified_at = case"
+        "   when page_watch.changed_notified_at is null"
+        "     then excluded.changed_notified_at"
+        "   when excluded.changed_notified_at > page_watch.changed_notified_at"
+        "     then excluded.changed_notified_at"
+        "   else page_watch.changed_notified_at end",
+        (new, old),
+    )
+    return conn.execute("delete from page_watch where agent = %s", (old,)).rowcount
 
 
 def _merge_pickup(conn, old: str, new: str) -> int:

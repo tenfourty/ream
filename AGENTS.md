@@ -70,8 +70,12 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | The old import name `artifacts` (a shim; `artifacts.X` is the `ream.X` module) | `src/artifacts/__init__.py` |
 | Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
+| Who may read a page, for a signed-in app of a person (`access.person_reads`, `reads_sql`; `reach.Reach.person`; the owner's app reads all, another person's what `access.py` says; design `docs/agent/specs/2026-11-26-agents-and-watching-design.md`) | `src/ream/access.py`, `src/ream/reach.py`; `tests/test_person_reach.py` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
-| People: the owner is person #1 (the `person` table, seeded by `owner.check`); `people.current(request)` is who a gallery request is for, `people.require_owner` an owner-only route; design `docs/agent/specs/2026-11-24-people-design.md` | `src/ream/people.py`; `tests/test_people_seed.py`, `tests/test_owner_id_sites.py` |
+| People: the owner is person #1 (the `person` table, seeded by `owner.check`); `people.current(request)` is who a gallery request is for, `people.require_owner` an owner-only route; the gallery's sign-in gate, session cookie and `/signin` routes are `src/ream/signin.py` (runbook `docs/agent/runbooks/gallery-sign-in.md`); design `docs/agent/specs/2026-11-24-people-design.md` | `src/ream/people.py`, `src/ream/signin.py`; `tests/test_people_seed.py`, `tests/test_owner_id_sites.py`, `tests/test_gallery_sign_in.py`, `tests/test_gate_covers_every_route.py`, `tests/test_browser_session_cookie.py` |
+| Agents, personal or shared: who an agent belongs to, who owns its pages, the via line (slices 1-4 built); design `docs/agent/specs/2026-11-26-agents-and-watching-design.md` | `src/ream/agents.py` |
+| Agents following a page (slice 3): `PUT /api/v1/pages/{id}/watch`, `GET /watches`, the two `watched_*` event kinds (left out of `GET /events` and every wait unless asked for, in `whats_new` always), the fan-out inside the change's transaction, the coalescing window and the cap; same design | `src/ream/watches.py`; `tests/test_watch.py`, `tests/test_watch_events_opt_in.py`, `tests/test_watch_migration.py` |
+| Personal machines (slice 4): a key's agent the owner marked as one person's (`agent_person`; `artifacts-admin set-agent-person` / `clear-agent-person`, or the owner's Machines page) READS as its person does (`agents.key_reach`, bound by the `/api/v1` auth dependency and by `/mcp` key calls; `access.reads_sql`) and still CHANGES only its own pages; `belongs_to` and `shown_as` on `/me`; `rename` refuses to merge agents of different people; no API or MCP route sets it; runbook `docs/agent/runbooks/personal-machines.md` | `src/ream/agents.py`, `access.py`, `rename.py`; `tests/test_personal_key.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | View counts: who read a page, per day and per viewer (`record`, best-effort, emits no event; read back by `report` through `GET /api/v1/pages/{id}/stats`, the MCP `page_stats` tool and `ream stats`); the design is `docs/agent/specs/2026-11-22-view-stats-design.md` | `src/ream/pageviews.py` |
 | Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render; a screenshot on request (`rendercore.shoot`, over the browser's DevTools pipe; `/v1/shot` on the renderer), and an agent's screenshot of a page it can read (`shots.take`, served at `GET /api/v1/pages/{id}/screenshot`) | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `devtools.py`, `thumbs.py`, `shots.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
@@ -127,6 +131,15 @@ The image's CMD is unchanged. Tests: `tests/test_internal_port.py`.
 `REAM_MCP_PUBLIC_URL` turns on `/mcp` (MCP over stateless HTTP, `src/ream/mcp.py`) on that origin, which must be
 the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_KEYS` says whether it takes agent keys
 (unset: yes while `REAM_MCP_SIGN_IN` is off, no once it is on; `1` takes them beside sign-in; `0` refuses to start unless sign-in is on). How to try it, and to connect a Claude Code session with its agent key (`ream mcp-headers` as the entry's `headersHelper`): `docs/mcp.md`.
+`REAM_GALLERY_SIGN_IN` (`on` or `off`; unset: off, nothing about the gallery changes and `/signin*` and `/signout` answer 404) puts a gate
+in front of the whole gallery app (`src/ream/signin.py`): a request with no live session is sent to sign in (a browser navigation, 303) or
+answers 401, except the fixed open list (`/healthz`, `/favicon.svg`, `/signin`, `/signin/callback`, `/mcp`, `/oauth/`, `/.well-known/`, `/api/v1/`;
+`tests/test_gate_covers_every_route.py` fails for an unclassified route). It signs in through the same provider settings as `REAM_MCP_SIGN_IN`
+(`REAM_OIDC_*`), needs `REAM_GALLERY_ORIGIN` to be https (loopback excepted), and needs `<gallery origin>/signin/callback` registered at the
+provider as a second redirect address. The session is the host-only `__Host-ream_session` cookie, 12 hours, never sent to the content domain
+(`tests/test_browser_session_cookie.py`). `REAM_SIGN_IN_WHO` (`owner`, the default, or `anyone`, refused to start while `people.OPEN_SIGN_IN` is
+False) says who may sign in. **Rolling back below this image, or turning sign-in off, with no authenticating proxy is FORBIDDEN: an older image
+ignores the setting and serves the gallery open, and off removes the gate; restore authentication or a deny rule at the proxy first.** Runbook: `docs/agent/runbooks/gallery-sign-in.md`.
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
@@ -230,6 +243,19 @@ reading settings (values identical today; sign-in for other people comes later).
 read of the owner id (call, `.owner_id` attribute, import) is classified in `tests/test_owner_id_sites.py`:
 a new one fails it until you say whether it is the request's person, the page owner or the deployment
 seed. The same test fails for a gallery write route that does not depend on `people.current`.
+Read marks, preferences and pins are per person (slice 2): `page_read` (person, artifact_id),
+`human_pref` (person, key), `page_pin` (person, artifact_id, pinned_at; `artifact.pinned_at` is kept only as a
+record and neither read nor written), `frame_pass.person`. **There is no image rollback for this schema change:**
+an older image on a migrated database fails on every page open (its `mark_read` inserts into `page_read`
+without `person`, and its `ON CONFLICT (artifact_id)` matches no unique key), and pins made meanwhile are lost
+going forward. On SQLite, restore the newest nightly snapshot (`docs/agent/runbooks/sqlite.md`, § "A real restore (a
+corrupt or lost database)"); writes since it are lost, so take a snapshot just before upgrading. On Postgres, restore the
+deployment's own pg_dump backup (this repo has no runbook for that). Otherwise roll forward with a fix. The gallery passes the request's person
+(`store.mark_read`, `store.set_pinned(person=)`, `holds.set_review_mode`, `inbox.gather(person=)`); agent
+routes and MCP read and write the owner's (`folders.his()`), with no key twin for a person's own state.
+`change-owner` moves their `person` columns too. SQLite step 37 and the end of `schema.sql` do the move.
+`change-owner` refuses (`owner.Refused`, printed as `refused: ...`, nothing written, a dry run too) a new id that a `person` row,
+an `mcp_agent.person` or an `mcp_app.person` already holds: the move would collide with that row (`owner._HELD_BY`).
 
 No agent may be named the owner id. Do not write the id as a literal in code: read
 `settings.owner_id()` (SQL takes it as a bound parameter).

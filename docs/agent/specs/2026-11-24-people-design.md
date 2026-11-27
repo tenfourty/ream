@@ -1,6 +1,6 @@
 # People: the owner becomes person #1 (24 Nov 2026)
 
-Status: slice 1 built; slices 2 to 4 designed, not built. Written up from the
+Status: slices 1, 2 and 3a built; slice 3b (the agent-visible `answers[]`) built; slice 4 (gallery sign-in) built, off by default. Written up from the
 architect's blueprint and the artifacts office's decisions of 24 Nov 2026 (reversible).
 
 ## What and why
@@ -24,13 +24,25 @@ none). `people.OPEN_SIGN_IN = False` (precedent `clientlevel.COMMENTS_REQUIRED`)
   (issuer, subject), never on email. `owner.check` seeds the owner (insert on conflict do nothing) and
   copies issuer and subject from the `service_meta` pin `oidc_owner_sub` ("<issuer> <sub>") when
   there is one. `owner._COLUMNS` gains `person.id`, so `change-owner` moves the row.
-- Slice 2: `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
-  `page_pin(person, artifact_id, pinned_at)` filled from `artifact.pinned_at` (kept, unread);
-  `frame_pass.person`. Migrated rows take the `service_meta` owner id.
-- Slice 3: `decision.addressed_to` (null = page owners); `decisions.may_answer(person, d)`;
-  `form_answer(decision_id, person, answer_record, answered_at, pk(decision_id, person))` filled from
-  `decision.answer_record` (kept); `receipt.person`; `answers[]` on form reads (agent-visible, so
-  offices review first).
+- Slice 2 (built): `page_read` (pk person, artifact_id) and `human_pref` (pk person, key) rebuilt;
+  `page_pin(person, artifact_id, pinned_at)` filled once from `artifact.pinned_at` (kept only as a record, neither read
+  nor written; no image rollback: an older image on a migrated database
+  fails on every page open, and pins made meanwhile are lost. On SQLite restore the newest nightly snapshot
+  (`docs/agent/runbooks/sqlite.md`, § "A real restore"; writes since it are lost, so snapshot just before
+  upgrading); on Postgres restore the deployment's own pg_dump backup (no runbook here); otherwise roll
+  forward with a fix); `frame_pass.person`, set when the gallery mints a pass and read by nothing yet.
+  Migrated rows take the `service_meta` owner id; a database that holds such rows and records no
+  owner is refused rather than guessed. SQLite does it in step 37 (a function: rebuilds and copies);
+  Postgres at the end of `schema.sql`, each part guarded by its own "already done" test (the column or
+  the table), because `schema.sql` runs at every start and a pin the owner removed must not return.
+  Postgres adds `person` as the last column and swaps the primary key; SQLite rebuilds the tables
+  with `person` first; the copier matches columns by name.
+- Slice 3a (built): `decision.addressed_to` (null = page owners); `decisions.may_answer(person, d)`;
+  `form_answer(decision_id, person, answer_record, answered_at, pk(decision_id, person))` filled once
+  from `decision.answer_record` (kept, still what the agent reads); `receipt.person`. SQLite step 38;
+  Postgres at the end of `schema.sql`, its backfill guarded by the new `receipt.person` column.
+  Migrated rows take the `service_meta` owner id, and rows with no recorded owner are refused.
+- Slice 3b (built): `answers[]` on form reads; see "Slice 3b as built".
 - Stays single-owner until steps 3 and 4: `can_read`, MCP `owner_login` / `NotOwner`, page
   ownership, archive, rename, share, machines and keys (behind `people.require_owner`), plug-in answer
   sources, `pageviews` kind owner, email shares.
@@ -89,8 +101,175 @@ Each lands alone and the homelab stays byte-identical until a setting is set.
 - Slice 4 must fill person #1's issuer and subject from `REAM_OIDC_OWNER_SUBJECT` when it is set
   (no `oidc_owner_sub` pin is written then, so `owner.check` finds nothing to copy).
 
+## Slice 2 as built
+
+The wall (`_wall`, `_folder_pages`) joins the request person's `page_read` (`pr`) and `page_pin` (`pp`)
+rows (`_PERSON_JOINS`, two parameters); the unread test, the pin order and the "Older pages" cursor read
+those. `comments.unseen_reply(read_at)` replaces the constant `UNSEEN_REPLY`: the wall passes `pr.read_at`,
+the inbox joins `page_read` for its person (`inbox.gather/count/items(person=)`). The detail page marks the
+page read for the request's person; the pin route stays owner-only (`require_owner`: access is single-owner)
+but writes `page_pin` for the person it was given; `/a/{id}/frame` and the page view mint passes with the
+person. `holds.get_mode/set_mode/set_review_mode` take a person (default the owner: an agent opening a review
+asks for the owner's preference). Agent routes and MCP read "has he read it" (`seen_version`, `seen_at`) and
+`pinned_at` from the owner's rows (`folders.his()`), and an agent's pin writes the owner's `page_pin`.
+Decision C holds: no route takes a person id and none reads or writes another person's state.
+Tests: `tests/test_per_person_state.py` (two people by overriding `people.current`, `OPEN_SIGN_IN`
+flipped), `tests/test_people_slice2_migration.py` (both backends), `tests/test_migrate.py`'s copy round
+trip, and `tests/test_owner.py` (`change-owner` moves the new columns).
+
+## Slice 3a as built
+
+Storage and internal logic only: nothing an agent reads over `/api/v1` or MCP changes
+(`decisions.public` drops `addressed_to`; `answer_record` and every receipt are as before).
+- `decisions.may_answer(person, d)` (and `addressed_ok(person, addressed_to)` for a caller that holds
+  only the column): the person a question is addressed to, else the page's owners (today the owner).
+  The gallery's answer routes pass the request's person to `decisions.answer(person=)` and
+  `formanswer.submit(person=)`; anyone else gets `store.NotFound`, the 404 of a decision that is not
+  there. No agent route sets `addressed_to` yet (nothing sets it today).
+- A form is answered per person: `formanswer.submit` merges a person's submit into their own
+  `form_answer` row (not another person's) and also writes `decision.answer_record`, so the agent's
+  record is the latest submitter's. With one person that is the record as before. How several
+  people's answers reach the agent is slice 3b's `answers[]`. A relay (`formanswer.relay`) is
+  the addressed person's (the owner's when `addressed_to` is null) and merges into their row. A republish brings every person's row onto the new
+  version (`forms._reconcile_record`). The gallery's form bar (`forms_ui.payload`) draws the
+  request person's own record.
+- `receipt.person` is the decision's `answered_by` when the receipt was written, never sent to an
+  agent. The gallery says nothing of a receipt or a pickup on an answer someone else gave
+  (`_render_decisions(person=)`).
+- `comments._HIS_THREAD` is per person: a reply is unseen for the person who wrote in its thread
+  (`me.person`, joined by `comments.ME_JOIN` beside `pr` and `pp`), no longer for any human. A reply
+  under a note left on a decision (`anchor.kind = 'decision'`) is still every reader's.
+- `change-owner` moves `decision.addressed_to`, `form_answer.person` and `receipt.person`.
+- Tests: `tests/test_people_answers.py` (two people), `tests/test_people_slice3_migration.py` (both
+  backends), `tests/test_migrate.py`'s copy round trip, `tests/test_owner.py`,
+  `tests/test_per_person_state.py` (the thread is per person).
+- Rolling back is safe for answers, in two cases an older image can produce on a migrated database
+  (its code runs; the new columns and table are unread by it):
+  1. It writes a submit or relay: only `decision.answer_record` changes, so a person's `form_answer`
+     row goes stale or is missing. The backfill does not run again, but every reader and writer of a
+     person's record picks the newer one by one rule (`formanswer.newest_record`): when the
+     decision's `answer_record` says `answered_by` is that person and the row is missing or names
+     another `submit_id`, the decision's record is used. The form bar (`forms_ui.payload`) draws it,
+     and the next submit or relay (including a relay that changes nothing) merges into it and writes
+     it back as the row.
+  2. It republishes a page with a changed field: it reconciles only `decision.answer_record` (the
+     changed answer blanked and moved to `stale`), and the row stays on the old version with the
+     same `submit_id`, so `newest_record` returns the row. Every reader and writer then brings the
+     record onto the form's latest version, read-only, through `formanswer.on_latest` (the writes
+     before merging, `forms_ui.payload` before `formrecord.gallery_view`), so the bar does not carry
+     the old answer into the new question and shows it stale, as before slice 3. The row itself is
+     rewritten by the next write.
+  With one person this is the old behaviour; with several it stays right because another person's
+  record never names them. Not covered: an older image's record for a person who is not the
+  decision's `answered_by` (it cannot make one). Tests: `tests/test_people_answers.py` (an older
+  image's write, stale and missing row; submit, relay, an unapplied relay, and the form bar; an older
+  image's republish; an unapplied relay's `answered_at`).
+  Once a route writes `addressed_to`, an older image ignores `may_answer` on reads and writes: it
+  draws the buttons and takes an answer from the owner on a question addressed to someone else, and
+  files a relay as the owner's. Do not write `addressed_to` from a route until no older image runs.
+
+## Addressed questions as built (before anything sets `addressed_to`)
+
+Nothing writes `addressed_to` from a route yet; the gaps below are closed so that when one does, a
+question for a person other than the owner behaves right everywhere. Agent-facing output is
+unchanged (`decisions.public` still drops `addressed_to`; the agent feeds, `across_seats` and
+`open_counts` with no person, read every row as before).
+- **A relay files under the person the question is addressed to**, else the owner. `formanswer.relay`
+  merges into that person's `form_answer` row and writes `answered_by` (record, history entry,
+  decision) as them; `decisions.record_elsewhere` writes `answered_by` (row and event body) as them,
+  so the receipt's person follows (`receipt.person` is the decision's `answered_by`). An unapplied
+  relay changes nothing: it leaves the decision's `answer_record` alone unless that is already this
+  person's, and gives their row their own `answered_at` (the decision's when the decision is theirs,
+  else the row's), never another person's.
+- **Reads follow `decisions.may_answer`.** `decisions.addressed_ok_id` / `addressed_sql` are the
+  id and SQL forms of it (the owner is `settings.owner_id()`). `across_seats(person=)` and
+  `open_counts(person)` take it, and the inbox (`gather`, `count`) passes the request's person. The
+  wall's per-page "waiting" count, its waiting sort and cursor (`_wall_waiting(person)`) and the
+  folder tiles' count use `me.person`. `_render_decisions` draws an open question the
+  reader may not answer as a read-only card (the question, whom it is for, no form, hold or live
+  switch; the slot and "held on another page" text stay true) and no change-your-answer card or hint
+  on a settled one; read-only cards sit under their own "Waiting on others" heading, so "Waiting on you"
+  appears only when something waits on the reader; a settled item another person answered says
+  "answered by <id>" and its note thread reads "Replies under the note"; the settled heading counts only what the reader may answer, adding "N settled for
+  someone else". `forms_ui.payload` draws no submit bar for a form addressed to someone else.
+- **A signed-in app relays only for the owner** (only the owner signs in): `record_elsewhere` and
+  `formanswer.relay` with `by_app` refuse a question addressed to anyone else as `store.NotFound`,
+  the answer for a decision out of reach. A key's relay keeps the rule above.
+- **Partner (Slack) items are the owner's**: `/pq/.../answer` is owner-only, so the inbox lists and
+  counts them, and shows their status block, only to the owner. Tests: `tests/test_people_addressed.py`.
+- Archive sheet: it says "N questions waiting for an answer", not "waiting on you", because the count is
+  every question the folder holds (`gallery.py`, `folder_archive_sheet`).
+- Not changed, on purpose: the owner-only archive-folder sheet and the agent API's folder preview count
+  every question (`store.set_folder_archived`), and the deleted tab's count of questions set aside
+  (`store.list_deleted`); neither is a count of what a person may answer.
+
+## Slice 3b as built
+
+Every form decision read carries `answers`, added in the one serialiser `decisions.public` (the row
+holds it as a derived field, filled by `decisions._with_held` from `formanswer.answers_list`, as
+`held_by` and `receipt` are), so `/api/v1` (both words), the MCP tools and `artifacts-decide --json`
+get it together. A non-form decision has no `answers` key; an unanswered form has `[]`. No client-level
+bump: the field is additive.
+
+- Element, one for each person with a record: `person`, `answered_at`, `version`, `submit_id`, `answers`
+  (`{field: value}`), `blank`, `stale` (the names of fields answered on an older version), `sources`
+  (`{field: {source, by, at, version, label}}`: who gave it, when, on which form version, and the
+  wording it answered), `source` (`page`, or the relay's source), `recorded_by` (the key that recorded
+  a relay; null for a tap), `said_at` (when a relayed answer was said), `seen_at`. No per-person history.
+- Order: oldest `answered_at` first, the person breaking a tie. Nothing is merged across people; every
+  top-level field keeps meaning the latest submitter's, and with one person `answers[0]` matches it.
+- The record is read as the form bar reads it: `newest_record` (an older image's decision record wins over
+  a stale or missing row) then `on_latest(strict=False)` onto the form's latest version.
+- `source`, `recorded_by` and `said_at` come from the history entry of the person's current `submit_id` (a
+  relay entry or a tap); a record an older image wrote has none, and the decision's own columns stand in.
+- A relay that changes nothing leaves that person's `answered_at` (and `seen_at`) as they were.
+- Seen per person: `form_answer.seen_at` (SQLite step 39; `schema.sql` for Postgres; an older image ignores
+  it). Acknowledging the form (`decisions._acknowledge`), or closing it, marks the rows it was shown (answered by the stamp; see the last bullet).
+  A submit or applied relay clears it for that person only (`formanswer.put_person_record`), and a republish
+  that made a person's own answer stale or reopened the form clears it for that person only (`forms._reconcile_record`, row by row; others stay seen), beside
+  the decision's own `acknowledged_at` (cleared when any person's row, or the decision's record, has news; every new answer already clears it), so a wait wakes for another
+  person's answer. The waiter's own "shown once an hour" mark is `id@answered_at`, which a new answer moves.
+- `artifacts-decide` text prints one block for each person only when there are several (the
+  acknowledgement hint once, at the end); with one person it is as before.
+- Acknowledging marks only rows answered by the acknowledge stamp (an answer submitted after it stays
+  unseen), and a `seen_at` older than `answered_at` (an older image changed the answer) reads as unseen
+  in `_element` and is re-marked by the next acknowledge. `close` and `uncollected` also carry `answers`.
+- Known, left as they are: `answers_list` costs a few queries per form row on list routes; a republish
+  cannot change `addressed_to` (checked: nothing in `forms.py` or `store.py` writes it after the ask), so
+  no row of a person the form is no longer addressed to can become visible that way.
+- MCP: a form field named after a Ream key (`person`, `by`, `agent`, `author`, `answered_by`, `source`, ...)
+  passes bare when its value matches that key's format, and is fenced otherwise. The fences name `person`, `by` and `submit_id`, `source` as Ream's own fields, each by its format;
+  the answers' values, `blank` and `stale` stay fenced as free text. Only tools that return a form decision
+  row carry `answers` (the MCP `questions` tool lists plain questions).
+- Tests: `tests/test_form_answers_list.py`.
+
+## Slice 4 as built
+
+Gallery sign-in, off by default: `REAM_GALLERY_SIGN_IN`, `REAM_SIGN_IN_WHO`, `src/ream/signin.py` (the
+gate, the `/signin`, `/signin/callback` and `/signout` routes, the session and in-flight tables,
+`signin.sweep` in `maintenance.nightly`), `people.current` answering the person the gate found, and
+`oidc.person_login`. Runbook: `docs/agent/runbooks/gallery-sign-in.md`. Tests:
+`tests/test_gallery_sign_in.py`, `tests/test_gallery_sign_in_off.py`,
+`tests/test_gate_covers_every_route.py`, `tests/test_browser_session_cookie.py` (the guard that the
+session cookie never reaches the content domain, in a real browser).
+
+Where it differs from the design above:
+
+- `/signout` answers 200 with a link to sign in again, not a redirect: the gallery's CSP
+  (`form-action 'self'`) blocks a redirect out of a form post, and a redirect to sign in would leave
+  for the provider.
+- `/signin` and `/signin/callback` pass a rate limiter (`ratelimit.FailedAuthLimiter`) that counts
+  every call from an address and answers 429 once an address has earned it.
+- The gate keeps a response's own `private` `Cache-Control` (the icon, a thumbnail keep their longer
+  policy) and otherwise stamps `private, no-store`; every gated response also varies on `Cookie`.
+- `mcp_apps.agent_for` skips (it does not refuse) a name a person holds (and making a key and `rename` refuse a person's id
+  as an agent name), so an agent can never act as a person.
+- "Not yours answers identically to no such page" is tested only on the owner-only routes until
+  `people.OPEN_SIGN_IN` is flipped: with one person who may sign in there is no second reader to
+  test it against.
+
 ## Not yet checked
 
-All `page_read` / `human_pref` / `pinned_at` call sites; today's CSRF handling; receipt-seen per
-reader; the Postgres schema of the rebuilt tables; `migrate.copy` column order. Slice 2 starts with
-that grep.
+Checked in slice 2: every `page_read` / `human_pref` / `pinned_at` call site (the grep is the list in
+"Slice 2 as built"), the Postgres schema of the rebuilt tables, and `migrate.copy`'s column handling
+(by name). Still open: today's CSRF handling (slice 4) and receipt-seen per reader (the decision's `acknowledged_at` is still one value; slice 3b adds `seen_at` per person beside it, see below).

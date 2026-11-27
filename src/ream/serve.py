@@ -247,7 +247,7 @@ def app_from_env():
     # rather than read the owner's rows as a stranger's (owner.py).
     try:
         owner.check(db, configured.owner_id)
-    except owner.OwnerMismatch as exc:
+    except (owner.OwnerMismatch, owner.IdentityHeld) as exc:
         raise SystemExit(str(exc)) from None
     # Plug-ins register before anything serves; one that cannot stops the start.
     try:

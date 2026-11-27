@@ -57,10 +57,13 @@ def mint(
     artifact_id: str,
     version: int | None = None,
     changes_from: int | None = None,
+    person: str | None = None,
 ) -> str:
     """A fresh pass for one page (the live one when `version` is None). The
     plaintext is returned once and never stored. `changes_from` makes it a pass
-    for the changes view: the page marked up against that earlier version."""
+    for the changes view: the page marked up against that earlier version.
+    `person` is who the gallery minted it for (people design, slice 2); nothing
+    reads it yet, the spend is by the pass alone."""
     token = secrets.token_urlsafe(32)
     now = datetime.now(UTC)
     with db.connect() as conn:
@@ -70,13 +73,14 @@ def mint(
         )
         conn.execute(
             "insert into frame_pass"
-            " (token_sha256, artifact_id, version, changes_from, expires_at)"
-            " values (%s, %s, %s, %s, %s)",
+            " (token_sha256, artifact_id, version, changes_from, person, expires_at)"
+            " values (%s, %s, %s, %s, %s, %s)",
             (
                 _hash(token),
                 artifact_id,
                 version,
                 changes_from,
+                person,
                 now + timedelta(seconds=LIFETIME_SECONDS),
             ),
         )

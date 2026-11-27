@@ -26,6 +26,9 @@ _OTHER = {
     "mcp-headers": ("ream.mcp_headers", "main"),
     "screenshot": ("ream.client", "screenshot_run"),
     "stats": ("ream.client", "stats_run"),
+    "watch": ("ream.client", "watch_run"),
+    "unwatch": ("ream.client", "unwatch_run"),
+    "watches": ("ream.client", "watches_run"),
 }
 # The verbs of `artifacts-decide`, kept as the command's own sub-commands.
 DECIDE_VERBS = (
@@ -61,6 +64,9 @@ the command line on unchanged, so `ream VERB --help` shows that program's own he
   changes        which parts of a page a round changed (artifacts-publish --changes)
   screenshot     save a PNG of a page you can read, as a reader sees it
   stats          how often your own page was read, and by whom
+  watch          follow a page, so its changes and comments reach your feed
+  unwatch        stop following a page
+  watches        the pages you follow
   ask            put a question on a page             (artifacts-decide ask)
   wait           wait for an answer                   (artifacts-decide wait)
   {decide_rest}

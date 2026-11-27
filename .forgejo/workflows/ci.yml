@@ -33,7 +33,11 @@ jobs:
     # 40, not 20: the guard selftests alone take ~12 min on a 2-CPU slot, and on
     # 19 Nov 2026 four runs were cut off at 20 min mid-suite (reported by the
     # runner as "context deadline exceeded", not as a timeout).
-    timeout-minutes: 40
+    # 60, not 40: from 25 Nov 2026 pve01 gives its CI containers about 1/10 of contested CPU
+    # (homelab), and that day run 83620 was cut off at 40 min at 98% with no test failed;
+    # the same commit's job took 19 min an hour earlier. A cut-off on main also costs the
+    # deploy: core-lock is skipped and a re-run reuses the image, so only a new commit recovers.
+    timeout-minutes: 60
     # Only in the public repo, NAMED (not "anything but the sec repo"): a copy of this file anywhere
     # else has its jobs skipped (the private repo runs sec.yml instead). A job whose `if:` is false
     # is never dispatched. Every job in this file carries this gate;
@@ -204,6 +208,7 @@ jobs:
           tests/test_render_findings_browser.py tests/test_renderd.py
           tests/test_shots.py tests/test_shots_offline.py
           tests/test_render_workers_held.py tests/test_canvas_html.py
+          tests/test_browser_session_cookie.py
 
       # The timing comparisons (tests marked `scaling`), serially: they skip in the
       # parallel runs, where other workers share the 2 CPUs and make the 8x page look

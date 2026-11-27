@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from ream import formanswer, formrecord, forms, people, store
+from ream import agents, decisions, formanswer, formrecord, forms, people, store
 from ream.content import _script_json
 
 _STYLE = (
@@ -55,18 +55,54 @@ _STYLE = (
 )
 
 
-def payload(db, artifact_id: str) -> dict:
+def payload(db, artifact_id: str, person: str) -> dict:
     """The page's open forms as the bar draws them: the STORED field list at each
-    form's latest version, which the script trusts over anything the page says."""
-    shown = forms.for_page(db, artifact_id)
+    form's latest version, which the script trusts over anything the page says, and
+    `person`'s own record of each (`form_answer`: what one person submitted is theirs). Only the
+    forms `person` may answer are drawn."""
     with db.connect() as conn:
-        records = {
-            did: rec
-            for did, rec in conn.execute(
-                "select id, answer_record from decision"
+        addressed = dict(
+            conn.execute(
+                "select id, addressed_to from decision"
                 " where artifact_id = %s and kind = 'form'",
                 (artifact_id,),
             ).fetchall()
+        )
+        page = conn.execute(
+            "select agent from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+        owners = agents.page_owners(conn, page[0]) if page else ()
+    # A form addressed to someone else gets no submit bar here (`decisions.may_answer`).
+    shown = [
+        f
+        for f in forms.for_page(db, artifact_id)
+        if decisions.addressed_ok_owners(
+            person, addressed.get(f["decision_id"]), owners
+        )
+    ]
+    with db.connect() as conn:
+        records = {
+            did: formanswer.newest_record(person, row, decision_record)
+            for did, row, decision_record in conn.execute(
+                "select d.id, f.answer_record, d.answer_record from decision d"
+                " left join form_answer f on f.decision_id = d.id and f.person = %s"
+                " where d.artifact_id = %s and d.kind = 'form'",
+                (person, artifact_id),
+            ).fetchall()
+        }
+        # A record left on an older version (an older image republished and moved only the
+        # decision's) is brought onto the latest the way a write does, before it is drawn.
+        records = {
+            f["decision_id"]: formanswer.on_latest(
+                conn,
+                f["decision_id"],
+                records.get(f["decision_id"]),
+                f["version"],
+                f["fields"],
+                f["complete"],
+                strict=False,
+            )
+            for f in shown
         }
     return {
         "artifact_id": artifact_id,
@@ -87,7 +123,7 @@ def payload(db, artifact_id: str) -> dict:
     }
 
 
-def block(db, artifact_id: str) -> str:
+def block(db, artifact_id: str, person: str) -> str:
     """The `<style>`, mount point, JSON data block and script tag for a live page, drawn
     even when no form is open yet: a form that turns up while he reads (a new version, or
     one published meanwhile) is fetched from `/a/{id}/forms.json` by the script and gets
@@ -96,7 +132,7 @@ def block(db, artifact_id: str) -> str:
         _STYLE
         + '<div id="artifact-forms-bar"></div>'
         + '<script type="application/json" id="artifact-forms">'
-        + _script_json(payload(db, artifact_id))
+        + _script_json(payload(db, artifact_id, person))
         + "</script>"
         + '<script src="/forms.js" defer></script>'
     )
@@ -121,7 +157,9 @@ def register(
         )
 
     @router.get("/a/{artifact_id}/forms.json")
-    def forms_data(artifact_id: str) -> JSONResponse:
+    def forms_data(
+        artifact_id: str, person: people.Person = people.CURRENT
+    ) -> JSONResponse:
         """The page's open forms, as the bar draws them: the same payload the page view
         carries, for a form that turned up after the page loaded. Display only, behind
         the same sign-in as the page; an archived, binned or unknown page is 404, as
@@ -134,7 +172,7 @@ def register(
         if row is None or row[0] is not None or row[1] is not None:
             raise HTTPException(404, "no such page")
         return JSONResponse(
-            payload(db, artifact_id),
+            payload(db, artifact_id, person.id),
             headers={**headers(), "cache-control": "no-store"},
         )
 
@@ -187,7 +225,7 @@ def register(
                 row[0],
                 version=version,
                 values=body.get("values"),
-                by=person.id,
+                person=person,
             )
 
         try:

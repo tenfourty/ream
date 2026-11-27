@@ -76,9 +76,9 @@ def _organise(call, page_id, action, **more):
 def _row(db, page_id) -> dict:
     with db.connect() as conn:
         row = conn.execute(
-            "select archived_at, pinned_at, deleted_at, folder_id, title"
-            " from artifact where id = %s",
-            (page_id,),
+            "select archived_at, (select pinned_at from page_pin where artifact_id = %s),"
+            " deleted_at, folder_id, title from artifact where id = %s",
+            (page_id, page_id),
         ).fetchone()
     return dict(
         zip(("archived", "pinned", "deleted", "folder", "title"), row, strict=True)

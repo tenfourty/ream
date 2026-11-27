@@ -287,6 +287,15 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
             conn.execute("drop table mcp_signin")
             conn.execute("drop table mcp_app")
             conn.execute("drop table person")
+            conn.execute("drop table page_pin")
+            conn.execute("drop table form_answer")
+            conn.execute("drop table page_watch")  # agents slice 3, step 41
+            conn.execute("drop table agent_person")  # agents slice 4, step 42
+            conn.execute("drop table person_session")
+            conn.execute("drop table person_signin")
+            conn.execute("alter table receipt drop column person")
+            conn.execute("alter table decision drop column addressed_to")
+            conn.execute("alter table frame_pass drop column person")
             conn.execute("alter table decision drop column asked_by")
             conn.execute("alter table artifact drop column comments_default")
             conn.execute("alter table comment drop column deleted_at")

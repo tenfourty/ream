@@ -32,6 +32,7 @@ from markupsafe import escape
 from starlette.concurrency import run_in_threadpool
 
 from ream import (
+    agents,
     comments,
     connect,
     decisions,
@@ -299,6 +300,12 @@ main{display:block}
   padding-left:var(--space-7);margin:var(--space-2) 0 var(--space-6)}
 .ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
 .ask.held .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
+.ask.readonly{border-left-color:var(--line);box-shadow:none;background:transparent;
+  color:var(--muted);cursor:default}
+.ask.readonly .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
+.ask.readonly button,.ask.readonly form{display:none}
+.byother{font:.68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin-left:var(--space-5)}
 .ask .qroute{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qasker,.settled-body .qasker{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qroute.waiting_now{color:var(--ok)}
@@ -1409,6 +1416,7 @@ var contentOrigin;
 try{contentOrigin=new URL(iframe.src).origin}catch(e){return}
 var decisionEls=new Map();var lastSent="";
 var asksSection=document.getElementById("open-asks");
+var othersSection=document.getElementById("other-asks");
 document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
@@ -1498,10 +1506,12 @@ window.addEventListener("message",function(event){
       // A heading with nothing under it reads as a fault. When every open
       // question has been lifted into the page, the section they came from is
       // an empty "Waiting on you" and its hint, stranded above the frame.
-      if(asksSection){
-        asksSection.style.display =
-          asksSection.querySelector("[data-decision-id]") ? "" : "none";
-      }
+      [asksSection,othersSection].forEach(function(sec){
+        if(sec){
+          sec.style.display =
+            sec.querySelector("[data-decision-id]") ? "" : "none";
+        }
+      });
     }
   }catch(e){}
 });
@@ -1600,17 +1610,25 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 # he wrote an earlier message, made after he last opened the page. Without it a
 # reply to him leaves a read page looking read. Yields who wrote it (the session
 # label when there is one, so the tile can name the office, else the author).
-# The rule itself lives in `comments.UNSEEN_REPLY` so his inbox asks the same
+# `pr` and `pp` are the request person's `page_read` and `page_pin` rows, left-joined to the
+# page (`_PERSON_JOINS`, three parameters, the person each); every wall query carries them.
+# The rule itself lives in `comments.unseen_reply` so his inbox asks the same
 # question the wall does.
 _WALL_REPLIED_BY = (
     "(select coalesce(nullif(c.session, ''), c.author) from comment c"  # noqa: S608
-    f"  where c.artifact_id = a.id and {comments.UNSEEN_REPLY}"
+    f"  where c.artifact_id = a.id and {comments.unseen_reply('pr.read_at')}"
     "  order by c.created_at desc, c.id desc limit 1)"
 )
 _WALL_UNREAD = (
-    "(a.current_version > coalesce((select r.read_version"  # noqa: S608
-    "   from page_read r where r.artifact_id = a.id), 0)"
+    "(a.current_version > coalesce(pr.read_version, 0)"
     f"  or {_WALL_REPLIED_BY} is not null)"
+)
+# The joins `pr`, `pp` and `me` need, one `%s` each: the request person's id, three times. They come right
+# after `from artifact a`, so their parameters precede the where clause's.
+_PERSON_JOINS = (
+    " left join page_read pr on pr.artifact_id = a.id and pr.person = %s"
+    " left join page_pin pp on pp.artifact_id = a.id and pp.person = %s"
+    + comments.ME_JOIN
 )
 
 
@@ -1920,6 +1938,12 @@ _APP_WORDS = {
 }
 
 
+def _app_line(app, host: str) -> str:
+    """An app of the signed-in person on `host`, as the via line (`agents.app_shown`). The
+    machines page is the owner's, so the name is the owner's."""
+    return agents.app_shown(app.agent, app.person, None, host).text()
+
+
 def _apps_section(apps, confirm_app: str = "") -> str:
     """The "Connected apps" section (spec 10): one row per live app, Revoke asking once
     more, and the lapsed and revoked ones folded away. Never a token or a hash: the page
@@ -1936,7 +1960,7 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     for item in live:
         a = item.app
         ident = escape(a.id)
-        shown = mcp_apps.via(item.host) if item.host else a.agent
+        shown = _app_line(a, item.host) if item.host else a.agent
         words = ", ".join(_APP_WORDS.get(p, p) for p in a.permissions) or "none"
         used = _ago(a.last_used_at) if a.last_used_at else "not since it connected"
         lapses = min(a.idle_expires_at, a.expires_at).strftime("%-d %b %Y")
@@ -1968,7 +1992,7 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     if gone:
         rows = []
         for i in gone:
-            who = mcp_apps.via(i.host) if i.host else i.app.agent
+            who = _app_line(i.app, i.host) if i.host else i.app.agent
             what = (
                 f"revoked {_ago(i.app.revoked_at) or 'just now'}"
                 if i.state(now) == "ended"
@@ -1982,8 +2006,50 @@ def _apps_section(apps, confirm_app: str = "") -> str:
     return "".join(parts)
 
 
+def _machine_people(db) -> tuple[list[tuple[str, str]], dict[str, str]]:
+    """The people a machine can be marked for (id, shown name) and which agent is whose
+    (`agent_person`), for the Machines page."""
+    with db.connect() as conn:
+        found = conn.execute("select id, name from person order by id").fetchall()
+        mine = dict(conn.execute("select agent, person from agent_person").fetchall())
+    return [(r[0], agents.person_label(r[0], r[1])) for r in found], mine
+
+
+def _machine_page_people(db) -> dict:
+    rows, mine = _machine_people(db)
+    return {"people_rows": rows, "mine": mine}
+
+
+def _belongs_form(ident: str, agent: str, people_rows, mine) -> str:
+    """The control that marks a machine as one person's, or shared again. A personal machine reads
+    what its person reads and still changes only its own pages."""
+    if not people_rows:
+        return ""
+    current = mine.get(agent, "")
+    options = [
+        f'<option value=""{" selected" if not current else ""}>Shared (the house\u2019s)</option>'
+    ] + [
+        f'<option value="{escape(pid)}"{" selected" if pid == current else ""}>'
+        f"{escape(label)}</option>"
+        for pid, label in people_rows
+    ]
+    return (
+        f'<form method="post" action="/machines/{ident}/belongs" class="row">'
+        '<label>Belongs to <select name="belongs_to">' + "".join(options) + "</select>"
+        '</label><button class="btn" type="submit">Save</button></form>'
+        '<p class="muted">A personal machine reads what its person reads, pages closed to '
+        "agents included for the owner. It still changes only its own pages.</p>"
+    )
+
+
 def _machines_page(
-    machines, confirm: str = "", note: str = "", apps=(), confirm_app: str = ""
+    machines,
+    confirm: str = "",
+    note: str = "",
+    apps=(),
+    confirm_app: str = "",
+    people_rows=(),
+    mine=None,
 ) -> str:
     """Every connected machine: its name (his to change), when it connected,
     when it was last used, which sessions have published with it, and how many
@@ -2032,6 +2098,12 @@ def _machines_page(
                 f'<input name="label" value="{escape(m.name)}" aria-label="Name" autocomplete="off">'
                 '<button class="btn" type="submit">Rename</button>'
                 f'<a class="btn" href="/machines?revoke={ident}">Revoke</a></form>'
+            )
+        if confirm != m.id:
+            action += _belongs_form(ident, m.agent, people_rows, mine or {})
+        if mine and m.agent in mine:
+            facts.append(
+                f"<dt>Belongs to</dt><dd>{escape(dict(people_rows).get(mine[m.agent], mine[m.agent]))}</dd>"
             )
         parts.append(
             f"<section><h2>{escape(m.name)}</h2><dl>{''.join(facts)}</dl>{action}</section>"
@@ -3608,15 +3680,20 @@ def _agent_pick(
 
 _WALL_PAGE = 200
 
+
 # The wall's "has an open question" test, spelled once: it orders the wall and it is one
 # of the keys the "Older pages" cursor compares.
-_WALL_WAITING = (
-    "((select count(*) from decision d"
-    "   where d.artifact_id = a.id"
-    "     and d.answer is null and d.kind <> 'form'"
-    "     and a.archived_at is null and a.deleted_at is null"
-    "     and d.closed_at is null) > 0)"
-)
+def _wall_waiting(person: str) -> str:
+    """The wall's "has an open question for `person`" test (`me.person` is in every wall query):
+    only a question they may answer counts (`decisions.addressed_sql`)."""
+    return (
+        "((select count(*) from decision d"  # noqa: S608 -- the fragment is fixed text
+        "   where d.artifact_id = a.id"
+        "     and d.answer is null and d.kind <> 'form'"
+        "     and a.archived_at is null and a.deleted_at is null"
+        f"     and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
+        "     and d.closed_at is null) > 0)"
+    )
 
 
 class _WallRows(list):
@@ -3642,7 +3719,7 @@ def _wall_cursor(row) -> str:
     )
 
 
-def _after_cursor(cursor: str) -> tuple[str, tuple]:
+def _after_cursor(cursor: str, person: str) -> tuple[str, tuple]:
     """The where-clause fragment (and its parameters) for the rows that sort after
     `cursor` in the wall's order, or ("", ()) when the cursor is not one of ours."""
     try:
@@ -3663,21 +3740,22 @@ def _after_cursor(cursor: str) -> tuple[str, tuple]:
         if unread == "1"
         else f"(not {_WALL_UNREAD} and {after})"
     )
+    waits = _wall_waiting(person)
     after = (
-        f"(not {_WALL_WAITING} or ({_WALL_WAITING} and {after}))"
+        f"(not {waits} or ({waits} and {after}))"
         if waiting == "1"
-        else f"(not {_WALL_WAITING} and {after})"
+        else f"(not {waits} and {after})"
     )
     # The flags' text repeats once per use, so the parameters are laid out in text order:
     # only `tail` carries any, and it sits innermost, once.
     if pin_at is not None:
         after = (
-            "(a.pinned_at is null or a.pinned_at < %s"
-            f" or (a.pinned_at = %s and {after}))"
+            "(pp.pinned_at is null or pp.pinned_at < %s"
+            f" or (pp.pinned_at = %s and {after}))"
         )
         params = [pin_at, pin_at, *params]
     else:
-        after = f"(a.pinned_at is null and {after})"
+        after = f"(pp.pinned_at is null and {after})"
     return " and " + after, tuple(params)
 
 
@@ -4351,6 +4429,19 @@ _PROFILE = (
 )
 
 
+def _profile() -> str:
+    """The profile menu. With gallery sign-in on it also holds the Sign out form (a POST to
+    `/signout`, answered 200: the CSP's `form-action 'self'` blocks a redirect out of a form
+    post); with it off, exactly `_PROFILE`, byte for byte."""
+    if not settings.current().gallery_signs_in():
+        return _PROFILE
+    out = (
+        '<form method="post" action="/signout">'
+        '<button class="mrow" type="submit">Sign out</button></form>'
+    )
+    return _PROFILE.replace("</div></details>", out + "</div></details>")
+
+
 def _shell(
     title: str,
     body: str,
@@ -4363,6 +4454,7 @@ def _shell(
     bleed: bool = False,
     full: bool = False,
     actions: str = "",
+    profile: bool = True,
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -4393,16 +4485,17 @@ def _shell(
     # chrome and should read as chrome. The gallery index keeps its header
     # inside the column, which is also what the reference does there -- the two
     # are different on purpose, and both were measured off the saved pages.
+    menu = _profile() if profile else ""
     if bleed:
         top = (
             f'<header class="bar bleed{" flush" if full else ""}">{back}{heading}'
-            f"{meta_block}{actions}{_PROFILE}</header>"
+            f"{meta_block}{actions}{menu}</header>"
             f'<div class="wrap{" full" if full else ""}">'
         )
     else:
         top = (
             f'<div class="wrap"><header class="bar">{back}{heading}'
-            f"{meta_block}{_PROFILE}</header>"
+            f"{meta_block}{menu}</header>"
         )
     # The product's name, where a reader first meets it: the wall is "Ream",
     # every other page "<what it is> · Ream", and the foot says what it was.
@@ -4558,31 +4651,39 @@ def _ago(moment: datetime | None) -> str:
     return moment.strftime("%-d %b")
 
 
-def _passed_on(row, hosts: dict[str, str] | None) -> tuple[str, str]:
+def _passed_on(row, hosts: dict[str, agents.Shown] | None) -> tuple[str, str]:
     """For an answer a signed-in app passed on (source `mcp`, MCP design 11.5): where he said
     it ("claude.ai", the app's host) and who recorded it ("Jeremy, via claude.ai"). Both
     escaped; the host comes from the app, never a literal."""
-    host = (hosts or {}).get(row.recorded_by or "") or "an app"
-    return escape(host), escape(mcp_apps.via(host))
+    found = (hosts or {}).get(row.recorded_by or "")
+    if found is None or found.via is None:
+        found = agents.unknown_app()
+    return escape(found.via), escape(found.text())
 
 
-def _asker_line(row, hosts: dict[str, str] | None) -> str:
+def _asker_line(
+    row, hosts: dict[str, agents.Shown] | None, reader: str | None = None
+) -> str:
     """For a question a signed-in app put on a page that is not its own (MCP design 11.4):
     who asked, so it is never read as the page's agent speaking. Escaped; the host comes from
     the app's own record, and an agent that is not (or is no longer) an app is shown by its
-    stored name."""
+    stored name. "your Claude" is true only for the reader the app belongs to; for anyone else
+    it is "<person name>'s Claude" (via line rule 7)."""
     asker = getattr(row, "asked_by", None)
     if not asker:
         return ""
-    host = (hosts or {}).get(asker)
-    who = f"your Claude ({host or asker})"
+    found = (hosts or {}).get(asker)
+    if found is not None and found.via and found.person not in (None, reader):
+        who = f"{found.person_name}\u2019s Claude ({found.via})"
+    else:
+        who = f"your Claude ({(found.via if found is not None else None) or asker})"
     return (
         f'<p class="qasker">From {escape(who)}, not this page\u2019s agent. '
         "Your answer goes back to it.</p>"
     )
 
 
-def _provenance(row, hosts: dict[str, str] | None = None) -> str:
+def _provenance(row, hosts: dict[str, agents.Shown] | None = None) -> str:
     """Who wrote a relayed answer down, from where, and when he said it.
 
     Empty for a tap: the ordinary case needs no explanation, and a badge on
@@ -4903,7 +5004,9 @@ def _render_decisions(
     note_threads: dict[str, list] | None = None,
     prev_read_at: datetime | str | None = None,
     routes: dict[str, listening.Route] | None = None,
-    app_hosts: dict[str, str] | None = None,
+    app_hosts: dict[str, agents.Shown] | None = None,
+    person: str | None = None,
+    page_owners: tuple[str, ...] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -4939,15 +5042,26 @@ def _render_decisions(
     the page, rather than needing a terminal. A REVIEW is the exception: its first
     verdict is final, so a settled review shows the verdict and no form.
     """
+    if person is not None and page_owners is None:
+        raise ValueError("page_owners is required when person is given")
     if not rows:
         return "", ""
+
+    def _mine(r: decisions.DecisionRow) -> bool:
+        """May the reader answer it (`decisions.may_answer`)? Everything is theirs when no
+        reader is named. A question that is not is drawn read-only, with no button."""
+        return person is None or decisions.addressed_ok_owners(
+            person, r.addressed_to, page_owners
+        )
 
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
     now = datetime.now(UTC)
     on_page = {r.id for r in open_rows}
 
-    def _note_thread(row: decisions.DecisionRow) -> tuple[str, bool]:
+    def _note_thread(
+        row: decisions.DecisionRow, theirs: bool = False
+    ) -> tuple[str, bool]:
         """The short thread under his note, and whether it holds a message from
         an agent newer than his previous visit. Empty until someone has replied:
         the form that continues a thread needs a thread to continue."""
@@ -4965,14 +5079,15 @@ def _render_decisions(
         earlier = (
             answered is not None and (_moment(first.created_at) or answered) < answered
         )
-        head = ("About an earlier answer" if earlier else "Replies under your note") + (
+        under = "the note" if theirs else "your note"
+        head = ("About an earlier answer" if earlier else f"Replies under {under}") + (
             '<span class="ntag">new reply</span>' if fresh else ""
         )
         root = first.thread_root or first.id
         form = (
             f'<form class="nreply" method="post" action="/c/{escape(row.artifact_id)}">'
             f'<input type="hidden" name="thread_root" value="{escape(root)}">'
-            '<input name="body" placeholder="Reply" aria-label="Reply under your note">'
+            f'<input name="body" placeholder="Reply" aria-label="Reply under {under}">'
             '<button type="submit">Send</button></form>'
         )
         html = (
@@ -5137,6 +5252,15 @@ def _render_decisions(
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
         if anchorable and row.answer is None and not is_review:
             anchor += f' id="q-{escape(row.id)}"'
+        if row.answer is None and not _mine(row):
+            # Read-only: whose it is, and nothing to press (no form, hold or live switch).
+            return (
+                f'<div class="ask readonly"{anchor}>'
+                f'<p class="q">{tag}{escape(row.question)}</p>'
+                f"{_context_block(row)}"
+                f'<p class="hint">For {escape(row.addressed_to or "someone else")} '
+                "to answer.</p></div>"
+            )
         if row.held_by and row.answer is None and not is_review:
             # Held: no form at all, one line saying what it waits on. It keeps
             # its data-decision-id, so a slot for it still gets this note.
@@ -5185,7 +5309,7 @@ def _render_decisions(
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_context_block(row)}"
-            f"{_asker_line(row, app_hosts)}"
+            f"{_asker_line(row, app_hosts, person)}"
             f"{_route_line(row)}"
             f"{_since(row)}"
             f"{hint}"
@@ -5207,7 +5331,9 @@ def _render_decisions(
         (
             r
             for r in open_rows
-            if getattr(r, "kind", "question") == "question" and not r.held_by
+            if getattr(r, "kind", "question") == "question"
+            and not r.held_by
+            and _mine(r)
         ),
         key=lambda r: _inbox_key(r, now),
     )
@@ -5224,14 +5350,16 @@ def _render_decisions(
             f"<h2>Open questions ({len(answerable)})</h2><ul>{items}</ul></nav>"
         )
 
-    if open_rows:
+    mine_open = [r for r in open_rows if _mine(r)]
+    others_open = [r for r in open_rows if not _mine(r)]
+    if mine_open:
         # A review's first verdict is final, so the "pick a different one" hint
         # belongs only to ordinary questions; a review card carries its own.
         hint = (
             ""
             if all(
                 getattr(r, "kind", "question") == "review" or r.held_by
-                for r in open_rows
+                for r in mine_open
             )
             else (
                 '<p class="hint">Pick a letter and it is saved straight away; add a note '
@@ -5241,8 +5369,16 @@ def _render_decisions(
         )
         above.append(
             '<section class="asks" id="open-asks"><h2>Waiting on you</h2>'
-            + "".join(_card(row) for row in open_rows)
+            + "".join(_card(row) for row in mine_open)
             + hint
+            + "</section>"
+        )
+    if others_open:
+        # Read-only cards are not waiting on this reader, so they do not sit under that
+        # heading: their own section says whose they are.
+        above.append(
+            '<section class="asks others" id="other-asks"><h2>Waiting on others</h2>'
+            + "".join(_card(row) for row in others_open)
             + "</section>"
         )
 
@@ -5270,7 +5406,11 @@ def _render_decisions(
             # ago, which is the failure this whole listener arc exists to end. So the
             # summary line carries a mark only in the bad case -- an answer sitting
             # uncollected -- and the opened card says plainly who took it and when.
-            if row.receipt:
+            if person is not None and row.answered_by not in (None, person):
+                # What an agent did with SOMEONE ELSE's answer (receipts, pickup) is not said
+                # to you (people design, slice 3: a receipt is about one person's answer).
+                unread = pickup = ""
+            elif row.receipt:
                 # The agent has declared what it did with the answer: the strip
                 # replaces the pickup line (receipts design 4.3), and anything it
                 # declared means it took the answer up, so no "not picked up".
@@ -5338,7 +5478,13 @@ def _render_decisions(
                     f'<span class="relayed" title="Recorded by {who} from '
                     f'{where}; not tapped on this page">via {where}</span>'
                 )
-            thread_html, fresh = _note_thread(row)
+            theirs = person is not None and row.answered_by not in (None, person)
+            if theirs:
+                relayed += (
+                    '<span class="byother">answered by '
+                    f"{escape(row.answered_by)}</span>"
+                )
+            thread_html, fresh = _note_thread(row, theirs)
             any_fresh = any_fresh or fresh
             entries.append(
                 f'<details class="settled"'
@@ -5352,7 +5498,7 @@ def _render_decisions(
                 # he sees it without opening the entry.
                 + (_presence_line(row, "span") if row.answer == "c" else "")
                 + "</summary>"
-                f'<div class="settled-body">{_asker_line(row, app_hosts)}'
+                f'<div class="settled-body">{_asker_line(row, app_hosts, person)}'
                 f"{_provenance(row, app_hosts)}{pickup}{note}"
                 f"{thread_html}"
                 # SAID WHERE THE HAND IS. The section already carries "nothing
@@ -5367,28 +5513,37 @@ def _render_decisions(
                 # looking.
                 + (
                     ""
-                    if row.closed_at is not None
+                    if row.closed_at is not None or not _mine(row)
                     else '<p class="hint">Your first verdict is final.</p>'
                     if getattr(row, "kind", "question") == "review"
                     else '<p class="hint">Tap a different letter to change this '
                     "&mdash; it replaces your answer, and the note with it.</p>"
                 )
-                + ("" if row.closed_at is not None else _card(row, anchorable=False))
+                + (
+                    ""
+                    if row.closed_at is not None or not _mine(row)
+                    else _card(row, anchorable=False)
+                )
                 + "</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
         # the whole first screen of a page whose point was the one still open;
         # closed, the same four are a single line he can open when he wants them.
-        n = len(entries)
+        mine_settled = [r for r in settled_rows if _mine(r)]
+        n = len(mine_settled)
+        others = len(entries) - n
         noun = "question" if n == 1 else "questions"
+        title = f"{n} {noun} you have already settled" if n or not others else ""
+        if others:
+            title += (" and " if title else "") + f"{others} settled for someone else"
         below.append(
             f'<details class="asks settled-list"{" open" if any_fresh else ""}>'
             "<summary><h2>"
-            f"{n} {noun} you have already settled</h2></summary>"
+            f"{title}</h2></summary>"
             + "".join(entries)
             + (
                 ""
-                if all(getattr(r, "kind", "question") == "review" for r in settled_rows)
+                if all(getattr(r, "kind", "question") == "review" for r in mine_settled)
                 else '<p class="hint">Open one to see the options again, or to change '
                 "your mind &mdash; nothing here is locked.</p>"
             )
@@ -5430,6 +5585,7 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _wall(
         conn,
+        person: str,
         archived: bool,
         folder_id: str | None = None,
         grouped: bool = False,
@@ -5445,7 +5601,7 @@ def gallery_router(db: Database) -> APIRouter:
         At most `_WALL_PAGE` rows come back; `.more` says there are older ones and `.cursor`
         is what the "Older pages" link carries to fetch the next lot (`older`).
         """
-        after, after_params = _after_cursor(older) if older else ("", ())
+        after, after_params = _after_cursor(older, person) if older else ("", ())
         if folder_id is not None:
             scope, extra = " and a.folder_id = %s", (folder_id,)
         elif grouped:
@@ -5483,6 +5639,8 @@ def gallery_router(db: Database) -> APIRouter:
             "            and d.answer is null and d.kind <> 'form'"
             # A question SET ASIDE (its page archived or binned) is not waiting.
             "            and a.archived_at is null and a.deleted_at is null"
+            # Nor is one this reader may not answer (it is addressed to someone else).
+            f"            and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
@@ -5493,7 +5651,7 @@ def gallery_router(db: Database) -> APIRouter:
             "       exists (select 1 from version v"
             "          where v.artifact_id = a.id and v.n = a.current_version"
             "            and v.thumbnail is not null) as has_thumb,"
-            "       a.pinned_at,"
+            "       pp.pinned_at,"
             # WHICH SESSION last changed it, not which first published it: the
             # tile already says "Edited 5h ago" beside this, and the question a
             # reader is asking at that moment is who did THAT. Jeremy, 21 Sep,
@@ -5516,7 +5674,8 @@ def gallery_router(db: Database) -> APIRouter:
             "            and v.n = a.current_version), false) as flagged,"
             f"       {_WALL_REPLIED_BY} as replied_by"
             "  from artifact a"
-            " where (a.archived_at is null) = %s and a.deleted_at is null"
+            + _PERSON_JOINS
+            + " where (a.archived_at is null) = %s and a.deleted_at is null"
             + scope
             + after
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -5534,14 +5693,14 @@ def gallery_router(db: Database) -> APIRouter:
             # UNpinned page above every pinned one -- precisely backwards, and
             # it would look like pinning had done nothing rather than like a
             # broken sort.
-            + " order by a.pinned_at desc nulls last,"
-            f"          {_WALL_WAITING} desc,"
+            + " order by pp.pinned_at desc nulls last,"
+            f"          {_wall_waiting(person)} desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
             # One more than a page, to know whether an older page exists.
             f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
-            (not archived, *extra, *after_params),
+            (person, person, person, not archived, *extra, *after_params),
         ).fetchall()
         rows = _WallRows(fetched[:_WALL_PAGE])
         if len(fetched) > _WALL_PAGE:
@@ -5549,22 +5708,25 @@ def gallery_router(db: Database) -> APIRouter:
             rows.cursor = _wall_cursor(rows[-1])
         return rows
 
-    def _folder_pages(conn):
+    def _folder_pages(conn, person: str):
         """Every page that is in a folder and not binned, one line each, with the folder's
         own fields: the facts a folder tile is made of. Not capped like `_wall`, so a folder
         of a thousand daily digests still counts them all."""
         return conn.execute(
             "select f.id, f.title, f.archived_at, a.agent, a.updated_at,"  # noqa: S608
             "       (a.archived_at is not null) as page_archived,"
-            "       (a.pinned_at is not null) as pinned,"
+            "       (pp.pinned_at is not null) as pinned,"
             f"       {_WALL_UNREAD} as unread,"
             "       (select count(*) from decision d"
             "          where d.artifact_id = a.id"
             "            and d.answer is null and d.kind <> 'form'"
             "            and a.archived_at is null"
+            f"            and {decisions.addressed_sql('d.addressed_to', 'me.person', 'a.agent')}"
             "            and d.closed_at is null) as waiting"
             "  from artifact a join folder f on f.id = a.folder_id"
-            " where a.deleted_at is null"
+            + _PERSON_JOINS
+            + " where a.deleted_at is null",
+            (person, person, person),
         ).fetchall()
 
     def _folder_items(pages, archived: bool) -> list:
@@ -5722,15 +5884,19 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> HTMLResponse:
-        return _wall_page(request)
+    def index(request: Request, person: people.Person = people.CURRENT) -> HTMLResponse:
+        return _wall_page(request, person.id)
 
     @router.get("/f/{folder_id}", response_class=HTMLResponse)
-    def open_folder(folder_id: str, request: Request) -> HTMLResponse:
+    def open_folder(
+        folder_id: str, request: Request, person: people.Person = people.CURRENT
+    ) -> HTMLResponse:
         # The opaque id, never the slug: a slug is only unique per owner.
-        return _wall_page(request, folder_id)
+        return _wall_page(request, person.id, folder_id)
 
-    def _wall_page(request: Request, folder_id: str | None = None) -> HTMLResponse:
+    def _wall_page(
+        request: Request, person: str, folder_id: str | None = None
+    ) -> HTMLResponse:
         query = (request.query_params.get("q") or "").strip()
         chosen_agent = (request.query_params.get("agent") or "").strip()
         chosen = request.query_params.get("filter")
@@ -5760,29 +5926,43 @@ def gallery_router(db: Database) -> APIRouter:
                 # A shelved folder lists its archived pages; a live one its live pages.
                 on_archived = shelved
                 grouped = False
-                rows = [] if shelved else _wall(conn, False, folder_id, older=older)
+                rows = (
+                    []
+                    if shelved
+                    else _wall(conn, person, False, folder_id, older=older)
+                )
                 archived_rows = (
-                    _wall(conn, True, folder_id, older=older) if shelved else []
+                    _wall(conn, person, True, folder_id, older=older) if shelved else []
                 )
                 pages = []
             else:
                 on_archived = chosen == "archived"
                 grouped = not flat
                 rows = _wall(
-                    conn, False, grouped=grouped, older="" if on_archived else older
+                    conn,
+                    person,
+                    False,
+                    grouped=grouped,
+                    older="" if on_archived else older,
                 )
                 archived_rows = _wall(
-                    conn, True, grouped=grouped, older=older if on_archived else ""
+                    conn,
+                    person,
+                    True,
+                    grouped=grouped,
+                    older=older if on_archived else "",
                 )
-                pages = [] if flat else _folder_pages(conn)
+                pages = [] if flat else _folder_pages(conn, person)
             # On a later page the header counts still describe the first page, so they do
             # not change under the reader as they page.
             count_rows, count_archived = rows, archived_rows
             if older:
                 if on_archived:
-                    count_archived = _wall(conn, True, folder_id, grouped=grouped)
+                    count_archived = _wall(
+                        conn, person, True, folder_id, grouped=grouped
+                    )
                 else:
-                    count_rows = _wall(conn, False, folder_id, grouped=grouped)
+                    count_rows = _wall(conn, person, False, folder_id, grouped=grouped)
         later = bool(older)
         paged = (
             archived_rows if on_archived else rows
@@ -6219,7 +6399,9 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 in_folder[1] if in_folder else "Ream",
                 body,
-                meta_html=_wall_meta(waiting_total, inbox.label(*inbox.count(db))),
+                meta_html=_wall_meta(
+                    waiting_total, inbox.label(*inbox.count(db, person=person))
+                ),
                 controls=_controls_row(
                     view,
                     query,
@@ -6259,8 +6441,8 @@ def gallery_router(db: Database) -> APIRouter:
         return response
 
     @router.get("/inbox", response_class=HTMLResponse)
-    def inbox_page() -> HTMLResponse:
-        rows, capped = inbox.gather(db)
+    def inbox_page(person: people.Person = people.CURRENT) -> HTMLResponse:
+        rows, capped = inbox.gather(db, person=person.id)
         if capped:
             meta = (
                 f"{inbox.label(len(rows), True)} items waiting on you; "
@@ -6272,9 +6454,14 @@ def gallery_router(db: Database) -> APIRouter:
         outcomes = decisions.outcomes_for_decisions(
             db, [i.id for i in rows if i.kind == "question"]
         )
-        slack_status = _render_slack_status(
-            readside.open_copies(db, waiting_on_him=False),
-            readside.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+        # Partner (Slack) questions are the owner's alone: their answer route is owner-only.
+        slack_status = (
+            _render_slack_status(
+                readside.open_copies(db, waiting_on_him=False),
+                readside.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+            )
+            if person.is_owner
+            else ""
         )
         return HTMLResponse(
             _shell(
@@ -6361,7 +6548,7 @@ def gallery_router(db: Database) -> APIRouter:
         artifact_id: str,
         request: Request,
         pinned: str = Form("1"),
-        _person: people.Person = people.REQUIRE_OWNER,
+        person: people.Person = people.REQUIRE_OWNER,
     ):
         """Pin a page to the front of the wall, or unpin it.
 
@@ -6374,7 +6561,9 @@ def gallery_router(db: Database) -> APIRouter:
         work?" is the wall, reordered, with the page now leading it.
         """
         _same_origin_write(request)
-        if not store.set_pinned(db, artifact_id, pinned == "1", agent=None):
+        if not store.set_pinned(
+            db, artifact_id, pinned == "1", agent=None, person=person.id
+        ):
             raise HTTPException(404, "no such page")
         return RedirectResponse("/", status_code=303)
 
@@ -6767,12 +6956,12 @@ def gallery_router(db: Database) -> APIRouter:
         text = f"{pages} {'page goes' if pages == 1 else 'pages go'} to Archived. "
         if asked:
             text += (
-                f"{asked} {'question' if asked == 1 else 'questions'} waiting on you will "
+                f"{asked} {'question' if asked == 1 else 'questions'} waiting for an answer will "
                 "be set aside, and the agents that asked are told; they come back when "
                 "you unarchive."
             )
         else:
-            text += "No questions are waiting on you. Unarchive brings the pages back."
+            text += "No questions are waiting for an answer. Unarchive brings the pages back."
         body = (
             _CONNECT_CSS + '<div class="cx"><section class="archive-sheet">'
             f"<h2>Archive &lsquo;{escape(title)}&rsquo;?</h2><p>{escape(text)}</p>"
@@ -6990,11 +7179,11 @@ def gallery_router(db: Database) -> APIRouter:
         # against it, and mark_read is about to move it.
         with db.connect() as conn:
             prev = conn.execute(
-                "select read_at from page_read where artifact_id = %s",
-                (artifact_id,),
+                "select read_at from page_read where artifact_id = %s and person = %s",
+                (artifact_id, person.id),
             ).fetchone()
         prev_read_at = prev[0] if prev else None
-        store.mark_read(db, artifact_id)
+        store.mark_read(db, artifact_id, person.id)
         # A reader of the page (runcove-5t3oj.158.1): this request's own connections are
         # closed here, and the route is sync, as `pageviews.record` asks. Not a deleted page.
         if row[7] is None:
@@ -7067,22 +7256,27 @@ def gallery_router(db: Database) -> APIRouter:
             and r.closed_at is None
             and (found := decisions.round_presence(db, row[2], r.id)) is not None
         }
-        asks_above, settled_below = _render_decisions(
-            shown_rows,
-            note_threads=note_threads,
-            prev_read_at=prev_read_at,
-            round_view=round_view,
-            presence=presence,
-            listening_since=events.last_read(db, row[2]),
-            app_hosts={
-                who: found.host
+        with db.connect() as conn:
+            page_owners = agents.page_owners(conn, row[2])
+            app_hosts = {
+                who: found
                 for r in shown_rows
                 for who in (
                     r.recorded_by if r.answer_source == decisions.MCP_SOURCE else None,
                     r.asked_by,
                 )
-                if who and (found := mcp_apps.mcp_agent(db, who)) is not None
-            },
+                if who and (found := agents.shown(conn, who)).via is not None
+            }
+        asks_above, settled_below = _render_decisions(
+            shown_rows,
+            person=person.id,
+            note_threads=note_threads,
+            prev_read_at=prev_read_at,
+            round_view=round_view,
+            presence=presence,
+            listening_since=events.last_read(db, row[2]),
+            page_owners=page_owners,
+            app_hosts=app_hosts,
             routes=listening.for_decisions(
                 db,
                 row[2],
@@ -7121,7 +7315,9 @@ def gallery_router(db: Database) -> APIRouter:
         src = escape(
             content_url(
                 artifact_id,
-                frame_pass.mint(db, artifact_id, changes_from=changes_from),
+                frame_pass.mint(
+                    db, artifact_id, changes_from=changes_from, person=person.id
+                ),
             )
         )
         # Sandboxed with no allow-top-navigation*, no allow-forms, no allow-modals: an agent's
@@ -7170,7 +7366,7 @@ def gallery_router(db: Database) -> APIRouter:
                 f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
                 # No Submit bar on a page that is archived or binned: nothing there can
                 # take an answer.
-                f"{'' if row[3] is not None or row[7] is not None else forms_ui.block(db, artifact_id)}"
+                f"{'' if row[3] is not None or row[7] is not None else forms_ui.block(db, artifact_id, person.id)}"
                 # AFTER the page, with the settled decisions. A conversation
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
@@ -7439,6 +7635,7 @@ def gallery_router(db: Database) -> APIRouter:
                     confirm=revoke,
                     apps=mcp_apps.listed(db, person.id),
                     confirm_app=revoke_app,
+                    **_machine_page_people(db),
                 ),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -7456,6 +7653,44 @@ def gallery_router(db: Database) -> APIRouter:
         if not keys.set_label(db, key_id, cleaned):
             raise HTTPException(404, "no such machine")
         return RedirectResponse("/machines", status_code=303)
+
+    @router.post("/machines/{key_id}/belongs", response_class=HTMLResponse)
+    def machine_belongs(
+        key_id: str,
+        request: Request,
+        belongs_to: str = Form(""),
+        person: people.Person = people.REQUIRE_OWNER,
+    ) -> HTMLResponse:
+        """Mark a machine as one person's, or shared again (agents design, slice 4). The owner's
+        alone, as the page is; no /api/v1 or MCP route does this."""
+        _same_origin_write(request)
+        with db.connect() as conn:
+            row = conn.execute(
+                "select agent from agent_key where id = %s and revoked_at is null",
+                (key_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such machine")
+        try:
+            if belongs_to:
+                done = agents.set_person(db, row[0], belongs_to, person.id)
+                note = (
+                    f"{row[0]} now belongs to {belongs_to}." if done else "No change."
+                )
+            else:
+                agents.clear_person(db, row[0])
+                note = f"{row[0]} is shared."
+        except agents.Refused as exc:
+            note = f"Not changed: {exc}."
+        return HTMLResponse(
+            _shell(
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db), note=note, **_machine_page_people(db)
+                ),
+            ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
 
     @router.post("/machines/{key_id}/revoke", response_class=HTMLResponse)
     def machine_revoke(
@@ -7475,7 +7710,12 @@ def gallery_router(db: Database) -> APIRouter:
             else "That key was already revoked."
         )
         return HTMLResponse(
-            _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
+            _shell(
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db), note=note, **_machine_page_people(db)
+                ),
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
@@ -7683,7 +7923,9 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.get("/a/{artifact_id}/frame")
     def fresh_frame(
-        artifact_id: str, changes: str = Query("1", pattern="^(0|1)$")
+        artifact_id: str,
+        changes: str = Query("1", pattern="^(0|1)$"),
+        person: people.Person = people.CURRENT,
     ) -> Response:
         """A new pass for the page in front of him, for gallery.js to re-point a
         frame whose pass was spent (homelab-ij8.101). Behind Authelia like every
@@ -7705,6 +7947,7 @@ def gallery_router(db: Database) -> APIRouter:
                             db,
                             artifact_id,
                             changes_from=_open_round(artifact_id, changes)[2],
+                            person=person.id,
                         ),
                     )
                 }
@@ -7794,10 +8037,12 @@ def gallery_router(db: Database) -> APIRouter:
         decision_id: str,
         mode: str = Form(...),
         _guard: None = Depends(_same_origin_write),
-        _person: people.Person = people.REQUIRE_OWNER,
+        person: people.Person = people.REQUIRE_OWNER,
     ):
         try:
-            artifact_id, _released = holds.set_review_mode(db, decision_id, mode)
+            artifact_id, _released = holds.set_review_mode(
+                db, decision_id, mode, person.id
+            )
         except ValueError as exc:
             raise HTTPException(422, "mode is held or live") from exc
         except decisions.AlreadyDecided as exc:
@@ -7840,6 +8085,7 @@ def gallery_router(db: Database) -> APIRouter:
                 by=person.id,
                 round=asked_round,
                 version=shown_version,
+                person=person,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc

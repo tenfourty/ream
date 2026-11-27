@@ -23,8 +23,8 @@ from urllib.parse import urlencode, urlsplit
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from ream import agents, hosts, mcp_apps, mcp_clients, oidc, ratelimit, settings
 from ream import db as dbmod
-from ream import hosts, mcp_apps, mcp_clients, oidc, ratelimit, settings
 from ream.db import Database
 
 log = logging.getLogger("ream.oauth")
@@ -159,7 +159,7 @@ def _consent_page(
     )
     words = {
         "read": "Read pages, comments and questions",
-        "write": f"Publish, comment and ask, signed “{escape(cfg.owner_name)}, via {escape(client.host)}”",
+        "write": f"Publish, comment and ask, signed “{escape(agents.owner_app(client.host).text())}”",
         "relay": "Pass on your answers to questions put to you",
     }
     boxes = "".join(

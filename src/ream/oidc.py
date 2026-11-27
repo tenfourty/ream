@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit
 
-from ream import settings, webhook
+from ream import people, settings, webhook
 from ream.db import Database
 
 FETCH_SECONDS = 5.0
@@ -319,11 +319,10 @@ def begin(redirect_uri: str) -> Start:
 # --- Step two: the person is back ---------------------------------------------------------
 
 
-def finish(
-    db: Database, code: str, verifier: str, nonce: str, redirect_uri: str
-) -> Login:
-    """Exchange `code`, check the ID token and the single reader. Raises SignInRefused or
-    NotOwner; returns a Login for the owner."""
+def exchange(code: str, verifier: str, nonce: str, redirect_uri: str) -> dict:
+    """Exchange `code` at the token endpoint and check the ID token (signature, issuer, audience,
+    expiry, `nonce`). Returns the checked claims; knows nothing of who may sign in. Raises
+    SignInRefused."""
     cfg = settings.current()
     endpoint = _endpoint(discovery(), "token_endpoint")
     basic = base64.b64encode(
@@ -351,8 +350,15 @@ def finish(
     token = answer.get("id_token")
     if not isinstance(token, str) or not token:
         raise SignInRefused("the sign-in provider sent no ID token")
-    claims = verify_id_token(token, nonce)
-    return owner_login(db, claims)
+    return verify_id_token(token, nonce)
+
+
+def finish(
+    db: Database, code: str, verifier: str, nonce: str, redirect_uri: str
+) -> Login:
+    """Exchange `code`, check the ID token and the single reader. Raises SignInRefused or
+    NotOwner; returns a Login for the owner."""
+    return owner_login(db, exchange(code, verifier, nonce, redirect_uri))
 
 
 def _form_quote(value: str) -> str:
@@ -553,3 +559,55 @@ def owner_login(db: Database, claims: dict) -> Login:
         if isinstance(groups, list)
         else (),
     )
+
+
+def person_login(db: Database, claims: dict, *, who: str = "owner") -> Login:
+    """The Login for a gallery sign-in with checked `claims`; `who` is `REAM_SIGN_IN_WHO`. With
+    `owner` (and whatever is passed while `people.OPEN_SIGN_IN` is False) it is `owner_login`, and person #1 takes the
+    login's issuer and subject if the row has none; `NotOwner` for anyone else, nothing stored.
+    With `anyone` (unreachable until `OPEN_SIGN_IN` is True) ownership is still decided by
+    `owner_login` alone: when it accepts, person #1 takes the login's pair (filled, or refreshed
+    when it differs); when it refuses, the person is found or made by (issuer, subject)
+    (`people.find_or_make`), which never answers person #1. A `people.NameTaken` surfaces as
+    `SignInRefused`."""
+    try:
+        return _person_login(db, claims, who)
+    except people.NameTaken as e:
+        raise SignInRefused("This sign-in cannot be given a name in this Ream") from e
+
+
+def _person_login(db: Database, claims: dict, who: str) -> Login:
+    cfg = settings.current()
+    anyone = who == "anyone" and people.OPEN_SIGN_IN
+    try:
+        login = owner_login(db, claims)
+    except NotOwner:
+        if not anyone:
+            raise
+    else:
+        with db.connect() as conn:
+            people.fill_owner_identity(
+                conn, cfg.oidc_issuer, login.subject, refresh=anyone
+            )
+        return login
+    found = people.find_or_make(
+        db,
+        cfg.oidc_issuer,
+        claims["sub"],
+        preferred=_text(claims.get("preferred_username")),
+        email=_text(claims.get("email")),
+        email_verified=claims.get("email_verified") is True,
+        name=_text(claims.get("name")),
+    )
+    groups = claims.get(cfg.oidc_groups_claim_name())
+    return Login(
+        found.id,
+        claims["sub"],
+        tuple(g for g in groups if isinstance(g, str))
+        if isinstance(groups, list)
+        else (),
+    )
+
+
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value else None

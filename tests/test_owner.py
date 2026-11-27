@@ -11,21 +11,26 @@ import argparse
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from ream import (
     admin,
+    agents,
     client,
     comments,
     decide,
     decisions,
     folders,
+    frame_pass,
+    holds,
     keys,
+    mcp_apps,
     news,
     onboarding,
     owner,
+    people,
     rename,
     settings,
     store,
@@ -37,6 +42,7 @@ from ream.text import pronoun
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+APP_CLIENT = "https://claude.ai/oauth/claude-ai/client.json"
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +60,13 @@ def _forget_meta_after(request):
                 conn.execute("delete from service_meta")
         finally:
             database.close()
+
+
+def _unrecorded(db):
+    """A database no service has started: the `db` fixture records the suite's owner, as a
+    started service has, and these tests are about the start that records it."""
+    with db.connect() as conn:
+        conn.execute("delete from service_meta where key = 'owner_id'")
 
 
 # --- the settings object -----------------------------------------------------------------
@@ -242,6 +255,7 @@ def test_a_gallery_comment_resolve_and_reopen_use_the_owner_id(db):
 
 
 def test_a_new_database_takes_whatever_it_is_given(db):
+    _unrecorded(db)
     assert owner.stored(db) is None
     assert owner.check(db, "ann") == "ann"
     assert owner.stored(db) == "ann"
@@ -261,6 +275,7 @@ def test_the_same_id_starts_again_and_another_refuses(db):
 def test_the_real_entrypoint_refuses_a_database_written_for_another_owner(
     db, monkeypatch
 ):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     owner.check(db, "someone-else")
     with pytest.raises(SystemExit) as exc:
@@ -270,6 +285,7 @@ def test_the_real_entrypoint_refuses_a_database_written_for_another_owner(
 
 
 def test_the_real_entrypoint_records_the_owner_on_first_start(db, monkeypatch):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     assert owner.stored(db) is None
     app_from_env()
@@ -280,6 +296,7 @@ def test_the_real_entrypoint_records_the_owner_on_first_start(db, monkeypatch):
 def test_the_real_entrypoint_refuses_a_bad_setting_before_touching_the_database(
     db, monkeypatch
 ):
+    _unrecorded(db)
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     monkeypatch.setenv("REAM_OWNER_ID", "No Good")
     with pytest.raises(SystemExit) as exc:
@@ -300,6 +317,17 @@ COLUMNS = [
     ("comment_image", "staged_by", ""),
     ("partner_question", "answered_by", ""),
     ("person", "id", ""),
+    ("page_read", "person", ""),
+    ("human_pref", "person", ""),
+    ("page_pin", "person", ""),
+    ("frame_pass", "person", ""),
+    ("decision", "addressed_to", ""),
+    ("form_answer", "person", ""),
+    ("receipt", "person", ""),
+    ("person_session", "person", ""),
+    ("mcp_agent", "person", ""),
+    ("mcp_app", "person", ""),
+    ("mcp_signin", "person", ""),
 ]
 
 
@@ -329,7 +357,11 @@ def _populate(db):
     comments.resolve(db, root.id, by="jeremy", agent=None)
     comments.reopen(db, root.id, agent=None, by="jeremy")
     comments.resolve(db, root.id, by="jeremy", agent=None)
+    store.mark_read(db, page.id, "jeremy")
+    store.set_pinned(db, page.id, True, agent=None, person="jeremy")
+    frame_pass.mint(db, page.id, person="jeremy")
     with db.connect() as conn:
+        holds.set_mode(conn, "live", "jeremy")
         folders.create_his(conn, "Reading")
         folder_id = conn.execute("select id from folder").fetchone()[0]
         conn.execute(
@@ -348,6 +380,47 @@ def _populate(db):
             " values ('qd:q9', 1, 'warpgate', 't', %s, 'open', 'jeremy', %s, %s)",
             (jsonb(OPTIONS), datetime.now(UTC), datetime.now(UTC)),
         )
+        # slice 3: a question addressed to him, his record of a form, a receipt about his answer
+        conn.execute(
+            "update decision set addressed_to = 'jeremy' where id = %s", (asked.id,)
+        )
+        conn.execute(
+            "insert into decision (id, artifact_id, version_n, question, options,"
+            " created_at, kind, form_name) values ('f1', %s, 1, 'f', %s, %s, 'form', 'rollout')",
+            (page.id, jsonb([]), datetime.now(UTC)),
+        )
+        conn.execute(
+            "insert into form_answer (decision_id, person, answer_record, answered_at)"
+            " values ('f1', 'jeremy', %s, %s)",
+            (jsonb({"answers": {}}), datetime.now(UTC)),
+        )
+        conn.execute(
+            "insert into receipt (id, subject_kind, subject_id, state, agent, created_at,"
+            " person) values ('rc1', 'decision', %s, 'working', 'bosun', %s, 'jeremy')",
+            (asked.id, datetime.now(UTC)),
+        )
+        # slice 4: his signed-in browser
+        conn.execute(
+            "insert into person_session (token_sha256, person, expires_at)"
+            " values ('tok1', 'jeremy', %s)",
+            (datetime.now(UTC) + timedelta(hours=12),),
+        )
+        # the agents design, slice 1: his app agent, his consent for it, a sign-in in flight
+        conn.execute(
+            "insert into mcp_signin (id, client_id, redirect_uri, code_challenge, resource,"
+            " person, created_at, expires_at) values"
+            " ('s1', %s, 'https://claude.ai/cb', 'c', 'r', 'jeremy', %s, %s)",
+            (APP_CLIENT, datetime.now(UTC), datetime.now(UTC) + timedelta(minutes=10)),
+        )
+    agent = mcp_apps.agent_for(db, "jeremy", APP_CLIENT, "claude.ai").agent
+    mcp_apps.create_app(
+        db,
+        person="jeremy",
+        client_id=APP_CLIENT,
+        agent=agent,
+        permissions=["read"],
+        redirect_uri="https://claude.ai/cb",
+    )
     return page
 
 
@@ -373,6 +446,28 @@ def test_change_owner_moves_every_stored_column_and_records_the_new_id(db):
         owner.check(db, "jeremy")
 
 
+def test_an_owners_app_question_is_still_the_new_owners_to_answer(db):
+    """`mcp_agent.person` decides who answers a question with no `addressed_to`: change-owner
+    moves it with the owner id, or the new owner could no longer answer his own app's question."""
+    owner.check(db, "jeremy")
+    agent = mcp_apps.agent_for(db, "jeremy", APP_CLIENT, "claude.ai").agent
+    page = store.publish(db, agent, "Board", PAGE)
+    asked = decisions.ask(
+        db, agent=agent, artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    assert asked.addressed_to is None
+
+    owner.change_owner(db, "ann", dry_run=False)
+
+    ann = people.Person(id="ann", name="Ann", is_owner=True)
+    with settings.override(owner_id="ann", owner_name="Ann"):
+        done = decisions.answer(db, asked.id, letter="a", by="ann", person=ann)
+        assert done.answered_by == "ann"
+        with db.connect() as conn:
+            assert agents.shown(conn, agent).text() == "Ann, via claude.ai"
+            assert agents.page_owners(conn, agent) == ("ann",)
+
+
 def test_a_dry_run_counts_and_changes_nothing(db):
     _populate(db)
     owner.check(db, "jeremy")
@@ -384,6 +479,7 @@ def test_a_dry_run_counts_and_changes_nothing(db):
 
 
 def test_change_owner_refuses_what_it_should(db):
+    _unrecorded(db)
     with pytest.raises(owner.Refused, match="no owner is recorded"):
         owner.change_owner(db, "ann", dry_run=False)
     owner.check(db, "jeremy")
@@ -394,6 +490,60 @@ def test_change_owner_refuses_what_it_should(db):
     keys.mint(db, "bosun")
     with pytest.raises(owner.Refused, match="agent"):
         owner.change_owner(db, "bosun", dry_run=False)
+    assert owner.stored(db) == "jeremy"
+
+
+def _hold_new_id(db, how: str) -> None:
+    """Make `ann` already held: as a person row, or as the person of an app agent."""
+    if how == "person":
+        with db.connect() as conn:
+            conn.execute("insert into person (id) values (%s)", ("ann",))
+    elif how == "agent_person":
+        with db.connect() as conn:
+            conn.execute(
+                "insert into agent_person (agent, person) values (%s, %s)",
+                ("laptop", "ann"),
+            )
+    else:
+        mcp_apps.agent_for(db, "ann", APP_CLIENT, "claude.ai")
+
+
+@pytest.mark.parametrize(
+    ("how", "table"),
+    [
+        ("person", "person"),
+        ("mcp_agent", "mcp_agent"),
+        ("agent_person", "agent_person"),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_change_owner_refuses_an_id_a_person_or_app_agent_already_holds(
+    db, how, table, dry_run
+):
+    """The move would collide with the row that is there (a key, a unique pair): it is refused
+    up front, in a dry run too, naming the table and writing nothing."""
+    _populate(db)
+    owner.check(db, "jeremy")
+    _hold_new_id(db, how)
+    before = _count(db, "jeremy")
+
+    with pytest.raises(owner.Refused, match=table) as refused:
+        owner.change_owner(db, "ann", dry_run=dry_run)
+
+    assert "ann" in str(refused.value)
+    assert _count(db, "jeremy") == before
+    assert owner.stored(db) == "jeremy"
+
+
+def test_the_cli_shows_a_held_id_as_a_refusal_not_a_traceback(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    owner.check(db, "jeremy")
+    _hold_new_id(db, "person")
+    for argv in (["change-owner", "ann", "--dry-run"], ["change-owner", "ann"]):
+        with pytest.raises(SystemExit) as refused:
+            admin.main(argv)
+        assert str(refused.value).startswith("refused:")
+        assert "person" in str(refused.value)
     assert owner.stored(db) == "jeremy"
 
 
@@ -470,9 +620,12 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 23 Nov 2026 for the marked changes view over MCP (the changes paragraph says `read_page` takes `changes_to` and `changes_format marked`); skill.md and agent.json did not move. Re-taken again for the MCP organise_folder tool (its name in the MCP tool list). Re-taken again for the MCP organise_folder tool (its name in the MCP tool list).
 # agents.txt re-taken again on 23 Nov 2026 for the MCP transfer_page tool (its name in the MCP tool list); skill.md and agent.json did not move.
 # agents.txt re-taken on 24 Nov 2026: comment_image named in the MCP tool list; skill.md and agent.json did not move.
+# agents.txt and the artifacts-decide help re-taken on 25 Nov 2026 for `answers` on a form decision (people slice 3b: one paragraph in agents.txt, one sentence in the help epilog; reworded after review so every form row carries it, `sources` elements described); skill.md and agent.json did not move.
+# agents.txt and skill.md re-taken on 26 Nov 2026 for watching a page (agents slice 3: a section in agents.txt, the MCP tool list names watch_page, unwatch_page and watches, and a short paragraph in skill.md); agent.json did not move.
+# agents.txt re-taken on 26 Nov 2026 for review of watching (wait_for_answer includes watched events once woken; watch_page and unwatch_page need only ream:read and are listed apart from the read tools); skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "0850bd853e7bf5c30a6b1bcbae336e21b9b5c13ee0fb43d4c8b4fd2f2adfa6be",
-    "skill.md": "46e99b142ada0f82581fc4f4a69b5a7f0ad3dce66fc515339e755a26e065e4ef",
+    "agents.txt": "7a0d6c61f0f1b3ecbbc08d02a8d089979e3b3536ce0fa7ee4e472109c32329d2",
+    "skill.md": "4f0935373cb8d491872b6bb77b9d7d3a951ea01219234a326e5b97a630fbe874",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -517,7 +670,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
-    "artifacts-decide": "1d592613826304b91d11381e64fef393d6020a2a5245e743ebad8aa86abbf88b",
+    "artifacts-decide": "46400af192a20cbd8f26fbfd6830b398fa0a8b986563cd6de11ef91ebcad19ac",
 }
 
 
@@ -552,3 +705,23 @@ def test_cli_help_is_unchanged(monkeypatch, name):
     parser = (client if name == "artifacts-publish" else decide).build_parser()
     text = _help(parser)
     assert hashlib.sha256(text.encode()).hexdigest() == HELP_DIGEST[name]
+
+
+def test_change_owner_moves_a_personal_keys_person_with_the_owner_id(db):
+    """A key the owner marked as his own machine (agents design, slice 4) follows the owner id;
+    another person's stays."""
+    owner.check(db, "jeremy")
+    with db.connect() as conn:
+        conn.execute("insert into person (id) values ('zed')")
+    keys.mint(db, "laptop")
+    keys.mint(db, "zeds-box")
+    agents.set_person(db, "laptop", "jeremy", "admin")
+    agents.set_person(db, "zeds-box", "zed", "admin")
+
+    counts = owner.change_owner(db, "ann", dry_run=True)
+    assert counts["agent_person.person"] == 1
+
+    owner.change_owner(db, "ann", dry_run=False)
+    with db.connect() as conn:
+        assert agents.person_of(conn, "laptop") == "ann"
+        assert agents.person_of(conn, "zeds-box") == "zed"

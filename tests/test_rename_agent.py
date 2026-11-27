@@ -11,7 +11,17 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import admin, comments, decisions, events, keys, rename, store
+from ream import (
+    admin,
+    agents,
+    comments,
+    decisions,
+    events,
+    keys,
+    rename,
+    store,
+    watches,
+)
 from ream.app import create_gallery_app
 from ream.db import jsonb
 
@@ -36,6 +46,7 @@ COLUMNS = [
     ("seat_grant", "agent", ""),
     ("seat_read", "agent", ""),
     ("idempotency", "agent", ""),
+    ("page_watch", "agent", ""),
 ]
 
 
@@ -122,6 +133,7 @@ def _populate(db, agent: str, *, session: str = "s1", scope: str = "x:one"):
                 agent,
             ),
         )
+    assert watches.watch(db, agent, page.id, session=f"{agent}/{session}")
     return token, page.id, asked.id
 
 
@@ -598,3 +610,56 @@ def test_a_merge_without_the_flag_still_keeps_the_old_key_working(db, monkeypatc
     _touch(db, old_key, datetime.now(UTC))
     admin.main(["rename-agent", "cove-maintainer", "cove"])
     assert keys.verify(db, old_token) is not None
+
+
+# --- personal keys (agents design, slice 4) ---------------------------------------------
+
+
+def _personal(db, agent: str, person: str) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            "insert into person (id) values (%s) on conflict do nothing", (person,)
+        )
+    keys.mint(db, agent)
+    agents.set_person(db, agent, person, "admin")
+
+
+def _person_rows(db) -> dict[str, str]:
+    with db.connect() as conn:
+        return dict(conn.execute("select agent, person from agent_person").fetchall())
+
+
+def test_a_rename_refuses_to_merge_keys_of_different_people(db):
+    _personal(db, "ann-box", "ann")
+    _personal(db, "zed-box", "zed")
+    with pytest.raises(rename.Refused, match="different people"):
+        rename.rename_agent(db, "ann-box", "zed-box", dry_run=False)
+    # a dry run refuses too, and nothing moved
+    with pytest.raises(rename.Refused, match="different people"):
+        rename.rename_agent(db, "ann-box", "zed-box", dry_run=True)
+    assert _person_rows(db) == {"ann-box": "ann", "zed-box": "zed"}
+
+
+def test_a_rename_refuses_a_personal_key_into_a_shared_one_that_holds_pages(db):
+    _personal(db, "ann-box", "ann")
+    keys.mint(db, "office")
+    store.publish(db, "office", "Closed", PAGE)
+    with pytest.raises(rename.Refused, match="different people"):
+        rename.rename_agent(db, "ann-box", "office", dry_run=False)
+    with pytest.raises(rename.Refused, match="different people"):
+        rename.rename_agent(db, "office", "ann-box", dry_run=False)
+    assert _person_rows(db) == {"ann-box": "ann"}
+
+
+def test_a_personal_key_renamed_to_a_new_name_keeps_its_person(db):
+    _personal(db, "ann-box", "ann")
+    counts = rename.rename_agent(db, "ann-box", "ann-laptop", dry_run=False)
+    assert counts["agent_person.agent"] == 1
+    assert _person_rows(db) == {"ann-laptop": "ann"}
+
+
+def test_two_keys_of_the_same_person_merge_into_one_row(db):
+    _personal(db, "ann-box", "ann")
+    _personal(db, "ann-box2", "ann")
+    rename.rename_agent(db, "ann-box", "ann-box2", dry_run=False)
+    assert _person_rows(db) == {"ann-box2": "ann"}

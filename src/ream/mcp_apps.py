@@ -11,7 +11,7 @@
   absolute cap 90 days from consent. One live app per person and app.
 
 Wherever an agent is shown, a person-and-app agent reads "<owner name>, via <host>"
-(`display_name`); every other agent is shown by its name.
+(`agents.shown`); every other agent is shown by its name.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
 from ream import db as dbmod
-from ream import reach, settings
+from ream import people, reach, settings
 from ream.db import Database
 from ream.keys import (
     AGENT_NAME,
@@ -126,8 +126,9 @@ def agent_names(person: str, host: str):
 
 def _taken(conn, name: str) -> bool:
     """Whether an agent already answers to `name`: a person-and-app agent, a key's agent,
-    an old name a rename left behind, or a page's publisher."""
+    an old name a rename left behind, a page's publisher, or a person's id."""
     for sql in (
+        "select 1 from person where id = %s",
         "select 1 from mcp_agent where agent = %s",
         "select 1 from agent_key where agent = %s",
         "select 1 from agent_alias where old = %s",
@@ -185,21 +186,6 @@ def mcp_agent(db: Database, agent: str) -> McpAgent | None:
             (agent,),
         ).fetchone()
     return None if row is None else _agent_row(row)
-
-
-# --- How an agent is shown ------------------------------------------------------------------
-
-
-def via(host: str) -> str:
-    """How a person-and-app agent on `host` is shown: `Jeremy, via claude.ai`."""
-    return f"{settings.owner_name()}, via {host}"
-
-
-def display_name(db: Database, agent: str) -> str:
-    """How `agent` is shown wherever the gallery or the API shows an agent: a
-    person-and-app agent as "<owner name>, via <host>", any other by its name."""
-    found = mcp_agent(db, agent)
-    return agent if found is None else via(found.host)
 
 
 # --- Apps (consents) ------------------------------------------------------------------------
@@ -353,9 +339,11 @@ def listed(db: Database, person: str) -> list[Listed]:
 
 
 def reach_of(db: Database, app: App) -> reach.Reach:
-    """What `app` may reach: every page the owner can read (closed to agents included,
-    never the trash); changes to the pages of any of `app.person`'s app agents; relaying
-    only with `relay`; and the permissions the person granted (`read` is `ream:read`)."""
+    """What `app` may reach: for the owner's app every page the owner can read (closed to
+    agents included, never the trash); for any other person's, what `access.reads_sql`
+    says (their personal agents' pages and pages open to agents). Changes to the pages of any
+    of `app.person`'s app agents either way; relaying only with `relay`; and the permissions
+    the person granted (`read` is `ream:read`)."""
     with db.connect() as conn:
         rows = conn.execute(
             "select agent from mcp_agent where person = %s order by agent",
@@ -364,7 +352,12 @@ def reach_of(db: Database, app: App) -> reach.Reach:
     writers = tuple(dict.fromkeys([app.agent, *(row[0] for row in rows)]))
     return reach.Reach(
         agent=app.agent,
-        readable=reach.READS_AS_OWNER,
+        readable=(
+            reach.READS_AS_OWNER
+            if app.person == people.owner_person().id
+            else reach.READS_AS_PERSON
+        ),
+        person=app.person,
         writable_agents=writers,
         can_relay="relay" in app.permissions,
         permissions=frozenset(f"ream:{p}" for p in app.permissions),

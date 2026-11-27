@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import connect, keys, mcp_apps, rename, settings
+from ream import agents, connect, keys, mcp_apps, rename, settings
 from ream.admin import main as admin_main
 from ream.app import create_gallery_app
 
@@ -79,15 +79,18 @@ def test_the_name_rule_refusals(db):
         assert conn.execute("select count(*) from mcp_agent").fetchone()[0] == 0
 
 
+def _shown(db, agent):
+    with db.connect() as conn:
+        return agents.shown(conn, agent).text()
+
+
 def test_a_person_and_app_agent_is_shown_as_the_owner_via_the_host(db):
     made = mcp_apps.agent_for(db, _person(), CLAUDE_AI, "claude.ai")
-    assert mcp_apps.display_name(db, made.agent) == "Jeremy, via claude.ai"
-    assert mcp_apps.display_name(db, made.agent) == (
-        f"{settings.owner_name()}, via claude.ai"
-    )
-    assert mcp_apps.display_name(db, "house") == "house"  # any other agent: its name
+    assert _shown(db, made.agent) == "Jeremy, via claude.ai"
+    assert _shown(db, made.agent) == (f"{settings.owner_name()}, via claude.ai")
+    assert _shown(db, "house") == "house"  # any other agent: its name
     with settings.override(owner_name="Ann"):
-        assert mcp_apps.display_name(db, made.agent) == "Ann, via claude.ai"
+        assert _shown(db, made.agent) == "Ann, via claude.ai"
 
 
 def test_an_app_made_in_the_database_reads_back(db):

@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_mcp_reach import PAGE, _app, _as, _as_key, _tool
 
-from ream import decisions, events, gallery, ids, keys, settings, store
+from ream import agents, decisions, events, gallery, ids, keys, settings, store
 from ream.app import create_gallery_app
 
 OPTIONS = [{"letter": "a", "label": "Alpha"}, {"letter": "b", "label": "Beta"}]
@@ -327,6 +327,8 @@ def test_the_asker_name_is_escaped_on_the_card():
     html = gallery._asker_line(row, None)
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
-    hosted = gallery._asker_line(row, {row.asked_by: "<b>host</b>"})
+    app = agents.app_shown(row.asked_by, "jeremy", None, "<b>host</b>")
+    hosted = gallery._asker_line(row, {row.asked_by: app}, "jeremy")
     assert "<b>" not in hosted
+    assert "&lt;b&gt;host&lt;/b&gt;" in hosted
     assert gallery._asker_line(SimpleNamespace(asked_by=None), None) == ""

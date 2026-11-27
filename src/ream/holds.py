@@ -1,7 +1,7 @@
 """Hold or live: whether Jeremy's marks on a page under review reach the agent
 as he makes them (`live`) or wait for his verdict (`held`).
 
-The mode is a server-side preference (`human_pref`), never a cookie, so every
+The mode is a server-side preference (`human_pref`, one per person), never a cookie, so every
 device he uses agrees. Each review stores the mode it was opened under
 (`decision.review_mode`); a mark is held only while an open review on its page
 is held. Every function here takes the caller's connection, so a release runs
@@ -10,28 +10,30 @@ inside the caller's own transaction.
 
 from datetime import UTC, datetime
 
-from ream import events
+from ream import events, folders
 from ream.db import in_list
 
 MODES = ("held", "live")
 _KEY = "review_mode"
 
 
-def get_mode(conn) -> str:
-    """His remembered mode; `held` before he has ever chosen."""
+def get_mode(conn, person: str | None = None) -> str:
+    """`person`'s remembered mode (the owner's when none is named: an agent opening a review
+    asks for the owner's); `held` before they have ever chosen."""
     row = conn.execute(
-        "select value from human_pref where key = %s", (_KEY,)
+        "select value from human_pref where person = %s and key = %s",
+        (person or folders.his(), _KEY),
     ).fetchone()
     return row[0] if row is not None and row[0] in MODES else "held"
 
 
-def set_mode(conn, mode: str) -> None:
+def set_mode(conn, mode: str, person: str | None = None) -> None:
     if mode not in MODES:
         raise ValueError(mode)
     conn.execute(
-        "insert into human_pref (key, value) values (%s, %s)"
-        " on conflict (key) do update set value = excluded.value, updated_at = %s",
-        (_KEY, mode, datetime.now(UTC)),
+        "insert into human_pref (person, key, value) values (%s, %s, %s)"
+        " on conflict (person, key) do update set value = excluded.value, updated_at = %s",
+        (person or folders.his(), _KEY, mode, datetime.now(UTC)),
     )
 
 
@@ -121,7 +123,7 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
                 kind="comment_added",
                 summary=said,
                 ref_id=cid,
-                note=said,
+                note=comments._event_note(kind, body),
                 session=page_session,
             )
     return [r[0] for r in released]
@@ -142,8 +144,10 @@ def approved_letter(conn, artifact_id: str, letter: str) -> str:
     return "b" if held is not None else letter
 
 
-def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
-    """Jeremy's switch on an open review: remember `mode`, and on `live` release
+def set_review_mode(
+    db, decision_id: str, mode: str, person: str | None = None
+) -> tuple[str, int]:
+    """`person`'s switch on an open review: remember `mode` for them, and on `live` release
     what is held, with events. Returns (artifact_id, released_count). Takes the
     decision row `for update`, the same lock a verdict takes, so a flip and a
     verdict serialise."""
@@ -165,7 +169,7 @@ def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
         conn.execute(
             "update decision set review_mode = %s where id = %s", (mode, decision_id)
         )
-        set_mode(conn, mode)
+        set_mode(conn, mode, person)
         # Another open review on the page may still hold his marks.
         released = (
             release(conn, artifact_id, emit=True)

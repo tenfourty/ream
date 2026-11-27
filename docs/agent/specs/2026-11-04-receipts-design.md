@@ -98,6 +98,9 @@ One verb, `artifacts-decide receipt <id> seen|working|done|blocked|wont-do [--no
 [--link URL] [--for DURATION]` (`--comment ID` waits for slice 4; nothing validates a comment id before then, so the body does not take one). `<id>` is a decision id or a comment id (any
 comment resolves to its thread root; a not-yours or unknown id answers identically, `404`).
 - `seen` writes the acknowledge columns; `ack` stays as an alias for it.
+  A `seen` sent when his answer is dated after the acknowledgement it would stamp (clock skew between
+  the reader and the server) is refused (`409`, "the answer is newer than this acknowledgement; read it,
+  then say seen again"), never answered with an empty body (25 Nov 2026).
 - `working` takes a note ("which bead", the ask of cove and gg-ops); `--for` sets the lifetime
   (default 4 hours, at most 12). Calling `working` again **renews** it (quarterdeck).
 - `done` takes `--link`; `blocked` and `wont-do` require `--note`.
