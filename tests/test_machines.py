@@ -93,3 +93,28 @@ def test_last_used_is_not_written_on_every_request(db, gallery):
             "select last_used_at from agent_key where id = %s", (key_id,)
         ).fetchone()[0]
     assert first is not None and first == second
+
+
+def test_sessions_row_is_markup_with_each_label_escaped_once(db, gallery):
+    """`"<dt>" + escape(x)` made Markup escape the literal tags (the whole row showed as
+    text and the dl's grid broke); a label is agent-supplied and must still come out escaped."""
+    for i in range(6):
+        keys.mint(db, agent=f"box{i}")
+        store.publish(db, f"box{i}", f"B{i}", PAGE, session=f"agent/s{i}")
+    keys.mint(db, agent="evil")
+    store.publish(db, "evil", "E", PAGE, session="<script>alert(1)</script>")
+    page = gallery.get("/machines").text
+    assert "&lt;dt&gt;" not in page and "&lt;dd&gt;" not in page
+    assert page.count("<dt>Sessions</dt><dd>") == 7
+    assert "<dt>Sessions</dt><dd>agent/s3</dd>" in page
+    assert "<script>alert(1)" not in page
+    assert "<dt>Sessions</dt><dd>&lt;script&gt;alert(1)&lt;/script&gt;</dd>" in page
+
+
+def test_machines_lists_only_five_newest_sessions_per_agent(db):
+    keys.mint(db, agent="busy")
+    for i in range(7):
+        store.publish(db, "busy", f"P{i}", PAGE, session=f"a/s{i}")
+    (m,) = keys.machines(db)
+    assert len(m.sessions) == 5
+    assert m.sessions[0] == "a/s6"

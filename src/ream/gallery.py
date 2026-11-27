@@ -2077,9 +2077,12 @@ def _machines_page(
             ),
             f"<dt>Last used</dt><dd>{escape(used or 'not since it connected')}</dd>",
             f"<dt>Pages</dt><dd>{m.pages}</dd>",
-            "<dt>Sessions</dt><dd>"
-            + (escape(", ".join(m.sessions)) if m.sessions else "none labelled yet")
-            + "</dd>",
+            # An f-string, not `"<dd>" + escape(...)`: escape() returns Markup, and
+            # str + Markup escapes the plain str on the left, tags and all.
+            (
+                "<dt>Sessions</dt><dd>"
+                f"{escape(', '.join(m.sessions)) if m.sessions else 'none labelled yet'}</dd>"
+            ),
         ]
         if m.label and m.label != m.agent:
             facts.insert(0, f"<dt>Files pages as</dt><dd>{escape(m.agent)}</dd>")

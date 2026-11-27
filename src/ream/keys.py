@@ -437,23 +437,29 @@ def machines(db: Database) -> list[Machine]:
             " where coalesce(k.revoked_reason, '') not in ('replaced', 'superseded')"
             " order by k.revoked_at is not null, k.created_at desc"
         ).fetchall()
-        # Each agent's five most recent sessions, one query per agent: SQLite
-        # has no array(select ...), and an agent has only a few keys.
-        sessions = {
-            agent: [
-                r[0]
-                for r in conn.execute(
-                    "select v.session, max(v.created_at) as at"
-                    " from version v join artifact a on a.id = v.artifact_id"
-                    " where a.agent = %s and v.session is not null"
-                    " group by v.session order by at desc limit 5",
-                    (agent,),
-                ).fetchall()
-            ]
-            for agent in {row[1] for row in rows}
-        }
+        # Each working machine's five most recent sessions, in ONE query for all of
+        # them (it was one per agent; with a couple of dozen machines that was the
+        # page's slowness). row_number() over a grouped aggregate reads the same on
+        # Postgres and SQLite. A revoked key's sessions are never shown, so they are
+        # not read.
+        agents = sorted({row[1] for row in rows if row[4] is None})
+        sessions: dict[str, list[str]] = {}
+        if agents:
+            marks = ", ".join(["%s"] * len(agents))
+            for agent, session in conn.execute(
+                "select agent, session from ("  # noqa: S608 -- marks are only %s
+                " select a.agent as agent, v.session as session,"
+                " row_number() over (partition by a.agent"
+                "   order by max(v.created_at) desc, v.session) as rn"
+                " from version v join artifact a on a.id = v.artifact_id"
+                f" where a.agent in ({marks}) and v.session is not null"
+                " group by a.agent, v.session"
+                ") t where rn <= 5 order by agent, rn",
+                tuple(agents),
+            ).fetchall():
+                sessions.setdefault(agent, []).append(session)
     return [
-        Machine(*row[:7], sessions=sessions[row[1]], rotating=bool(row[7]))
+        Machine(*row[:7], sessions=sessions.get(row[1], []), rotating=bool(row[7]))
         for row in rows
     ]
 
