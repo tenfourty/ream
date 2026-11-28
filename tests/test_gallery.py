@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from ream import decisions, keys, store
 from ream.app import create_gallery_app
+from ream.content import create_content_app
 from ream.db import in_list
 
 XSS = '"><img src=x onerror=alert(1)>'
@@ -87,6 +88,142 @@ def test_an_unknown_artifact_gets_a_404_not_a_frame(db):
     )
     assert response.status_code == 404
     assert "<iframe" not in response.text
+
+
+# --- a chat app glued punctuation onto a page link (runcove-5t3oj.177) ------------------
+
+_GONE = "aaaaaaaaaaaaaaaaaaaaaaaaaa"  # well formed, no such page
+_HIM = {"Remote-User": "jeremy"}
+_GLUED = [
+    ("*", "%2A"),
+    (")", "%29"),
+    (".", "%2E"),
+    (",", "%2C"),
+    (";", "%3B"),
+    (":", "%3A"),
+    ("]", "%5D"),
+    (">", "%3E"),
+    ("'", "%27"),
+    ('"', "%22"),
+    ("\u2019", "%E2%80%99"),
+    ("\u201d", "%E2%80%9D"),
+    ("!", "%21"),
+    ("?", "%3F"),
+]
+
+
+def _gallery(db) -> TestClient:
+    return TestClient(create_gallery_app(db), follow_redirects=False)
+
+
+# A raw `?` starts the query, so only its encoded form is a character of the path.
+@pytest.mark.parametrize(
+    "junk", [raw for raw, _ in _GLUED if raw != "?"] + [enc for _, enc in _GLUED]
+)
+@pytest.mark.parametrize("method", ["get", "head"])
+def test_a_link_with_trailing_punctuation_redirects_to_the_clean_page(db, junk, method):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    response = getattr(_gallery(db), method)(f"/a/{published.id}{junk}", headers=_HIM)
+    assert response.status_code == 308
+    assert response.headers["location"] == f"/a/{published.id}"
+
+
+def test_the_redirect_keeps_the_query_string_exactly(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    response = _gallery(db).get(
+        f"/a/{published.id}*?comments=all&changes=0", headers=_HIM
+    )
+    assert response.status_code == 308
+    assert response.headers["location"] == f"/a/{published.id}?comments=all&changes=0"
+
+
+def test_several_glued_characters_redirect_too(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    response = _gallery(db).get(f"/a/{published.id}*)%2E", headers=_HIM)
+    assert response.status_code == 308
+    assert response.headers["location"] == f"/a/{published.id}"
+
+
+def test_the_clean_link_still_opens_the_page_after_the_redirect(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    client = TestClient(create_gallery_app(db))
+    response = client.get(f"/a/{published.id}*", headers=_HIM)
+    assert response.status_code == 200
+    assert str(response.url).endswith(f"/a/{published.id}")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/a/short*",
+        "/a/aaaaaaaaaaaaaaaaaaaaaaaaaaa*",  # 27 characters
+        "/a/AAAAAAAAAAAAAAAAAAAAAAAAAA*",  # not the id alphabet
+        "/a/aaaaaaaaaaaaaaaaaaaaaaaaa1*",  # 1 is not in the alphabet
+        "/a/aaaaaaaaaaaaaaaaaaaaaaaaaa-",  # a character outside the set
+        "/a/aaaaaaaaaaaaaaaaaaaaaaaaaa*x",  # not only punctuation
+        "/a/*aaaaaaaaaaaaaaaaaaaaaaaaaa",  # leading, not trailing
+        "/a/aaaaaaaaaaaaaaaaaaaaaaaaaa/stats*",  # a sub-path is not rewritten
+    ],
+)
+def test_anything_but_an_id_and_only_that_punctuation_is_not_redirected(db, path):
+    response = _gallery(db).get(path, headers=_HIM)
+    assert response.status_code == 404
+    assert "location" not in response.headers
+
+
+def test_a_clean_link_to_a_missing_page_still_404s(db):
+    response = _gallery(db).get(f"/a/{_GONE}", headers=_HIM)
+    assert response.status_code == 404
+    assert "location" not in response.headers
+
+
+def test_a_clean_head_is_still_not_allowed(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    for ident in (published.id, _GONE):
+        response = _gallery(db).head(f"/a/{ident}", headers=_HIM)
+        assert response.status_code == 405
+
+
+def test_a_missing_page_and_a_real_one_redirect_identically_then_404_as_before(db):
+    """It redirects on syntax, before any lookup: the id's existence is not told."""
+    published = store.publish(db, "other-seat", "Theirs", _PAGE)
+    client = _gallery(db)
+    real = client.get(f"/a/{published.id}*?changes=0")
+    gone = client.get(f"/a/{_GONE}*?changes=0")
+    assert real.status_code == gone.status_code == 308
+    assert real.headers["location"].replace(published.id, "ID") == gone.headers[
+        "location"
+    ].replace(_GONE, "ID")
+    assert set(real.headers) == set(gone.headers)
+    assert real.content == gone.content
+    # Followed, the missing one is what it always was.
+    assert client.get(gone.headers["location"]).status_code == 404
+
+
+def test_the_content_domain_does_not_redirect_a_glued_link(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    client = TestClient(
+        create_content_app(db),
+        base_url=f"https://{published.id}.tenfourty.com",
+        follow_redirects=False,
+    )
+    for path in (f"/a/{published.id}*", f"/{published.id}*", "/*"):
+        response = client.get(path)
+        assert response.status_code != 308, path
+        assert "location" not in response.headers, path
+
+
+def test_the_api_does_not_redirect_a_glued_link(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    token, _ = keys.mint(db, agent="ops-seat")
+    client = _gallery(db)
+    for word in ("pages", "artifacts"):
+        response = client.get(
+            f"/api/v1/{word}/{published.id}*",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 404, word
+        assert "location" not in response.headers, word
 
 
 def test_the_detail_page_escapes_the_title_it_now_shows(db):

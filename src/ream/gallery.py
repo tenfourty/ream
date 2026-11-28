@@ -3767,6 +3767,28 @@ class _FolderItem(NamedTuple):
     unread: bool
 
 
+# A chat app can glue the punctuation that follows a link onto it (a Markdown `*`, a closing
+# bracket or quote, a full stop), and the reader opens `/a/<id>*` and gets a 404.
+# The id is `ids.new_id()`'s: 26 characters of a-z and 2-7. The path parameter arrives already
+# percent-decoded, so `%2A` and `%E2%80%99` are `*` and the right single quote here.
+_LINK_JUNK = re.compile(r"([a-z2-7]{26})[*).,;:\]>'\"\u2019\u201d!?]+")
+
+
+def _link_with_junk(artifact_id: str, request: Request) -> RedirectResponse | None:
+    """308 to the page's own address when the path is a well-formed id plus only trailing
+    punctuation, query kept; None for anything else. Decided on syntax alone, before any
+    lookup, so a missing or not-yours id redirects exactly as a real one does and answers
+    what it always did on the other side. Only the bare `/a/<id>` address: a sub-path
+    (`/a/<id>/share*`) is not a link anyone is handed."""
+    found = _LINK_JUNK.fullmatch(artifact_id)
+    if found is None:
+        return None
+    query = request.scope.get("query_string", b"").decode("latin-1")
+    return RedirectResponse(
+        f"/a/{found.group(1)}" + (f"?{query}" if query else ""), status_code=308
+    )
+
+
 def _search_words(needle: str) -> list[str]:
     """The words of a search: split on whitespace, at most eight."""
     return needle.split()[:8]
@@ -7702,9 +7724,19 @@ def gallery_router(db: Database) -> APIRouter:
             }
             return store.version_bodies(conn, artifact_id, sorted(live))
 
+    @router.head("/a/{artifact_id}", include_in_schema=False)
+    def detail_head(artifact_id: str, request: Request) -> Response:
+        # Only a mangled link is answered: a HEAD of a clean address was a 405 (this route
+        # serves GET) and stays one, so a HEAD tells nothing about whether the id exists.
+        moved = _link_with_junk(artifact_id, request)
+        if moved is None:
+            raise HTTPException(405, "Method Not Allowed", headers={"Allow": "GET"})
+        return moved
+
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
     def detail(
         artifact_id: str,
+        request: Request,
         # "This page" or "All pages" in the comments drawer (homelab-ij8.18).
         # A query parameter rather than a separate route, because it is a
         # filter on a panel that is already open: the fragment #comments keeps
@@ -7714,7 +7746,11 @@ def gallery_router(db: Database) -> APIRouter:
         # Round 2 and later open on what changed; "0" is his Hide changes.
         changes: str = Query("1", pattern="^(0|1)$"),
         person: people.Person = people.CURRENT,
-    ) -> HTMLResponse:
+    ) -> Response:
+        # A link a chat app glued punctuation onto: on syntax alone, before any lookup.
+        moved = _link_with_junk(artifact_id, request)
+        if moved is not None:
+            return moved
         # Look the artifact up rather than framing whatever the URL said: an
         # unchecked id renders a frame pointing at an invented subdomain, and
         # the title is wanted on the page anyway.
