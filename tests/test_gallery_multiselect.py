@@ -124,6 +124,15 @@ def test_choose_page_lists_his_folders_and_the_one_agents_and_moves_nothing(clie
     assert count(db, "select count(*) from artifact where folder_id is not null") == 3
 
 
+def test_choose_page_shows_the_agents_apostrophe_once_escaped(client, db):
+    p = put(db, "bob", "P")
+    put(db, "bob", "Z", folder="bob-f", folder_title="Bob F")
+    got = select(client, [p], do="choose", back="/")
+    assert got.status_code == 200
+    assert '<span class="who">bob&#39;s</span>' in got.text
+    assert "&amp;#39;" not in got.text
+
+
 def test_batch_move_into_his_folder_is_one_request(client, db):
     seed = put(db, "alpha", "Seed")
     fid = his_folder(client, db, seed)

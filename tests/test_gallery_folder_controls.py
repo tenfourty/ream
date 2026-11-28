@@ -107,6 +107,14 @@ def test_choices_list_his_folders_and_the_pages_own_agents_but_not_others(client
     assert folder_of(db, a.id)[1] == "alpha"
 
 
+def test_the_chooser_shows_the_agents_apostrophe_once_escaped(client, db):
+    put(db, "bob", "B", folder="bob-things", folder_title="Bob things")
+    loose = put(db, "bob", "Loose")
+    html = client.get(f"/a/{loose.id}/folder").text
+    assert '<span class="who">bob&#39;s</span>' in html
+    assert "&amp;#39;" not in html
+
+
 def test_take_out_of_folder_goes_to_the_wall(client, db):
     p = put(db, "alpha", "Filed")
     his_folder(client, db, p)

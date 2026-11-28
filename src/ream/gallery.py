@@ -7273,7 +7273,7 @@ def gallery_router(db: Database) -> APIRouter:
             f'<input type="hidden" name="folder" value="{escape(fid)}">'
             f'<button class="btn{" primary" if fid == current else ""}" type="submit">'
             f"{escape(title)}{' (here)' if fid == current else ''}</button>"
-            f'<span class="who">{"yours" if mine else escape(agent) + "&#39;s"}</span></form>'
+            f'<span class="who">{"yours" if mine else escape(agent + "'s")}</span></form>'
             for fid, title, mine in choices
         )
         out = (
@@ -7441,7 +7441,7 @@ def gallery_router(db: Database) -> APIRouter:
             f'{hidden()}<input type="hidden" name="do" value="move">'
             f'<input type="hidden" name="folder" value="{escape(fid)}">'
             f'<button class="btn" type="submit">{escape(title)}</button>'
-            f'<span class="who">{"yours" if mine else escape(agents[0]) + "&#39;s"}</span></form>'
+            f'<span class="who">{"yours" if mine else escape(agents[0] + "'s")}</span></form>'
             for fid, title, mine in choices
         )
         body = (
