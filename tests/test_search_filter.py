@@ -562,3 +562,26 @@ def test_a_percent_or_underscore_in_a_word_is_literal(client, db):
     assert "Other" not in client.get("/?q=50%25").text
     out = client.get("/?q=a_b").text
     assert "Und" in out and "Other" not in out
+
+
+def test_a_query_of_many_entity_heavy_words_keeps_the_body_clauses_capped(client, db):
+    """Each body clause re-lowers the body on every row, so the total over all words is
+    bounded: past it a word falls back to its longest run, and nothing is dropped."""
+    from ream import gallery
+
+    words = ["it's", "don't", "can't", "won't", "r&d", "a&b", "c'd&e", "x'y'z"]
+    needle = " ".join(words)
+    chosen = gallery._prefilter_words(needle)
+    assert len(chosen) == len(words)
+    assert sum(len(body) for _plain, body in chosen) <= gallery._BODY_CLAUSES
+    assert all(body for _plain, body in chosen)
+    # The first words still get their entity spellings; the later ones fall back.
+    assert "it&#39;s" in chosen[0][1]
+    assert chosen[-1][1] == ("x",)
+
+    text = " ".join(w.replace("'", "&#39;").replace("&", "&amp;") for w in words)
+    store.publish(db, "seat", "Everything", _body(text))
+    store.publish(db, "seat", "Half", _body(" ".join(text.split()[:4])))
+    found = client.get("/?q=" + "+".join(w.replace("&", "%26") for w in words)).text
+    assert "Everything" in found
+    assert "Half" not in found

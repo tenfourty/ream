@@ -3780,6 +3780,40 @@ _SEARCH_BATCHES = 50
 _SEARCH_GROWTH = 4
 
 
+# Most body clauses one search's prefilter may carry, over all its words: each re-reads and
+# lower-cases the body on every row of every batch. A word that would pass it is asked of the
+# SQL as its longest run of letters and digits (one clause), which never drops a match.
+_BODY_CLAUSES = 16
+
+
+def _prefilter_words(needle: str) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Per search word that the SQL can narrow on: (what a title, agent or id must hold,
+    the spellings a body may hold it in).
+
+    The whole word, in every stored spelling (`text_module.raw_spellings`: `it's` is `it's`,
+    `it&#39;s` or `it&amp;#39;s` in a body; a title, agent or id is raw). A word whose
+    spellings cannot be listed, or do not fit what is left of `_BODY_CLAUSES` once each later
+    word has kept one clause, falls back to its longest run of ASCII letters and digits as a
+    plain substring (whatever the word check accepts holds it in the raw text); a word with no
+    such run, an em dash or a CJK word, is left to `_matches` alone.
+    """
+    words = _search_words(needle)
+    budget = _BODY_CLAUSES
+    out = []
+    for i, word in enumerate(words):
+        spellings = text_module.raw_spellings(word)
+        if spellings is not None and len(spellings) <= budget - (len(words) - i - 1):
+            plain = (word,)
+        else:
+            run = max(_SQL_RUN.findall(word), key=len, default="")
+            if not run:
+                continue
+            spellings = plain = (run,)
+        budget -= len(spellings)
+        out.append((plain, spellings))
+    return out
+
+
 def _like(fragment: str) -> str:
     """`fragment` as a `like` pattern that finds it anywhere (`escape '!'` on the clause)."""
     return "%" + re.sub(r"([!%_])", r"!\1", fragment) + "%"
@@ -6060,22 +6094,7 @@ def gallery_router(db: Database) -> APIRouter:
             "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
             f"   1, {text_module.SEARCH_LIMIT}))"
         )
-        for word in _search_words(needle):
-            # The whole word as it can be stored (`text_module.raw_spellings`: `it's` is
-            # `it's`, `it&#39;s` or `it&amp;#39;s` in a body; a title, agent or id is raw), so
-            # the SQL narrows to pages that can hold the word. A word whose spellings cannot be
-            # listed falls back to its longest run of ASCII letters and digits as a plain
-            # substring (whatever the word check accepts holds it in the raw text; a word with
-            # no such run, an em dash or a CJK word, is left to `_matches` alone).
-            spellings = text_module.raw_spellings(word)
-            if spellings is None:
-                run = max(_SQL_RUN.findall(word), key=len, default="")
-                if not run:
-                    continue
-                spellings = (run,)
-                plain = (run,)
-            else:
-                plain = (word,)
+        for plain, spellings in _prefilter_words(needle):
             likes = [
                 f"lower(a.{col}) like %s escape '!'" for col in ("title", "agent", "id")
             ]
