@@ -1713,3 +1713,28 @@ and `:has()`), so the page keeps working with scripts off and the page makes no 
 **Evidence:** the owner's answers of 27 and 28 Nov 2026; the approved mock-up is Ream page
 `kuz6hf6e4u5kqk7tqnlcoeewko`. Tracker item runcove-5t3oj.175. Connected apps keep their own section
 and are not cards: an app is a person's sign-in, not a machine.
+
+## The slowest gallery searches get an entity-aware prefilter, not stored search text (28 Nov 2026)
+
+On 27 Nov 2026 a profile in the live pod (626 live and 134 archived pages, 131 MB of current bodies, no
+full-text index) showed `it's` at 2.04 s, `R&D` at 1.58 s, `ream` at 1.28 s, `deploy` at 0.80 s and a
+search with no hit at 0.28 s. For a word with an apostrophe or an ampersand the SQL prefilter fell back to
+a bare fragment (`it`, `r`) because a body stores `it&#39;s` and `R&amp;D`, so it narrowed nothing and
+every page's text was read and matched in Python.
+
+**Chosen:** speed up the slowest searches without storing anything new. The prefilter asks for the whole
+word in every spelling a body can hold it (`it's`, `it&#39;s`, `it&amp;#39;s`; `R&D`, `R&amp;D`), derived
+from the same entity table `searchable` decodes with, so it never drops a page the matcher accepts and
+falls back to the old fragment for a word whose spellings cannot be listed safely. Searches read wider
+batches after the first, and the fixed cost per search drops: the header counts read a lean query, the
+Archived tab's pages are read without their text unless it is open or a search must read them, and the
+gallery origin is read once per request. No schema change, no backfill, no cache. Which pages match, and
+in what order, does not change.
+
+**Not chosen:**
+- Store each page's searchable text when it is published: fastest, but a schema change plus a backfill of
+  every existing page, for a search that only needs its few slow cases fixed.
+- Leave search as it is: the slowest searches stay at two seconds and grow with the wall.
+
+**Evidence:** the owner chose this (option a) on 28 Nov 2026. Tracker item runcove-5t3oj.176; profile
+figures from the live pod, 27 Nov 2026.

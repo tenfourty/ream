@@ -3776,6 +3776,13 @@ def _search_words(needle: str) -> list[str]:
 _SQL_RUN = re.compile(r"[a-z0-9]+")
 # Most batches of `_WALL_PAGE` rows one search reads: 10,000 pages.
 _SEARCH_BATCHES = 50
+# Each later batch of a search reads this many times the one before, up to its square.
+_SEARCH_GROWTH = 4
+
+
+def _like(fragment: str) -> str:
+    """`fragment` as a `like` pattern that finds it anywhere (`escape '!'` on the clause)."""
+    return "%" + re.sub(r"([!%_])", r"!\1", fragment) + "%"
 
 
 def _starts_a_word(word: str, text: str) -> bool:
@@ -5971,6 +5978,10 @@ def gallery_router(db: Database) -> APIRouter:
         kept: list = []
         cursor = older
         more = False
+        # The first batch is one page, so a word most pages hold (`ream`) costs what a plain
+        # wall does; each pass over the table is a full scan of the bodies, so a word that
+        # few pages hold reads wider batches (a rare word is found in a pass or two, not 50).
+        size = _WALL_PAGE
         for _ in range(_SEARCH_BATCHES):
             batch = _wall_fetch(
                 conn,
@@ -5982,12 +5993,14 @@ def gallery_router(db: Database) -> APIRouter:
                 needle,
                 agent,
                 bodies,
+                size,
             )
             kept.extend(r for r in batch if _matches(r, needle))
             more = batch.more
             if len(kept) > _WALL_PAGE or not more:
                 break
             cursor = batch.cursor
+            size = min(size * _SEARCH_GROWTH, _WALL_PAGE * _SEARCH_GROWTH**2)
         rows = _WallRows(_title_first(kept[:_WALL_PAGE], needle))
         if len(kept) > _WALL_PAGE or more:
             rows.more = True
@@ -6008,6 +6021,7 @@ def gallery_router(db: Database) -> APIRouter:
         needle: str = "",
         agent: str = "",
         bodies: bool = True,
+        size: int = 0,
     ):
         """The pages of the live wall, or the archived ones. `bodies` False leaves the body
         column null: for a caller that only counts (waiting, pinned, agents).
@@ -6023,9 +6037,10 @@ def gallery_router(db: Database) -> APIRouter:
         ARCHIVED folder (archived tab). A page archived on its own out of a live folder
         has no tile to hide behind, so it stays in the flat archived list.
 
-        At most `_WALL_PAGE` rows come back; `.more` says there are older ones and `.cursor`
+        At most `size` (default `_WALL_PAGE`) rows come back; `.more` says there are older ones and `.cursor`
         is what the "Older pages" link carries to fetch the next lot (`older`).
         """
+        size = size or _WALL_PAGE
         after, after_params = _after_cursor(older, person) if older else ("", ())
         if folder_id is not None:
             scope, extra = " and a.folder_id = %s", (folder_id,)
@@ -6040,22 +6055,34 @@ def gallery_router(db: Database) -> APIRouter:
         else:
             scope, extra = "", ()
         found, found_params = "", ()
+        body_sql = (
+            "lower(substr(coalesce((select v.body from version v"  # noqa: S608
+            "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
+            f"   1, {text_module.SEARCH_LIMIT}))"
+        )
         for word in _search_words(needle):
-            # The word's longest run of ASCII letters and digits, as a plain substring:
-            # whatever the word check accepts holds it in the raw text (entities decode to
-            # other characters, and SQL folds only ASCII). A word with no such run (an em dash,
-            # a CJK word) is left to `_matches` alone.
-            run = max(_SQL_RUN.findall(word), key=len, default="")
-            if not run:
-                continue
-            found += (
-                " and (lower(a.title) like %s or lower(a.agent) like %s"  # noqa: S608
-                " or lower(a.id) like %s"
-                " or lower(substr(coalesce((select v.body from version v"
-                "   where v.artifact_id = a.id and v.n = a.current_version), ''),"
-                f"   1, {text_module.SEARCH_LIMIT})) like %s)"
-            )
-            found_params += (f"%{run}%",) * 4
+            # The whole word as it can be stored (`text_module.raw_spellings`: `it's` is
+            # `it's`, `it&#39;s` or `it&amp;#39;s` in a body; a title, agent or id is raw), so
+            # the SQL narrows to pages that can hold the word. A word whose spellings cannot be
+            # listed falls back to its longest run of ASCII letters and digits as a plain
+            # substring (whatever the word check accepts holds it in the raw text; a word with
+            # no such run, an em dash or a CJK word, is left to `_matches` alone).
+            spellings = text_module.raw_spellings(word)
+            if spellings is None:
+                run = max(_SQL_RUN.findall(word), key=len, default="")
+                if not run:
+                    continue
+                spellings = (run,)
+                plain = (run,)
+            else:
+                plain = (word,)
+            likes = [
+                f"lower(a.{col}) like %s escape '!'" for col in ("title", "agent", "id")
+            ]
+            found_params += tuple(_like(w) for w in plain) * 3
+            likes += [f"{body_sql} like %s escape '!'"] * len(spellings)
+            found_params += tuple(_like(w) for w in spellings)
+            found += " and (" + " or ".join(likes) + ")"
         if agent:
             found += " and a.agent = %s"
             found_params += (agent,)
@@ -6077,9 +6104,13 @@ def gallery_router(db: Database) -> APIRouter:
             # 2 open questions would report 24 of each. That is the classic
             # shape and it is silent -- the numbers merely look large.
             "select a.id, a.title, a.updated_at, a.agent,"  # noqa: S608
-            "       (select count(*) from version v"
-            "          where v.artifact_id = a.id) as versions,"
-            "       (select count(*) from decision d"
+            + (
+                "       (select count(*) from version v"
+                "          where v.artifact_id = a.id) as versions,"
+                if bodies
+                else "       null as versions,"
+            )
+            + "       (select count(*) from decision d"  # noqa: S608
             "          where d.artifact_id = a.id"
             "            and d.answer is null and d.kind <> 'form'"
             # A question SET ASIDE (its page archived or binned) is not waiting.
@@ -6099,32 +6130,45 @@ def gallery_router(db: Database) -> APIRouter:
             )
             # The boolean only. Selecting the bytes here would pull every
             # thumbnail on the wall into memory to render a list of links.
-            + "       exists (select 1 from version v"  # noqa: S608
-            "          where v.artifact_id = a.id and v.n = a.current_version"
-            "            and v.thumbnail is not null) as has_thumb,"
-            "       pp.pinned_at,"
+            + (
+                "       exists (select 1 from version v"
+                "          where v.artifact_id = a.id and v.n = a.current_version"
+                "            and v.thumbnail is not null) as has_thumb,"
+                if bodies
+                else "       false as has_thumb,"
+            )
+            + "       pp.pinned_at,"
             # WHICH SESSION last changed it, not which first published it: the
             # tile already says "Edited 5h ago" beside this, and the question a
             # reader is asking at that moment is who did THAT. Jeremy, 21 Sep,
             # choosing (b) over my recommendation: on every tile, "so you can
             # see it without opening anything".
-            "       (select v.session from version v"
-            "          where v.artifact_id = a.id"
-            "            and v.n = a.current_version) as session,"
+            + (
+                "       (select v.session from version v"
+                "          where v.artifact_id = a.id"
+                "            and v.n = a.current_version) as session,"
+                if bodies
+                else "       null as session,"
+            )
+            +
             # UNREAD: new, or changed since he last opened it (homelab-ij8.103).
             f"       {_WALL_UNREAD} as unread,"
             # WHICH PART CHANGED, when the live version is a section update
             # (Jeremy, 6 Oct, ruling 1a: "Running now: added"), and whether
             # its publisher asked for his eye. NULL/false for a whole-page
             # version, which says nothing about a part.
-            "       (select v.section from version v"
-            "          where v.artifact_id = a.id"
-            "            and v.n = a.current_version) as part,"
-            "       coalesce((select v.notify from version v"
-            "          where v.artifact_id = a.id"
-            "            and v.n = a.current_version), false) as flagged,"
-            f"       {_WALL_REPLIED_BY} as replied_by"
-            "  from artifact a"
+            + (
+                "       (select v.section from version v"  # noqa: S608
+                "          where v.artifact_id = a.id"
+                "            and v.n = a.current_version) as part,"
+                "       coalesce((select v.notify from version v"
+                "          where v.artifact_id = a.id"
+                "            and v.n = a.current_version), false) as flagged,"
+                f"       {_WALL_REPLIED_BY} as replied_by"
+                if bodies
+                else "       null as part, false as flagged, null as replied_by"
+            )
+            + "  from artifact a"
             + _PERSON_JOINS
             + " where (a.archived_at is null) = %s and a.deleted_at is null"
             + scope
@@ -6151,7 +6195,7 @@ def gallery_router(db: Database) -> APIRouter:
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
             # One more than a page, to know whether an older page exists.
-            f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
+            f"          a.updated_at desc, a.id desc limit {size + 1}",
             (
                 person,
                 person,
@@ -6162,8 +6206,8 @@ def gallery_router(db: Database) -> APIRouter:
                 *found_params,
             ),
         ).fetchall()
-        rows = _WallRows(fetched[:_WALL_PAGE])
-        if len(fetched) > _WALL_PAGE:
+        rows = _WallRows(fetched[:size])
+        if len(fetched) > size:
             rows.more = True
             rows.cursor = _wall_cursor(rows[-1])
         return rows
@@ -6269,7 +6313,11 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     def _row_view(
-        row, archived: bool = False, folder_id: str | None = None, select: bool = False
+        row,
+        archived: bool = False,
+        folder_id: str | None = None,
+        select: bool = False,
+        origin: str = "",
     ) -> str:
         """One page as a line, for the list view.
 
@@ -6338,7 +6386,7 @@ def gallery_router(db: Database) -> APIRouter:
                 ""
                 if select
                 else f"{_pin_button(artifact_id, bool(pinned_at))}"
-                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
+                f"{_tile_menu(artifact_id, title, bool(pinned_at), origin, archived, folder_id)}"
             )
             + "</li>"
         )
@@ -6359,6 +6407,7 @@ def gallery_router(db: Database) -> APIRouter:
     ) -> HTMLResponse:
         query = (request.query_params.get("q") or "").strip()
         needle = query.lower()
+        origin = gallery_origin()  # once, not once per tile
         chosen_agent = (request.query_params.get("agent") or "").strip()
         if chosen_agent:
             # A link saved before an agent was renamed still finds its pages.
@@ -6429,6 +6478,8 @@ def gallery_router(db: Database) -> APIRouter:
                     needle=needle,
                     agent=chosen_agent,
                 )
+                # Drawn only on its own tab; elsewhere it is a count and "is there one", which
+                # needs no page text unless a search has to read it to decide.
                 archived_rows = _wall(
                     conn,
                     person,
@@ -6437,6 +6488,7 @@ def gallery_router(db: Database) -> APIRouter:
                     older=older if on_archived else "",
                     needle=needle,
                     agent=chosen_agent,
+                    bodies=on_archived or bool(needle),
                 )
                 pages = [] if flat else _folder_pages(conn, person)
             # On a later page the header counts still describe the first page, so they do
@@ -6639,7 +6691,7 @@ def gallery_router(db: Database) -> APIRouter:
                     ""
                     if selecting
                     else f"{pin_button}"
-                    f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
+                    f"{_tile_menu(artifact_id, title, bool(pinned_at), origin, archived, folder_id)}"
                 )
                 + "</li>"
             )
@@ -6716,7 +6768,7 @@ def gallery_router(db: Database) -> APIRouter:
                 out.append(
                     _folder_row(row, archived, selecting)
                     if isinstance(row, _FolderItem)
-                    else _row_view(row, archived, folder_id, selecting)
+                    else _row_view(row, archived, folder_id, selecting, origin)
                 )
             if current is not None:
                 out.append("</ul>")

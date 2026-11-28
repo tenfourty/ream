@@ -150,6 +150,45 @@ def searchable(body: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def _spellable(char: str) -> bool:
+    """A character whose stored spellings can all be listed: ASCII (SQL folds its case), or a
+    non-ASCII character with no case (nothing else lower-cases to it, and SQLite leaves it be)."""
+    return char.isascii() or (char.lower() == char.upper() == char)
+
+
+def raw_spellings(word: str, limit: int = 64) -> tuple[str, ...] | None:
+    """Every way `word` (lower-cased) can be written in the raw, lower-cased source of a body
+    for `searchable` to read it back as `word`, or None when they cannot be listed safely.
+
+    `searchable` drops tags, then replaces each `_ENTITIES` key in table order, one pass each.
+    A character an entity decodes to is therefore stored as the character, as the entity, or
+    (the `&amp;` pass runs first, and its `&` can start a later entity) as the entity with its
+    `&` written `&amp;`: `'` is `'`, `&#39;` or `&amp;#39;`. Every other character is stored as
+    itself. A word is the product of its characters' spellings, so a SQL `like` on any of them
+    keeps every page `searchable` would match and no word the spellings cannot name.
+
+    None when a character is cased non-ASCII (SQLite folds only ASCII, `İ` lower-cases to two
+    characters), or the product passes `limit`: the caller then falls back to a fragment.
+    """
+    options: dict[str, list[str]] = {}
+    for entity, char in _ENTITIES.items():
+        if char.isspace():
+            continue
+        spelt = options.setdefault(char, [char])
+        spelt.append(entity)
+        if not entity.startswith("&amp;"):
+            spelt.append("&amp;" + entity[1:])
+    spellings = [""]
+    for char in word:
+        if not _spellable(char):
+            return None
+        choices = options.get(char, [char])
+        spellings = [s + c for s in spellings for c in choices]
+        if len(spellings) > limit:
+            return None
+    return tuple(dict.fromkeys(spellings))
+
+
 # The most visible text a comment's quote is matched against (22 Oct 2026).
 VISIBLE_LIMIT = 2_000_000
 # The most HTML `visible` will parse, whatever the caller: the parser never sees

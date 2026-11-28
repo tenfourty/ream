@@ -427,3 +427,138 @@ def test_a_word_with_no_ascii_letters_is_still_found(client, db):
     found = client.get("/?q=%E2%80%94").text
     assert "Dash" in found
     assert "Plain" not in found
+
+
+# --- the entity-aware prefilter (28 Nov 2026) --------------------------------
+
+
+def test_raw_spellings_list_every_stored_form_of_a_word():
+    from ream.text import raw_spellings
+
+    assert raw_spellings("it's") == ("it's", "it&#39;s", "it&amp;#39;s")
+    assert raw_spellings("r&d") == ("r&d", "r&amp;d")
+    assert raw_spellings("plain") == ("plain",)
+    # Cased non-ASCII cannot be listed (SQLite folds only ASCII): the caller falls back.
+    assert raw_spellings("café") is None
+    assert raw_spellings("it’s") == ("it’s",)
+    # Too many apostrophes: past the limit, fall back rather than build a huge clause.
+    assert raw_spellings("'" * 8) is None
+
+
+@pytest.mark.parametrize(
+    ("stored", "query"),
+    [
+        ("it&#39;s fine", "it's"),
+        ("It&#39;s fine", "IT'S"),
+        ("it's fine", "it's"),
+        ("it&amp;#39;s fine", "it's"),
+        ("R&amp;D budget", "R&D"),
+        ("r&d budget", "r&d"),
+        ("R&amp;amp;D budget", "r&amp;d"),
+        ("a &lt;b&gt; c", "<b>"),
+        ("say &quot;hi&quot;", '"hi"'),
+        ("it’s fine", "it’s"),
+        ("fine &mdash; done", "fine"),
+    ],
+)
+def test_the_prefilter_keeps_every_spelling_the_matcher_accepts(
+    client, db, stored, query
+):
+    """The SQL may only narrow: a page `_matches` accepts must reach it, in whatever
+    spelling its body stores the word."""
+    from urllib.parse import quote
+
+    from ream import gallery
+
+    store.publish(db, "seat", "Target", _body(stored))
+    store.publish(db, "seat", "Decoy", _body("nothing relevant here"))
+    row = (
+        "id",
+        "Target",
+        None,
+        "seat",
+        1,
+        0,
+        _body(stored),
+    )
+    accepted = gallery._matches(row, query.lower())
+    found = client.get(f"/?q={quote(query)}").text
+    assert ("Target" in found) == accepted
+    assert "Decoy" not in found
+
+
+def test_entity_spelled_words_find_their_pages_and_nothing_else(client, db):
+    store.publish(db, "seat", "Apos", _body("it&#39;s done"))
+    store.publish(db, "seat", "Plain", _body("it's done"))
+    store.publish(db, "seat", "Fragment", _body("item sits in the r&amp;e column"))
+    store.publish(db, "seat", "Amp", _body("R&amp;D"))
+    store.publish(db, "seat", "Other", _body("nothing"))
+    found = client.get("/?q=it%27s").text
+    assert "Apos" in found and "Plain" in found
+    assert "Fragment" not in found and "Other" not in found
+    found = client.get("/?q=r%26d").text
+    assert "Amp" in found
+    assert "Fragment" not in found
+
+
+def test_the_prefilter_narrows_a_word_with_a_quote_to_pages_that_can_hold_it(
+    client, db, monkeypatch
+):
+    """`it's` used to be asked of the SQL as `it`, which every `Item` page passed. Count the
+    rows the SQL hands the word check: only the pages that can hold the word now."""
+    from ream import gallery
+
+    store.publish(db, "seat", "Item list", _body("item sits"))
+    store.publish(db, "seat", "Hit", _body("it&#39;s here"))
+    seen: list[str] = []
+    real = gallery._matches
+
+    def spy(row, needle):
+        seen.append(row[1])
+        return real(row, needle)
+
+    monkeypatch.setattr(gallery, "_matches", spy)
+    assert "Hit" in client.get("/?q=it%27s").text
+    assert "Item list" not in seen
+    assert "Hit" in seen
+
+
+def test_search_results_are_the_same_whatever_the_batch_size(client, db, monkeypatch):
+    """Wider later batches change how many passes a search makes, never what it finds."""
+    from ream import gallery
+
+    for i in range(7):
+        store.publish(db, "seat", f"Item {i}", _body(f"item {i}"))
+        store.publish(db, "seat", f"Quote {i}", _body(f"it&#39;s {i}"))
+    monkeypatch.setattr(gallery, "_WALL_PAGE", 3)
+
+    def titles(query):
+        seen = []
+        url = f"/?q={query}"
+        for _ in range(20):
+            out = client.get(url).text
+            seen += re.findall(r"<span class=\"t\">(Quote \d)</span>", out)
+            links = [
+                h
+                for h in re.findall(r'href="([^"]*older=[^"]*)"', out)
+                if "select=1" not in h
+            ]
+            if not links:
+                return seen
+            url = links[-1].replace("&amp;", "&")
+        return seen
+
+    wide = titles("it%27s")
+    monkeypatch.setattr(gallery, "_SEARCH_GROWTH", 1)
+    assert titles("it%27s") == wide
+    assert sorted(wide) == sorted(f"Quote {i}" for i in range(7))
+
+
+def test_a_percent_or_underscore_in_a_word_is_literal(client, db):
+    store.publish(db, "seat", "Pct", _body("grew 50% last year"))
+    store.publish(db, "seat", "Und", _body("a_b is a name"))
+    store.publish(db, "seat", "Other", _body("grew 500 last year; axb"))
+    assert "Pct" in client.get("/?q=50%25").text
+    assert "Other" not in client.get("/?q=50%25").text
+    out = client.get("/?q=a_b").text
+    assert "Und" in out and "Other" not in out
