@@ -2051,6 +2051,7 @@ class _KeyState(NamedTuple):
     attn: bool = False
     bad: bool = False
     why: str = ""
+    expired: bool = False
 
 
 def _plural(n: int, word: str) -> str:
@@ -2067,6 +2068,18 @@ def _machine_state(m, now: datetime) -> _KeyState:
     def age(moment: datetime) -> timedelta:
         return now - (moment if moment.tzinfo else moment.replace(tzinfo=UTC))
 
+    issued = age(m.created_at)
+    # The server refuses a weekly key older than ROTATING_MAX_AGE (keys.verify), whether
+    # or not it was ever used: it no longer works, so it is not "a working key".
+    if m.rotating and issued > keys.ROTATING_MAX_AGE:
+        return _KeyState(
+            "bad",
+            "Expired",
+            True,
+            True,
+            "Its key expired and is refused; connect it again",
+            expired=True,
+        )
     if m.last_used_at is None:
         return _KeyState(
             "warn", "Never used", True, False, "Not used since it connected"
@@ -2076,15 +2089,16 @@ def _machine_state(m, now: datetime) -> _KeyState:
         return _KeyState(
             "warn", "Idle", True, False, f"Not seen for {_plural(idle.days, 'day')}"
         )
-    issued = age(m.created_at)
     if m.rotating and issued > timedelta(days=7):
-        late = max(issued.days - 7, 0)
+        late = issued.days - 7
         return _KeyState(
             "bad",
             "Swap overdue",
             True,
             True,
-            f"Weekly swap is {_plural(late, 'day')} late",
+            f"Weekly swap is {_plural(late, 'day')} late"
+            if late > 0
+            else "Weekly swap is due now",
         )
     if m.rotating and issued >= timedelta(days=5):
         return _KeyState("warn", "Key renews soon")
@@ -2351,10 +2365,11 @@ def _machines_page(
     if note:
         parts.append(f'<p class="mx-note" role="status">{escape(note)}</p>')
     working = [m for m in machines if m.revoked_at is None]
-    gone = [m for m in machines if m.revoked_at is not None]
     states = {m.id: _machine_state(m, now) for m in machines}
+    live = [m for m in working if not states[m.id].expired]
+    gone = [m for m in machines if m.revoked_at is not None]
     parts.append(
-        f'<div class="mx-head"><h2>Connected machines <span>{len(working)} with a working key'
+        f'<div class="mx-head"><h2>Connected machines <span>{len(live)} with a working key'
         '</span></h2><a class="btn" href="/connect">Connect another machine</a></div>'
     )
 

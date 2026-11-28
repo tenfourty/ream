@@ -192,6 +192,39 @@ _HOUR = timedelta(hours=1)
         (_DAY, None, False, "warn", "Never used", "Not used since it connected"),
         (30 * _DAY, 20 * _DAY, False, "warn", "Idle", "Not seen for 20 days"),
         (10 * _DAY, _HOUR, True, "bad", "Swap overdue", "Weekly swap is 3 days late"),
+        (
+            7 * _DAY + _HOUR,
+            _HOUR,
+            True,
+            "bad",
+            "Swap overdue",
+            "Weekly swap is due now",
+        ),
+        (
+            8 * _DAY + _HOUR,
+            _HOUR,
+            True,
+            "bad",
+            "Swap overdue",
+            "Weekly swap is 1 day late",
+        ),
+        (
+            15 * _DAY,
+            _HOUR,
+            True,
+            "bad",
+            "Expired",
+            "Its key expired and is refused; connect it again",
+        ),
+        (
+            15 * _DAY,
+            None,
+            True,
+            "bad",
+            "Expired",
+            "Its key expired and is refused; connect it again",
+        ),
+        (15 * _DAY, _HOUR, False, "ok", "Live", None),
         (6 * _DAY, _HOUR, True, "warn", "Key renews soon", None),
         (3 * _DAY, _HOUR, True, "ok", "Live", None),
     ],
@@ -288,3 +321,38 @@ def test_the_revoke_confirmation_replaces_the_controls_on_that_card_only(db, gal
     assert f'action="/machines/{one}/revoke"' in asked
     assert "mx-ctl" not in asked
     assert "mx-ctl" in other and "Its key stops working" not in other
+
+
+def test_an_expired_weekly_key_is_not_counted_as_working_and_needs_attention(
+    db, gallery
+):
+    """The server refuses a weekly key older than keys.ROTATING_MAX_AGE, so the card says
+    Expired, the header does not count it, and the filter lists it under Needs attention."""
+    _t, fresh = keys.mint(db, agent="fresh")
+    _age(db, fresh, created=_DAY, used=_HOUR, rotating=True)
+    _t, dead = keys.mint(db, agent="dead")
+    _age(
+        db,
+        dead,
+        created=keys.ROTATING_MAX_AGE + _HOUR,
+        used=_HOUR,
+        rotating=True,
+    )
+    _t, edge = keys.mint(db, agent="edge")
+    _age(db, edge, created=keys.ROTATING_MAX_AGE - _HOUR, used=_HOUR, rotating=True)
+    page = gallery.get("/machines").text
+    assert "2 with a working key" in page
+    assert '<span class="mx-badge bad">Expired</span>' in _card(page, "dead")
+    assert 'data-attn="bad"' in _card(page, "dead")
+    assert "Expired" not in _card(page, "edge")
+    counts = dict(
+        re.findall(r'for="mx-f-(\w+)">[A-Za-z ]+<span class="mx-n">(\d+)</span>', page)
+    )
+    assert counts["all"] == "3" and counts["attention"] == "2"
+    with db.connect() as conn:
+        token_row = conn.execute(
+            "select count(*) from agent_key where id = %s and revoked_at is null",
+            (dead,),
+        ).fetchone()
+    assert token_row[0] == 1, "expired is not revoked: the card keeps its controls"
+    assert "mx-ctl" in _card(page, "dead")
