@@ -2027,18 +2027,307 @@ def _belongs_form(ident: str, agent: str, people_rows, mine) -> str:
         return ""
     current = mine.get(agent, "")
     options = [
-        f'<option value=""{" selected" if not current else ""}>Shared (the house\u2019s)</option>'
+        f'<option value=""{" selected" if not current else ""}>Shared (the house’s)</option>'
     ] + [
         f'<option value="{escape(pid)}"{" selected" if pid == current else ""}>'
         f"{escape(label)}</option>"
         for pid, label in people_rows
     ]
     return (
-        f'<form method="post" action="/machines/{ident}/belongs" class="row">'
+        f'<form method="post" action="/machines/{ident}/belongs" class="mx-row">'
         '<label>Belongs to <select name="belongs_to">' + "".join(options) + "</select>"
-        '</label><button class="btn" type="submit">Save</button></form>'
-        '<p class="muted">A personal machine reads what its person reads, pages closed to '
+        '</label><button class="btn primary" type="submit">Save</button></form>'
+        '<p class="mx-muted">A personal machine reads what its person reads, pages closed to '
         "agents included for the owner. It still changes only its own pages.</p>"
+    )
+
+
+class _KeyState(NamedTuple):
+    """How a machine's key reads at a glance: `css` picks the badge colour, `attn` puts the
+    machine under "Needs attention", `bad` makes that red rather than amber."""
+
+    css: str
+    text: str
+    attn: bool = False
+    bad: bool = False
+    why: str = ""
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _machine_state(m, now: datetime) -> _KeyState:
+    """The key's state, worked out from what the page already has (there is no stored expiry):
+    revoked; never used; idle over 14 days; a weekly key more than 7 days old (its swap is
+    overdue); a weekly key in its last two days (renews soon); otherwise live."""
+    if m.revoked_at is not None:
+        return _KeyState("off", "Revoked")
+
+    def age(moment: datetime) -> timedelta:
+        return now - (moment if moment.tzinfo else moment.replace(tzinfo=UTC))
+
+    if m.last_used_at is None:
+        return _KeyState(
+            "warn", "Never used", True, False, "Not used since it connected"
+        )
+    idle = age(m.last_used_at)
+    if idle > timedelta(days=14):
+        return _KeyState(
+            "warn", "Idle", True, False, f"Not seen for {_plural(idle.days, 'day')}"
+        )
+    issued = age(m.created_at)
+    if m.rotating and issued > timedelta(days=7):
+        late = max(issued.days - 7, 0)
+        return _KeyState(
+            "bad",
+            "Swap overdue",
+            True,
+            True,
+            f"Weekly swap is {_plural(late, 'day')} late",
+        )
+    if m.rotating and issued >= timedelta(days=5):
+        return _KeyState("warn", "Key renews soon")
+    return _KeyState("ok", "Live")
+
+
+# The house's mark: a fixed drawing, no value of the page in it.
+_HOUSE_ICON = (
+    '<svg viewBox="0 0 16 16" aria-hidden="true">'
+    '<path d="M8 2 1.5 7.5h2V13h3.5V9.5h2V13h3.5V7.5h2z"/></svg>'
+)
+
+_MACHINE_FILTERS = (
+    ("all", "All"),
+    ("shared", "Shared"),
+    ("personal", "Personal"),
+    ("attention", "Needs attention"),
+)
+
+# The Machines page's own look: one card per machine, built only from the named values in
+# design.py. The filter is radio buttons and :has(), not script (the gallery's pages stay
+# usable with scripts off), and every class here is prefixed so none can clash with the
+# wall's own (.row, .btn, .bar).
+_MACHINES_CSS = (
+    "<style>.mx{margin:var(--space-10) 0 0}"
+    ".mx-note{display:flex;align-items:center;border:1px solid var(--line);"
+    "border-radius:.6rem;padding:var(--space-5) var(--space-75);margin:0 0 var(--space-10);"
+    "font-size:var(--text-md);background:var(--accent-soft);color:var(--accent-ink)}"
+    ".mx-head{display:flex;align-items:center;gap:var(--space-7);flex-wrap:wrap;"
+    "margin:0 0 var(--space-6)}"
+    ".mx-head h2{font:600 1.05rem/1.4 var(--sans);margin:0;flex:1 1 auto}"
+    ".mx-head h2 span{font-weight:400;color:var(--muted);font-size:var(--text-md);"
+    "margin-left:var(--space-5)}"
+    ".mx-filters{display:flex;gap:var(--space-4);flex-wrap:wrap;margin:0 0 1.1rem}"
+    ".mx-fr{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}"
+    ".mx-filters label{cursor:pointer;border:1px solid var(--line);border-radius:999px;"
+    "padding:var(--space-2) .7rem;font-size:var(--text-sm);color:var(--muted)}"
+    ".mx-filters label:hover{border-color:var(--line-hover);color:var(--ink)}"
+    ".mx-fr:checked+label{background:var(--accent-soft);border-color:transparent;"
+    "color:var(--accent-ink);font-weight:600}"
+    ".mx-fr:focus-visible+label{outline:2px solid var(--accent);outline-offset:2px}"
+    ".mx-filters .mx-n{font-variant-numeric:tabular-nums;opacity:.75;"
+    "margin-left:var(--space-3);font-weight:400}"
+    ".mx:has(#mx-f-shared:checked) .mx-card[data-who=personal]{display:none}"
+    ".mx:has(#mx-f-personal:checked) .mx-card[data-who=shared]{display:none}"
+    ".mx:has(#mx-f-attention:checked) .mx-card:not([data-attn]){display:none}"
+    ".mx:not(:has(#mx-f-all:checked)) .mx-gone{display:none}"
+    ".mx-empty{display:none;border:1px dashed var(--line);border-radius:.7rem;"
+    "padding:1.4rem;text-align:center;color:var(--muted);grid-column:1/-1}"
+    ".mx:has(#mx-f-all:checked) .mx-empty[data-for=all],"
+    ".mx:has(#mx-f-shared:checked) .mx-empty[data-for=shared],"
+    ".mx:has(#mx-f-personal:checked) .mx-empty[data-for=personal],"
+    ".mx:has(#mx-f-attention:checked) .mx-empty[data-for=attention]{display:block}"
+    ".mx-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-10);"
+    "align-items:stretch}"
+    "@media (max-width:46rem){.mx-grid{grid-template-columns:minmax(0,1fr)}}"
+    ".mx-card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;"
+    "padding:.95rem 1.1rem .5rem;box-shadow:var(--shadow);display:flex;flex-direction:column;"
+    "min-width:0}"
+    ".mx-card[data-attn]{border-left:3px solid var(--now)}"
+    ".mx-card[data-attn=bad]{border-left-color:var(--danger)}"
+    ".mx-card.mx-off{box-shadow:none;background:transparent}"
+    ".mx-card.mx-off .mx-name{color:var(--muted)}"
+    ".mx-top{display:flex;align-items:flex-start;gap:var(--space-6);justify-content:space-between}"
+    ".mx-name{font:600 1.05rem/1.35 var(--sans);margin:0;overflow-wrap:anywhere}"
+    ".mx-sub{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-2) var(--space-6);"
+    "margin:var(--space-3) 0 0;font-size:var(--text-sm);color:var(--muted)}"
+    ".mx-sub code,.mx-sess code{font-family:var(--mono);font-size:.92em}"
+    ".mx-badge{display:inline-flex;align-items:center;gap:var(--space-35);white-space:nowrap;"
+    "flex:none;font:600 var(--text-2xs)/1.2 var(--sans-system);letter-spacing:.03em;"
+    "text-transform:uppercase;border-radius:999px;padding:.22rem .55rem .22rem .45rem;"
+    "margin-top:.1rem}"
+    '.mx-badge::before{content:"";width:.45rem;height:.45rem;border-radius:50%;'
+    "background:currentColor}"
+    ".mx-badge.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 14%,transparent)}"
+    ".mx-badge.warn{color:var(--now-solid);"
+    "background:color-mix(in srgb,var(--now) 16%,transparent)}"
+    ".mx-badge.bad{color:var(--danger);background:var(--danger-soft)}"
+    ".mx-badge.off{color:var(--muted);background:var(--well);border:1px solid var(--line)}"
+    ".mx-owner{display:inline-flex;align-items:center;gap:var(--space-35);color:var(--ink)}"
+    ".mx-av{display:inline-grid;place-items:center;width:1.2rem;height:1.2rem;"
+    "border-radius:50%;background:var(--accent-soft);color:var(--accent-ink);"
+    "font:600 .65rem/1 var(--sans-system)}"
+    ".mx-av.house{background:var(--well);color:var(--muted);border:1px solid var(--line)}"
+    ".mx-av svg{width:.75rem;height:.75rem;fill:currentColor}"
+    ".mx-facts{display:grid;grid-template-columns:5rem minmax(0,1fr);"
+    "gap:var(--space-2) var(--space-6);margin:.75rem 0 0;font-size:var(--text-sm)}"
+    ".mx-facts dt{color:var(--muted)}"
+    ".mx-facts dd{margin:0;overflow-wrap:anywhere}"
+    ".mx-facts .mx-why{color:var(--now-solid)}"
+    ".mx-facts .mx-why.bad{color:var(--danger)}"
+    ".mx-sess{margin:.8rem 0 .7rem;padding:.65rem 0 0;border-top:1px solid var(--line)}"
+    ".mx-sess h4{margin:0 0 var(--space-3);font:600 var(--text-xs)/1.4 var(--sans-system);"
+    "color:var(--muted);letter-spacing:.04em;text-transform:uppercase}"
+    ".mx-sess ul{list-style:none;margin:0;padding:0}"
+    ".mx-sess li{font-size:var(--text-sm);padding:var(--space-2) 0;overflow-wrap:anywhere}"
+    '.mx-sess li::before{content:"";display:inline-block;width:.35rem;height:.35rem;'
+    "border-radius:50%;background:var(--line-hover);margin:0 .55rem .12rem 0}"
+    ".mx-sess .mx-none{color:var(--muted);font-size:var(--text-sm);margin:0}"
+    ".mx-more>summary{cursor:pointer;list-style:none;font-size:var(--text-sm);"
+    "color:var(--accent-ink);margin:var(--space-3) 0 0}"
+    ".mx-more>summary::-webkit-details-marker{display:none}"
+    ".mx-more>summary:hover{text-decoration:underline}"
+    ".mx-more .mx-less,.mx-more[open] .mx-all{display:none}"
+    ".mx-more[open] .mx-less{display:inline}"
+    ".mx-ctl{display:flex;align-items:flex-start;gap:var(--space-2);margin:auto -.45rem 0;"
+    "padding:.35rem .45rem .45rem;border-top:1px solid var(--line);flex-wrap:wrap}"
+    ".mx-ctl details{min-width:0}"
+    ".mx-ctl details[open]{flex:1 1 100%}"
+    ".mx-q{border:0;background:transparent;cursor:pointer;color:var(--muted);"
+    "font-size:var(--text-sm);padding:var(--space-2) var(--space-5);border-radius:.4rem;"
+    "text-decoration:none;list-style:none;display:inline-block}"
+    ".mx-q::-webkit-details-marker{display:none}"
+    ".mx-q:hover{background:var(--chip);color:var(--ink)}"
+    ".mx-ctl details[open]>.mx-q{color:var(--ink);font-weight:600}"
+    ".mx-q.mx-warn{margin-left:auto}"
+    ".mx-q.mx-warn:hover{background:var(--danger-soft);color:var(--danger)}"
+    ".mx-ctl form{padding:var(--space-3) var(--space-5) var(--space-5)}"
+    ".mx-panel{margin:auto 0 0;padding:.75rem 0 .7rem;border-top:1px solid var(--line)}"
+    ".mx-panel p{margin:0 0 .6rem;font-size:var(--text-sm)}"
+    ".mx-panel.mx-confirm p{color:var(--danger)}"
+    ".mx-row{display:flex;gap:var(--space-5);flex-wrap:wrap;align-items:center}"
+    ".mx-row label{display:flex;gap:var(--space-5);align-items:center;flex-wrap:wrap;"
+    "font-size:var(--text-sm);color:var(--muted)}"
+    ".mx-row select,.mx-row input{font:inherit;font-size:var(--text-md);"
+    "padding:var(--space-4) var(--space-6);border:1px solid var(--line);border-radius:.5rem;"
+    "background:var(--paper);color:var(--ink);min-width:0;flex:1 1 9rem;max-width:16rem}"
+    ".mx-row .btn{padding:var(--space-3) .7rem;font-size:var(--text-sm)}"
+    ".mx .btn.danger{background:var(--danger-soft);border-color:var(--danger);"
+    "color:var(--danger)}"
+    ".mx-muted{color:var(--muted);margin:.6rem 0 0;font-size:var(--text-sm)}"
+    ".mx-fold{margin:1.6rem 0 0}"
+    ".mx-fold>summary{cursor:pointer;color:var(--muted);font-size:var(--text-md);"
+    "padding:var(--space-3) 0}"
+    ".mx-fold>summary:hover{color:var(--ink)}"
+    ".mx-fold .mx-grid{margin-top:.7rem}"
+    ".mx-apps{max-width:none;margin:2.2rem 0 0}</style>"
+)
+
+
+def _is_personal(m, mine) -> bool:
+    return bool(mine) and m.agent in mine
+
+
+def _machine_owner(m, people_rows, mine) -> str:
+    """Whose the machine is: a person (their initial and name) or the house (shared)."""
+    if not _is_personal(m, mine):
+        return (
+            '<span class="mx-owner"><span class="mx-av house" aria-hidden="true">'
+            f"{_HOUSE_ICON}</span>Shared</span>"
+        )
+    shown = dict(people_rows).get(mine[m.agent], mine[m.agent])
+    initial = (shown[:1] or "?").upper()
+    return (
+        f'<span class="mx-owner"><span class="mx-av" aria-hidden="true">{escape(initial)}</span>'
+        f"{escape(shown)}’s</span>"
+    )
+
+
+def _machine_card(
+    m, state: _KeyState, owner: str, confirm: str, people_rows, mine
+) -> str:
+    """One machine as a card: name and key-state badge, whose it is, its facts, its sessions as
+    a short list and its controls. Every value of the machine goes through `escape`; the f-strings
+    stay plain (an `escape()` is Markup, and `str + Markup` would escape the tags on the left)."""
+    ident = escape(m.id)
+    gone = m.revoked_at is not None
+    used = _ago(m.last_used_at) if m.last_used_at else ""
+    if gone:
+        facts = [
+            f"<dt>Revoked</dt><dd>{escape(_ago(m.revoked_at) or 'just now')}</dd>",
+            f"<dt>Last used</dt><dd>{escape(used or 'not since it connected')}</dd>",
+            f"<dt>Pages</dt><dd>{m.pages} (they stay)</dd>",
+        ]
+    else:
+        facts = [
+            f"<dt>Last seen</dt><dd>{escape(used or 'not since it connected')}</dd>",
+            (
+                "<dt>Key</dt><dd>renews itself weekly; this one issued "
+                f"{escape(_ago(m.created_at) or 'just now')}</dd>"
+                if m.rotating
+                else f"<dt>Connected</dt><dd>{escape(_ago(m.created_at) or 'just now')}</dd>"
+            ),
+            f"<dt>Pages</dt><dd>{m.pages}</dd>",
+        ]
+        if state.why:
+            facts.append(
+                f'<dt>Check</dt><dd class="mx-why{" bad" if state.bad else ""}">'
+                f"{escape(state.why)}</dd>"
+            )
+    sub = owner
+    if m.label and m.label != m.agent:
+        sub += f"<span>files pages as <code>{escape(m.agent)}</code></span>"
+    body = ""
+    if not gone:
+        if m.sessions:
+            items = [f"<li><code>{escape(s)}</code></li>" for s in m.sessions]
+            more = ""
+            if len(items) > 3:
+                more = (
+                    '<details class="mx-more"><summary>'
+                    f'<span class="mx-all">Show all {len(items)}</span>'
+                    '<span class="mx-less">Show fewer</span></summary>'
+                    f"<ul>{''.join(items[3:])}</ul></details>"
+                )
+            listed = f"<ul>{''.join(items[:3])}</ul>{more}"
+        else:
+            listed = '<p class="mx-none">None labelled yet</p>'
+        body = f'<div class="mx-sess"><h4>Recent sessions</h4>{listed}</div>'
+        if confirm == m.id:
+            body += (
+                '<div class="mx-panel mx-confirm">'
+                f"<p>Revoke {escape(m.name)}? Its key stops working at once, "
+                "for every agent on that machine. Its pages stay. It can connect again "
+                "later with a new code.</p>"
+                f'<form method="post" action="/machines/{ident}/revoke" class="mx-row">'
+                '<button class="btn danger" type="submit">Revoke</button>'
+                '<a class="btn" href="/machines">Cancel</a></form></div>'
+            )
+        else:
+            belongs = _belongs_form(ident, m.agent, people_rows, mine)
+            belongs_ctl = (
+                f'<details><summary class="mx-q">Belongs to…</summary>{belongs}</details>'
+                if belongs
+                else ""
+            )
+            body += (
+                '<div class="mx-ctl">'
+                '<details><summary class="mx-q">Rename</summary>'
+                f'<form method="post" action="/machines/{ident}/rename" class="mx-row">'
+                f'<input name="label" value="{escape(m.name)}" aria-label="Name" '
+                'autocomplete="off"><button class="btn primary" type="submit">Save</button>'
+                f"</form></details>{belongs_ctl}"
+                f'<a class="mx-q mx-warn" href="/machines?revoke={ident}">Revoke</a></div>'
+            )
+    attrs = f' data-who="{"personal" if _is_personal(m, mine) else "shared"}"'
+    if state.attn:
+        attrs += f' data-attn="{"bad" if state.bad else "warn"}"'
+    return (
+        f'<article class="mx-card{" mx-off" if gone else ""}"{attrs}>'
+        f'<div class="mx-top"><h3 class="mx-name">{escape(m.name)}</h3>'
+        f'<span class="mx-badge {state.css}">{escape(state.text)}</span></div>'
+        f'<p class="mx-sub">{sub}</p><dl class="mx-facts">{"".join(facts)}</dl>{body}</article>'
     )
 
 
@@ -2051,78 +2340,89 @@ def _machines_page(
     people_rows=(),
     mine=None,
 ) -> str:
-    """Every connected machine: its name (his to change), when it connected,
-    when it was last used, which sessions have published with it, and how many
-    pages it has -- and revoke, which asks once more before it acts
-    (homelab-ij8.103)."""
-    parts = [_CONNECT_CSS, '<div class="cx">']
+    """Every connected machine as a card (the owner's approved mock-up, 27-28 Nov 2026): its
+    name, whose it is, the key's state as a badge, when it was last seen, its recent sessions and
+    its controls (rename, belongs to, revoke, which asks once more before it acts,
+    homelab-ij8.103), under a filter. All of it is worked out from the machines already read:
+    no query per machine."""
+    mine = mine or {}
+    now = datetime.now(UTC)
+    parts = [_CONNECT_CSS, _MACHINES_CSS, '<div class="mx">']
     if note:
-        parts.append(f'<section><p class="ok">{escape(note)}</p></section>')
+        parts.append(f'<p class="mx-note" role="status">{escape(note)}</p>')
     working = [m for m in machines if m.revoked_at is None]
     gone = [m for m in machines if m.revoked_at is not None]
+    states = {m.id: _machine_state(m, now) for m in machines}
     parts.append(
-        "<section><h2>Connected machines</h2>"
-        f"<p>{len(working)} with a working key. "
-        '<a href="/connect">Connect another</a>.</p></section>'
+        f'<div class="mx-head"><h2>Connected machines <span>{len(working)} with a working key'
+        '</span></h2><a class="btn" href="/connect">Connect another machine</a></div>'
     )
-    for m in working:
-        ident = escape(m.id)
-        used = _ago(m.last_used_at) if m.last_used_at else ""
-        facts = [
-            (
-                f"<dt>Key</dt><dd>renews itself weekly; this one issued "
-                f"{escape(_ago(m.created_at) or 'just now')}</dd>"
-                if m.rotating
-                else f"<dt>Connected</dt><dd>{escape(_ago(m.created_at) or 'just now')}</dd>"
-            ),
-            f"<dt>Last used</dt><dd>{escape(used or 'not since it connected')}</dd>",
-            f"<dt>Pages</dt><dd>{m.pages}</dd>",
-            # An f-string, not `"<dd>" + escape(...)`: escape() returns Markup, and
-            # str + Markup escapes the plain str on the left, tags and all.
-            (
-                "<dt>Sessions</dt><dd>"
-                f"{escape(', '.join(m.sessions)) if m.sessions else 'none labelled yet'}</dd>"
-            ),
-        ]
-        if m.label and m.label != m.agent:
-            facts.insert(0, f"<dt>Files pages as</dt><dd>{escape(m.agent)}</dd>")
-        if confirm == m.id:
-            action = (
-                f'<p class="err">Revoke {escape(m.name)}? Its key stops working at once, '
-                "for every agent on that machine. Its pages stay. It can connect again "
-                "later with a new code.</p>"
-                f'<form method="post" action="/machines/{ident}/revoke" class="row">'
-                '<button class="btn primary" type="submit">Revoke</button>'
-                '<a class="btn" href="/machines">Cancel</a></form>'
-            )
-        else:
-            action = (
-                f'<form method="post" action="/machines/{ident}/rename" class="row">'
-                f'<input name="label" value="{escape(m.name)}" aria-label="Name" autocomplete="off">'
-                '<button class="btn" type="submit">Rename</button>'
-                f'<a class="btn" href="/machines?revoke={ident}">Revoke</a></form>'
-            )
-        if confirm != m.id:
-            action += _belongs_form(ident, m.agent, people_rows, mine or {})
-        if mine and m.agent in mine:
-            facts.append(
-                f"<dt>Belongs to</dt><dd>{escape(dict(people_rows).get(mine[m.agent], mine[m.agent]))}</dd>"
-            )
-        parts.append(
-            f"<section><h2>{escape(m.name)}</h2><dl>{''.join(facts)}</dl>{action}</section>"
+
+    def matches(m, which: str) -> bool:
+        if which == "shared":
+            return not _is_personal(m, mine)
+        if which == "personal":
+            return _is_personal(m, mine)
+        if which == "attention":
+            return states[m.id].attn
+        return True
+
+    counts = {
+        key: sum(1 for m in working if matches(m, key)) for key, _ in _MACHINE_FILTERS
+    }
+    pills = "".join(
+        f'<input class="mx-fr" type="radio" name="mx-filter" id="mx-f-{key}"'
+        f"{' checked' if key == 'all' else ''}>"
+        f'<label for="mx-f-{key}">{label}<span class="mx-n">{counts[key]}</span></label>'
+        for key, label in _MACHINE_FILTERS
+    )
+    parts.append(
+        f'<div class="mx-filters" role="group" aria-label="Filter machines">{pills}</div>'
+    )
+    empties = "".join(
+        f'<p class="mx-empty" data-for="{key}">'
+        + (
+            "Nothing needs attention. Every working key is live."
+            if key == "attention"
+            else "No machines here."
         )
+        + "</p>"
+        for key, _ in _MACHINE_FILTERS
+        if not counts[key]
+    )
+    cards = "".join(
+        _machine_card(
+            m,
+            states[m.id],
+            _machine_owner(m, people_rows, mine),
+            confirm,
+            people_rows,
+            mine,
+        )
+        for m in working
+    )
+    parts.append(f'<div class="mx-grid">{cards}{empties}</div>')
     if gone:
-        rows = "".join(
-            f"<li>{escape(m.name)} &middot; revoked {escape(_ago(m.revoked_at) or '')}</li>"
+        cards = "".join(
+            _machine_card(
+                m,
+                states[m.id],
+                _machine_owner(m, people_rows, mine),
+                "",
+                people_rows,
+                mine,
+            )
             for m in gone
         )
         parts.append(
-            f"<section><details><summary>Revoked ({len(gone)})</summary><ul>{rows}</ul>"
-            "</details></section>"
+            f'<details class="mx-fold mx-gone"><summary>Revoked ({len(gone)})</summary>'
+            f'<div class="mx-grid">{cards}</div></details>'
         )
-    if apps:
-        parts.append(_apps_section(apps, confirm_app))
     parts.append("</div>")
+    if apps:
+        parts.append(
+            f'<div class="cx mx-apps">{_apps_section(apps, confirm_app)}</div>'
+        )
     return "".join(parts)
 
 

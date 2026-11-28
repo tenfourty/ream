@@ -1690,3 +1690,26 @@ and dated design specs keep their wording as history.
 **Not chosen:** keeping the qualifier "where a reader first meets it" (the rule this replaces, from 7 Nov 2026).
 
 **Evidence:** the owner confirmed it on 27 Nov 2026. Tracker item runcove-5t3oj.171.
+
+## The Machines page becomes one card per machine (28 Nov 2026)
+
+On 27 Nov 2026 the owner chose a card redesign of the Machines page, with a mock-up shown to him before
+any code. On 28 Nov 2026 he approved the mock-up and chose to build it as it shows.
+
+**Chosen:** one card per machine, in the gallery's own look (`src/ream/gallery.py`, built only from the
+named values in `src/ream/design.py`): the machine's name, whose it is (a person, or shared), the key's
+state as a coloured badge (live, renews soon, idle, never used, swap overdue, revoked), when it was last
+seen, and its recent sessions as a short list (three, the rest behind "Show all"); a filter (All, Shared,
+Personal, Needs attention) and a count for each. Rename, "Belongs to" and Revoke stay, with the same
+routes and forms, and Revoke still asks once more. The state is worked out from what the page already
+reads (last used, when the key was issued, whether it renews weekly, revoked); there is no stored
+expiry, so "renews soon" means a weekly key in its last two days. The filter is CSS only (radio buttons
+and `:has()`), so the page keeps working with scripts off and the page makes no new query per machine.
+
+**Not chosen:**
+- Light polish of the existing one-column page.
+- The owner naming what was off, for a fix to follow.
+
+**Evidence:** the owner's answers of 27 and 28 Nov 2026; the approved mock-up is Ream page
+`kuz6hf6e4u5kqk7tqnlcoeewko`. Tracker item runcove-5t3oj.175. Connected apps keep their own section
+and are not cards: an app is a person's sign-in, not a machine.

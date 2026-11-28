@@ -137,7 +137,7 @@ def test_the_machines_page_does_not_list_weekly_swaps_as_revocations(db, api):
     new = _rotate(api, old).json()["key"]
     _me(api, new)
     page = api.get("/machines").text
-    assert page.count("<h2>laptop</h2>") == 1
+    assert page.count('<h3 class="mx-name">laptop</h3>') == 1
     assert "renews itself weekly" in page
     assert "Revoked (" not in page
 
